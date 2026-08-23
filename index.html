@@ -1,59 +1,91 @@
 <!doctype html>
 <html lang="pt-BR">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="description" content="HotSpot Fibra+ — acesso temporário à internet por hora ou mensal, com pagamento via PIX e liberação automática." />
-  <title>HotSpot Fibra+ | Internet por Hora ou Mês</title>
-  <style>
-    :root{--bg:#070b16;--card:#0d1424;--card2:#111a2d;--text:#f6f8ff;--muted:#9facbf;--purple:#8b5cf6;--orange:#ff7a18;--green:#21d07a;--line:#202a3d}
-    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:radial-gradient(circle at 15% 0%,#201342 0,transparent 28%),radial-gradient(circle at 88% 12%,#3b1c0b 0,transparent 24%),var(--bg);color:var(--text);line-height:1.5}
-    a{color:inherit}.wrap{width:min(1080px,calc(100% - 36px));margin:auto}.nav{display:flex;align-items:center;justify-content:space-between;padding:22px 0}.brand{display:flex;align-items:center;gap:12px;font-weight:800;font-size:20px}.logo{width:42px;height:42px;border-radius:13px;display:grid;place-items:center;background:linear-gradient(135deg,var(--orange),var(--purple));box-shadow:0 12px 32px #7c3aed45}.logo span{font-size:22px}.navlinks{display:flex;gap:22px;color:var(--muted);font-size:14px}.navlinks a{text-decoration:none}.hero{padding:72px 0 58px;text-align:center}.pill{display:inline-flex;align-items:center;gap:8px;border:1px solid #3a2e63;background:#151029aa;border-radius:999px;padding:8px 13px;color:#d9d2ff;font-size:13px}.dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 14px var(--green)}h1{font-size:clamp(40px,7vw,72px);line-height:1.03;margin:22px auto 18px;max-width:900px;letter-spacing:-2.5px}.grad{background:linear-gradient(90deg,var(--orange),#ffb15c 40%,#a978ff);-webkit-background-clip:text;background-clip:text;color:transparent}.lead{max-width:720px;margin:0 auto;color:var(--muted);font-size:18px}.actions{display:flex;gap:12px;justify-content:center;margin-top:30px;flex-wrap:wrap}.btn{display:inline-block;text-decoration:none;padding:13px 20px;border-radius:12px;font-weight:700}.primary{background:linear-gradient(135deg,var(--orange),#ff963d);color:#160a02}.secondary{border:1px solid #35405a;background:#101827}.section{padding:58px 0}.section h2{text-align:center;font-size:34px;margin:0 0 10px}.sub{text-align:center;color:var(--muted);margin:0 auto 30px;max-width:720px}.plans{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;max-width:820px;margin:auto}.plan{background:linear-gradient(180deg,#111a2d,#0a1020);border:1px solid var(--line);border-radius:22px;padding:26px;position:relative;overflow:hidden}.plan:before{content:"";position:absolute;inset:-1px auto auto -1px;width:120px;height:4px;background:linear-gradient(90deg,var(--orange),var(--purple))}.plan h3{font-size:22px;margin:0}.price{font-size:44px;font-weight:900;margin:12px 0 2px}.price small{font-size:16px;color:var(--muted);font-weight:600}.plan ul{padding:0;margin:18px 0 0;list-style:none;color:#c9d1df}.plan li{padding:8px 0;border-top:1px solid #202a3d}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.feature{background:#0c1322;border:1px solid var(--line);border-radius:18px;padding:22px}.feature b{display:block;margin:10px 0 7px}.ico{font-size:26px}.feature p{margin:0;color:var(--muted);font-size:14px}.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.step{border:1px solid var(--line);background:#0b1220;border-radius:16px;padding:20px}.n{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:#251a43;color:#c8b5ff;font-weight:800;margin-bottom:12px}.legal{background:#0a101d;border-top:1px solid var(--line);margin-top:50px}.legalgrid{display:grid;grid-template-columns:1fr 1fr;gap:28px}.legal h3{margin-top:0}.legal p,.legal li{color:var(--muted);font-size:14px}.footer{border-top:1px solid var(--line);padding:24px 0;color:#7f8ba1;font-size:13px;text-align:center}.tag{color:#ffb26d}.notice{max-width:820px;margin:26px auto 0;border:1px solid #26324a;background:#0b1323;border-radius:14px;padding:14px 16px;color:#b8c2d2;font-size:13px}
-    @media(max-width:760px){.navlinks{display:none}.hero{padding-top:48px}.plans,.grid,.steps,.legalgrid{grid-template-columns:1fr}.price{font-size:38px}.section{padding:42px 0}}
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0f766e">
+<title>Fibra+ | Provedor Plus</title>
+<style>
+:root{--bg:#f4f7fb;--panel:#fff;--text:#142033;--muted:#708096;--line:#e5eaf1;--brand:#0f8f82;--brand2:#0b6f68;--blue:#2563eb;--red:#dc2626;--orange:#ea8a00;--green:#169b55;--shadow:0 8px 30px rgba(20,32,51,.06)}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;font-family:Inter,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--text)}button,input{font:inherit}.app{min-height:100vh;display:grid;grid-template-columns:245px 1fr}.sidebar{background:#fff;border-right:1px solid var(--line);position:sticky;top:0;height:100vh;display:flex;flex-direction:column}.brand{height:88px;display:flex;align-items:center;gap:12px;padding:0 24px;border-bottom:1px solid var(--line)}.logo{width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#ff7a18,#8b5cf6);display:grid;place-items:center;color:#fff;font-size:25px;font-weight:900;box-shadow:0 9px 24px rgba(139,92,246,.2)}.brand strong{display:block;font-size:18px}.brand small{color:var(--muted)}.nav{padding:18px 10px;overflow:auto}.nav button{width:100%;border:0;background:transparent;display:flex;align-items:center;gap:13px;padding:12px 14px;border-radius:10px;color:#26344a;cursor:pointer;text-align:left;margin:2px 0}.nav button:hover{background:#f3f6fa}.nav button.active{background:#eaf7f5;color:var(--brand2);font-weight:700}.ico{width:22px;text-align:center;font-size:18px}.sidefoot{margin-top:auto;border-top:1px solid var(--line);padding:16px 20px;color:var(--muted);font-size:12px}.online{display:flex;gap:8px;align-items:center}.dot{width:9px;height:9px;border-radius:50%;background:#22c55e}.main{min-width:0}.topbar{height:88px;background:#fff;border-bottom:1px solid var(--line);display:grid;grid-template-columns:minmax(220px,1fr) minmax(280px,520px) auto;gap:20px;align-items:center;padding:0 28px;position:sticky;top:0;z-index:5}.title h1{font-size:22px;margin:0 0 3px}.title p{font-size:13px;color:var(--muted);margin:0}.search{position:relative}.search input{width:100%;height:42px;border:1px solid #dbe1ea;border-radius:10px;padding:0 15px 0 42px;background:#fafbfd;outline:none}.search span{position:absolute;left:14px;top:10px;color:#8a98aa}.user{display:flex;align-items:center;gap:10px;white-space:nowrap}.avatar{width:40px;height:40px;border-radius:50%;background:#edf1f6;display:grid;place-items:center;font-size:20px}.user small{display:block;color:var(--muted)}.page{padding:24px 28px 34px}.view{display:none}.view.active{display:block}.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.card,.panel{background:var(--panel);border:1px solid var(--line);border-radius:13px;box-shadow:var(--shadow)}.stat{padding:20px;display:flex;align-items:center;gap:15px}.stat .badge{width:48px;height:48px;border-radius:12px;display:grid;place-items:center;font-size:23px}.b1{background:#e9f2ff;color:#2563eb}.b2{background:#fff0f0;color:#dc2626}.b3{background:#eaf8ee;color:#169b55}.b4{background:#fff4df;color:#d68000}.stat label{font-size:13px;color:#536176}.stat strong{display:block;font-size:25px;margin-top:4px}.grid2{display:grid;grid-template-columns:1.08fr .92fr;gap:14px;margin-top:14px}.panel{overflow:hidden}.panelhead{padding:16px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}.panelhead h2{font-size:15px;margin:0}.linkbtn{border:0;background:none;color:var(--blue);cursor:pointer;font-weight:600}.network{padding:22px}.networkgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.netitem{border:1px solid var(--line);border-radius:12px;padding:18px;text-align:center}.netitem strong{display:block;font-size:27px;margin:8px 0 3px}.tablewrap{overflow:auto}table{width:100%;border-collapse:collapse;min-width:620px}th,td{text-align:left;padding:13px 15px;border-bottom:1px solid var(--line);font-size:13px}th{color:#5b687b;background:#fafbfd;font-size:12px;text-transform:uppercase;letter-spacing:.02em}tbody tr:last-child td{border-bottom:0}.empty{padding:34px 18px;text-align:center;color:var(--muted)}.sectionhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}.sectionhead h2{margin:0;font-size:22px}.sectionhead p{margin:4px 0 0;color:var(--muted);font-size:13px}.primary{border:0;background:var(--brand);color:white;padding:10px 15px;border-radius:9px;font-weight:700;cursor:pointer}.toolbar{display:flex;gap:10px;padding:14px;border-bottom:1px solid var(--line)}.toolbar input{height:40px;min-width:260px;border:1px solid var(--line);border-radius:9px;padding:0 12px}.pill{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;font-size:12px;font-weight:700}.ok{background:#eaf8ee;color:#147a46}.warn{background:#fff4df;color:#a35d00}.bad{background:#fff0f0;color:#b91c1c}.modulegrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.module{padding:20px}.module h3{margin:8px 0 6px;font-size:16px}.module p{margin:0;color:var(--muted);font-size:13px;line-height:1.5}.module .big{font-size:28px}.finance-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:14px}.fbox{padding:18px}.fbox span{color:var(--muted);font-size:13px}.fbox strong{font-size:25px;display:block;margin-top:7px}.footerline{margin-top:18px;color:#8995a7;font-size:12px;text-align:center}.hamb{display:none;border:0;background:#f1f4f8;border-radius:9px;width:40px;height:40px;cursor:pointer}.overlay{display:none}
+@media(max-width:1100px){.cards{grid-template-columns:repeat(2,1fr)}.modulegrid{grid-template-columns:repeat(2,1fr)}.topbar{grid-template-columns:1fr 340px auto}}
+@media(max-width:820px){.app{grid-template-columns:1fr}.sidebar{position:fixed;left:-260px;width:245px;z-index:20;transition:.2s}.sidebar.open{left:0}.overlay.open{display:block;position:fixed;inset:0;background:#10203055;z-index:19}.hamb{display:block}.topbar{height:auto;min-height:78px;grid-template-columns:auto 1fr auto;padding:14px 16px}.search{grid-column:1/-1;grid-row:2}.title p{display:none}.page{padding:18px 14px}.grid2{grid-template-columns:1fr}.finance-summary{grid-template-columns:1fr}.modulegrid{grid-template-columns:1fr}.user div:last-child{display:none}}
+@media(max-width:540px){.cards{grid-template-columns:1fr}.networkgrid{grid-template-columns:1fr}.topbar{gap:10px}.title h1{font-size:18px}}
+</style>
 </head>
 <body>
-  <header class="wrap nav">
-    <div class="brand"><div class="logo"><span>+</span></div>Fibra+ <span class="tag">HotSpot</span></div>
-    <nav class="navlinks"><a href="#planos">Planos</a><a href="#como-funciona">Como funciona</a><a href="#seguranca">Segurança</a><a href="#privacidade">Privacidade</a></nav>
-  </header>
+<div class="overlay" id="overlay"></div>
+<div class="app">
+<aside class="sidebar" id="sidebar">
+  <div class="brand"><div class="logo">+</div><div><strong>Fibra+</strong><small>Provedor Plus</small></div></div>
+  <nav class="nav" id="nav">
+    <button class="active" data-view="dashboard"><span class="ico">▦</span>Visão geral</button>
+    <button data-view="clientes"><span class="ico">👤</span>Clientes</button>
+    <button data-view="financeiro"><span class="ico">◉</span>Financeiro</button>
+    <button data-view="integracao"><span class="ico">⇄</span>Integração</button>
+    <button data-view="chamados"><span class="ico">🔧</span>Chamados</button>
+    <button data-view="planos"><span class="ico">▤</span>Planos</button>
+    <button data-view="estoque"><span class="ico">◇</span>Estoque</button>
+    <button data-view="relatorios"><span class="ico">▥</span>Relatórios</button>
+    <button data-view="configuracoes"><span class="ico">⚙</span>Configurações</button>
+  </nav>
+  <div class="sidefoot"><div class="online"><span class="dot"></span>Sistema operacional</div><div style="margin-top:7px">Provedor Plus • Web</div></div>
+</aside>
+<main class="main">
+<header class="topbar">
+  <button class="hamb" id="hamb">☰</button>
+  <div class="title"><h1 id="pageTitle">Visão geral</h1><p id="pageSub">Painel do provedor</p></div>
+  <div class="search"><span>⌕</span><input id="globalSearch" placeholder="Buscar clientes, chamados, planos..."></div>
+  <div class="user"><div class="avatar">●</div><div><b>Administrador</b><small>admin</small></div></div>
+</header>
+<div class="page">
+<section class="view active" id="view-dashboard">
+  <div class="cards">
+    <div class="card stat"><div class="badge b1">👥</div><div><label>Clientes ativos</label><strong>0</strong></div></div>
+    <div class="card stat"><div class="badge b2">!</div><div><label>Inadimplentes</label><strong>0</strong></div></div>
+    <div class="card stat"><div class="badge b3">$</div><div><label>Faturamento do mês</label><strong>R$ 0,00</strong></div></div>
+    <div class="card stat"><div class="badge b4">🎧</div><div><label>Chamados abertos</label><strong>0</strong></div></div>
+  </div>
+  <div class="grid2">
+    <div class="panel"><div class="panelhead"><h2>Vencimentos de hoje</h2><button class="linkbtn" data-go="financeiro">Ver financeiro</button></div><div class="empty">Nenhum vencimento cadastrado.</div></div>
+    <div class="panel"><div class="panelhead"><h2>Chamados recentes</h2><button class="linkbtn" data-go="chamados">Ver chamados</button></div><div class="empty">Nenhum chamado cadastrado.</div></div>
+  </div>
+  <div class="grid2">
+    <div class="panel"><div class="panelhead"><h2>Status da rede</h2></div><div class="network"><div class="networkgrid"><div class="netitem"><span class="pill ok">Online</span><strong>0</strong><small>conexões</small></div><div class="netitem"><span class="pill warn">Bloqueados</span><strong>0</strong><small>clientes</small></div><div class="netitem"><span class="pill bad">Manutenção</span><strong>0</strong><small>equipamentos</small></div></div></div></div>
+    <div class="panel"><div class="panelhead"><h2>Clientes recentes</h2><button class="linkbtn" data-go="clientes">Ver clientes</button></div><div class="empty">Nenhum cliente cadastrado.</div></div>
+  </div>
+</section>
 
-  <main>
-    <section class="wrap hero">
-      <div class="pill"><span class="dot"></span> Acesso rápido com pagamento via PIX</div>
-      <h1>Internet por <span class="grad">hora ou mês</span>, liberada automaticamente.</h1>
-      <p class="lead">Serviço de acesso temporário à internet por HotSpot. O cliente escolhe o plano, realiza o pagamento via PIX e, após a confirmação, o acesso é liberado automaticamente.</p>
-      <div class="actions"><a class="btn primary" href="#planos">Ver planos</a><a class="btn secondary" href="#como-funciona">Como funciona</a></div>
-    </section>
+<section class="view" id="view-clientes">
+  <div class="sectionhead"><div><h2>Clientes</h2><p>Cadastro e gerenciamento dos assinantes.</p></div><button class="primary">+ Novo cliente</button></div>
+  <div class="panel"><div class="toolbar"><input placeholder="Buscar por nome, CPF/CNPJ ou endereço"></div><div class="tablewrap"><table><thead><tr><th>Cliente</th><th>Plano</th><th>Vencimento</th><th>Conexão</th><th>Situação</th><th>Ações</th></tr></thead><tbody><tr><td colspan="6" class="empty">Nenhum cliente cadastrado nesta base web.</td></tr></tbody></table></div></div>
+</section>
 
-    <section id="planos" class="wrap section">
-      <h2>Planos disponíveis</h2>
-      <p class="sub">Os valores exibidos abaixo são os planos atuais do HotSpot e podem ser atualizados pelo responsável pelo serviço.</p>
-      <div class="plans">
-        <article class="plan"><h3>Plano 1 Hora</h3><div class="price">R$ 5,00 <small>/ acesso</small></div><ul><li>Até 1 hora de conexão</li><li>Velocidade de até 5 Mbps</li><li>Pagamento via PIX</li><li>Liberação automática após confirmação</li></ul></article>
-        <article class="plan"><h3>Plano 30 Dias</h3><div class="price">R$ 50,00 <small>/ 30 dias</small></div><ul><li>Acesso por até 30 dias</li><li>Velocidade de até 10 Mbps</li><li>Pagamento via PIX</li><li>Controle individual de acesso</li></ul></article>
-      </div>
-      <div class="notice">O portal do HotSpot pode oferecer uma janela temporária limitada para que o cliente abra seu aplicativo bancário e conclua o PIX. A liberação definitiva depende da confirmação do pagamento.</div>
-    </section>
+<section class="view" id="view-financeiro">
+  <div class="sectionhead"><div><h2>Financeiro</h2><p>Cobranças, boletos, PIX e baixas.</p></div><button class="primary">+ Gerar cobrança</button></div>
+  <div class="finance-summary"><div class="card fbox"><span>Receber no mês</span><strong>R$ 0,00</strong></div><div class="card fbox"><span>Recebido</span><strong>R$ 0,00</strong></div><div class="card fbox"><span>Vencido</span><strong>R$ 0,00</strong></div></div>
+  <div class="panel"><div class="tablewrap"><table><thead><tr><th>Boleto</th><th>Descrição</th><th>Vencimento</th><th>Valor</th><th>Situação</th><th>Pagamento</th><th>Ações</th></tr></thead><tbody><tr><td colspan="7" class="empty">Nenhuma cobrança cadastrada.</td></tr></tbody></table></div></div>
+</section>
 
-    <section id="como-funciona" class="wrap section">
-      <h2>Como funciona</h2><p class="sub">Um fluxo simples para facilitar o acesso do cliente.</p>
-      <div class="steps"><div class="step"><div class="n">1</div><b>Conecte ao Wi‑Fi</b><p>Abra o portal do HotSpot.</p></div><div class="step"><div class="n">2</div><b>Escolha o plano</b><p>Selecione o período desejado.</p></div><div class="step"><div class="n">3</div><b>Pague via PIX</b><p>Use QR Code ou PIX Copia e Cola.</p></div><div class="step"><div class="n">4</div><b>Acesso liberado</b><p>Após a aprovação, a internet é ativada.</p></div></div>
-    </section>
+<section class="view" id="view-integracao">
+  <div class="sectionhead"><div><h2>Integração</h2><p>Conexões do provedor e serviços externos.</p></div></div>
+  <div class="modulegrid"><div class="card module"><div class="big">📡</div><h3>MikroTik</h3><p>Área reservada para conexão com RouterOS 7 e gerenciamento da rede.</p></div><div class="card module"><div class="big">⚡</div><h3>Mercado Pago</h3><p>Integração de cobranças e confirmação de PIX.</p></div><div class="card module"><div class="big">💳</div><h3>Efí</h3><p>Integração financeira para cobranças e recebimentos.</p></div></div>
+</section>
 
-    <section id="seguranca" class="wrap section">
-      <h2>Pagamento e segurança</h2><p class="sub">O serviço utiliza integração com provedor de pagamentos para gerar e consultar transações PIX.</p>
-      <div class="grid"><div class="feature"><div class="ico">⚡</div><b>PIX dinâmico</b><p>Cobrança criada para cada tentativa de compra, com identificação individual.</p></div><div class="feature"><div class="ico">🔒</div><b>Dados protegidos</b><p>Credenciais privadas de integração não são exibidas na página do cliente.</p></div><div class="feature"><div class="ico">✅</div><b>Liberação por confirmação</b><p>O plano definitivo é ativado somente após a confirmação do pagamento.</p></div></div>
-    </section>
-
-    <section id="privacidade" class="legal">
-      <div class="wrap section legalgrid">
-        <div><h3>Política de Privacidade</h3><p>O HotSpot pode registrar informações técnicas necessárias à prestação do serviço, como endereço IP, identificador de dispositivo/MAC, plano selecionado, horário de acesso e identificador da transação. Esses dados são utilizados para autenticação, controle de acesso, prevenção de abuso e suporte operacional.</p><p>Dados de pagamento são processados pelo provedor de pagamento. O portal não solicita senha bancária, senha do Mercado Pago ou dados completos de cartão.</p></div>
-        <div><h3>Termos de Uso</h3><p>O acesso é individual e limitado ao período e às condições do plano adquirido. É proibido tentar contornar limites de tempo, velocidade, autenticação ou segurança da rede, bem como utilizar o serviço para atividades ilícitas.</p><p>O funcionamento depende da disponibilidade da conexão de internet e dos serviços de pagamento. Em caso de pagamento aprovado sem liberação automática, o cliente deve procurar o responsável pelo ponto de acesso.</p></div>
-      </div>
-    </section>
-  </main>
-
-  <footer class="footer"><div class="wrap">© 2026 Fibra+ HotSpot — Serviço de acesso temporário à internet.</div></footer>
+<section class="view" id="view-chamados"><div class="sectionhead"><div><h2>Chamados</h2><p>Atendimento e suporte aos clientes.</p></div><button class="primary">+ Novo chamado</button></div><div class="panel"><div class="empty">Nenhum chamado cadastrado.</div></div></section>
+<section class="view" id="view-planos"><div class="sectionhead"><div><h2>Planos</h2><p>Planos de acesso comercializados pelo provedor.</p></div><button class="primary">+ Novo plano</button></div><div class="panel"><div class="empty">Nenhum plano cadastrado nesta base web.</div></div></section>
+<section class="view" id="view-estoque"><div class="sectionhead"><div><h2>Estoque</h2><p>Equipamentos e materiais utilizados na rede.</p></div><button class="primary">+ Novo item</button></div><div class="panel"><div class="empty">Nenhum item cadastrado.</div></div></section>
+<section class="view" id="view-relatorios"><div class="sectionhead"><div><h2>Relatórios</h2><p>Indicadores operacionais e financeiros.</p></div></div><div class="modulegrid"><div class="card module"><div class="big">📊</div><h3>Clientes</h3><p>Ativos, bloqueados, cancelados e novas ativações.</p></div><div class="card module"><div class="big">💰</div><h3>Financeiro</h3><p>Recebimentos, inadimplência e faturamento.</p></div><div class="card module"><div class="big">🛠</div><h3>Atendimento</h3><p>Chamados abertos, concluídos e tempo de atendimento.</p></div></div></section>
+<section class="view" id="view-configuracoes"><div class="sectionhead"><div><h2>Configurações</h2><p>Dados do provedor e parâmetros do sistema.</p></div></div><div class="modulegrid"><div class="card module"><div class="big">🏢</div><h3>Empresa</h3><p>Cadastro da Fibra+, documentos e informações comerciais.</p></div><div class="card module"><div class="big">👥</div><h3>Usuários e permissões</h3><p>Controle de acesso ao gerenciador.</p></div><div class="card module"><div class="big">🔐</div><h3>Segurança</h3><p>Parâmetros de acesso e proteção do sistema.</p></div></div></section>
+<div class="footerline">Fibra+ • Provedor Plus</div>
+</div>
+</main>
+</div>
+<script>
+const labels={dashboard:['Visão geral','Painel do provedor'],clientes:['Clientes','Cadastro e gestão de assinantes'],financeiro:['Financeiro','Cobranças e recebimentos'],integracao:['Integração','MikroTik e serviços externos'],chamados:['Chamados','Atendimento e suporte'],planos:['Planos','Planos do provedor'],estoque:['Estoque','Materiais e equipamentos'],relatorios:['Relatórios','Indicadores do provedor'],configuracoes:['Configurações','Parâmetros do sistema']};
+function openView(name){document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));document.querySelectorAll('#nav button').forEach(b=>b.classList.remove('active'));document.getElementById('view-'+name)?.classList.add('active');document.querySelector(`#nav button[data-view="${name}"]`)?.classList.add('active');document.getElementById('pageTitle').textContent=labels[name]?.[0]||'Provedor Plus';document.getElementById('pageSub').textContent=labels[name]?.[1]||'';document.getElementById('sidebar').classList.remove('open');document.getElementById('overlay').classList.remove('open');location.hash=name==='dashboard'?'':name}
+document.querySelectorAll('#nav button').forEach(b=>b.addEventListener('click',()=>openView(b.dataset.view)));document.querySelectorAll('[data-go]').forEach(b=>b.addEventListener('click',()=>openView(b.dataset.go)));document.getElementById('hamb').onclick=()=>{document.getElementById('sidebar').classList.toggle('open');document.getElementById('overlay').classList.toggle('open')};document.getElementById('overlay').onclick=()=>{document.getElementById('sidebar').classList.remove('open');document.getElementById('overlay').classList.remove('open')};const initial=location.hash.replace('#','');if(labels[initial])openView(initial);
+document.getElementById('globalSearch').addEventListener('keydown',e=>{if(e.key==='Enter'){const q=e.target.value.toLowerCase();for(const [k,v] of Object.entries(labels)){if((v[0]+' '+v[1]).toLowerCase().includes(q)){openView(k);break}}}});
+</script>
 </body>
 </html>

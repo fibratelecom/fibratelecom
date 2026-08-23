@@ -19,8 +19,9 @@
     brand.textContent=`.workspace-logo{font-size:0!important;color:transparent!important;background:transparent url("data:image/png;base64,${logo.replace(/\s+/g,'')}") center/contain no-repeat!important;width:108px!important;min-width:108px!important;height:58px!important;border:0!important;border-radius:0!important;box-shadow:none!important}.workspace-brand{gap:12px!important}`;
     document.head.appendChild(brand);
   }catch(e){console.warn('Logo Fibra+ ainda não carregada',e)}
-  const bridge=await read(['/parts/bridge-01.txt','/parts/bridge-02.txt']);
-  await new Promise((resolve,reject)=>{const url=URL.createObjectURL(new Blob([bridge],{type:'text/javascript'}));const s=document.createElement('script');s.src=url;s.onload=()=>{URL.revokeObjectURL(url);resolve()};s.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('Falha ao iniciar a ponte web'))};document.head.appendChild(s)});
+  const bridgeB64=await read(['/packed/bridgegz-01.txt','/packed/bridgegz-02.txt','/packed/bridgegz-03.txt','/packed/bridgegz-04.txt']);
+  const bridge=await gunzipB64(bridgeB64);
+  await new Promise((resolve,reject)=>{const url=URL.createObjectURL(new Blob([bridge],{type:'text/javascript'}));const s=document.createElement('script');s.src=url;s.onload=()=>{URL.revokeObjectURL(url);resolve()};s.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('Falha ao iniciar a ponte web da 1.0.17'))};document.head.appendChild(s)});
   const appB64=await read(Array.from({length:33},(_,i)=>`/packed/appgz-${String(i+1).padStart(2,'0')}.txt`));
   const app=await gunzipB64(appB64);
   const appUrl=URL.createObjectURL(new Blob([app],{type:'text/javascript'}));

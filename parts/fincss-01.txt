@@ -1,0 +1,605 @@
+.client-bills-modal {
+  width: min(1160px, calc(100vw - 40px));
+}
+
+.bill-create-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 15px 16px;
+  border: 1px solid #cfe3dd;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #f3faf8, #ffffff);
+}
+
+.bill-create-panel h3,
+.collection-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.bill-create-panel p,
+.collection-head p {
+  margin: 4px 0 0;
+  color: #657b75;
+  font-size: 12px;
+}
+
+.bill-create-actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.bill-create-actions button,
+.bill-generator-actions button,
+.collection-tabs button,
+.collection-table button {
+  min-height: 36px;
+}
+
+.bill-create-actions .secondary {
+  background: #0f766e;
+  border-color: #0f766e;
+}
+
+.bill-generator {
+  margin-top: 12px;
+  padding: 16px;
+  border: 1px solid #a8d8cc;
+  border-radius: 12px;
+  background: #fbfefd;
+}
+
+.bill-generator-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 13px;
+}
+
+.bill-generator-title strong {
+  font-size: 15px;
+}
+
+.bill-generator-title span {
+  color: #657b75;
+  font-size: 11px;
+}
+
+.bill-generator-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.carnet-wrapper > .client-bills-view > .bill-create-panel,
+.carnet-wrapper > .client-bills-view > .bill-generator {
+  display: none;
+}
+
+.carnet-wrapper > .client-bills-view {
+  margin-top: 12px;
+}
+
+.carnet-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.carnet-note {
+  margin-top: 12px;
+  padding: 10px 12px;
+  color: #315e55;
+  border: 1px solid #cfe3dd;
+  border-radius: 8px;
+  background: #f1f9f7;
+  font-size: 11px;
+}
+
+.bill-description {
+  min-width: 190px;
+}
+
+.bill-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 16px;
+  padding: 13px 15px;
+  border: 1px solid #dce9e5;
+  border-radius: 10px;
+  background: #f8fbfa;
+}
+
+.bill-history-head h3,
+.bill-history-head p {
+  margin: 0;
+}
+
+.bill-history-head h3 {
+  font-size: 15px;
+}
+
+.bill-history-head p {
+  margin-top: 3px;
+  color: #657b75;
+  font-size: 11px;
+}
+
+.delete-all-bills {
+  min-height: 36px;
+  color: #a7392d;
+  border-color: #e5b8b2;
+  background: #fff5f3;
+  white-space: nowrap;
+}
+
+.delete-all-bills:disabled {
+  cursor: not-allowed;
+  opacity: .5;
+}
+
+.bills-table table {
+  min-width: 1060px;
+}
+
+.bill-payment small {
+  display: block;
+  margin-top: 3px;
+  color: #657b75;
+  white-space: nowrap;
+}
+
+.bill-row-actions {
+  display: grid;
+  grid-template-columns: repeat(2, 72px);
+  gap: 4px;
+  min-width: 148px;
+}
+
+.bill-row-actions button {
+  min-height: 30px;
+  padding: 4px 5px;
+  font-size: 11px;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.bill-row-actions .manual-pay-button {
+  color: #fff;
+  border-color: #087f70;
+  background: #087f70;
+}
+
+.bill-row-actions .danger-link {
+  color: #a7392d;
+  border-color: #e5b8b2;
+  background: #fff5f3;
+}
+
+.bill-description strong,
+.bill-description small,
+.collection-client strong,
+.collection-client small,
+.collection-table td:nth-child(2) code,
+.collection-table td:nth-child(2) small {
+  display: block;
+}
+
+.bill-description small,
+.collection-client small,
+.collection-table td:nth-child(2) small {
+  margin-top: 3px;
+  color: #748782;
+  font-size: 10px;
+}
+
+.finance-center {
+  gap: 16px;
+}
+
+.finance-metrics .metric-card {
+  min-height: 112px;
+}
+
+.collection-panel {
+  padding: 0;
+  overflow: hidden;
+}
+
+.collection-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 22px 14px;
+}
+
+.pdf-button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.collection-aging {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 9px;
+  padding: 0 22px 16px;
+}
+
+.collection-aging article {
+  padding: 11px 12px;
+  border: 1px solid #e2ebe8;
+  border-left: 3px solid #dd8d42;
+  border-radius: 9px;
+  background: #fffaf5;
+}
+
+.collection-aging span,
+.collection-aging strong,
+.collection-aging small {
+  display: block;
+}
+
+.collection-aging span {
+  color: #7a7169;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.collection-aging strong {
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+.collection-aging small {
+  margin-top: 2px;
+  color: #a05a28;
+  font-size: 11px;
+}
+
+.collection-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 22px;
+  border-top: 1px solid #e5eeeb;
+  background: #f8fbfa;
+}
+
+.collection-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.collection-tabs button {
+  padding: 7px 12px;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.collection-tabs button.active {
+  color: #fff;
+  border-color: #008f7a;
+  background: #008f7a;
+}
+
+.collection-search {
+  display: flex;
+  align-items: center;
+  width: min(360px, 42%);
+  margin: 0;
+  padding: 0 10px;
+  border: 1px solid #d4e2de;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.collection-search input {
+  height: 36px;
+  padding: 0 8px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+}
+
+.collection-table table {
+  min-width: 980px;
+}
+
+.collection-table td {
+  vertical-align: middle;
+}
+
+.collection-client {
+  min-width: 190px;
+}
+
+.overdue-days {
+  color: #b54f2b;
+}
+
+@media (max-width: 900px) {
+  .bill-create-panel,
+  .collection-head,
+  .collection-tools,
+  .bill-history-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .bill-create-actions,
+  .collection-tabs {
+    flex-wrap: wrap;
+  }
+
+  .collection-aging {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .collection-search {
+    width: 100%;
+  }
+
+  .carnet-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Filtro de vencimento da Central de cobrança */
+.collection-date-filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.collection-date-filters select {
+  height: 36px;
+  min-width: 92px;
+  padding: 0 8px;
+  color: #315e55;
+  border: 1px solid #d4e2de;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 11px;
+}
+
+.collection-date-filters .clear-date-filter {
+  min-height: 36px;
+  padding: 6px 9px;
+  color: #7a4b36;
+  border-color: #ead6cd;
+  background: #fff8f5;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  .collection-tools {
+    flex-wrap: wrap;
+  }
+
+  .collection-search {
+    width: min(100%, 360px);
+  }
+}
+
+@media (max-width: 900px) {
+  .collection-date-filters {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+}
+
+/* AUDITORIA GLOBAL DE BOTOES - PADRAO 1.0.17 */
+:root {
+  --pp-btn-height: 36px;
+  --pp-btn-radius: 8px;
+  --pp-btn-pad-x: 12px;
+  --pp-btn-font: 12px;
+  --pp-btn-weight: 700;
+  --pp-btn-border: #dce4e2;
+  --pp-btn-text: #536468;
+  --pp-btn-bg: #ffffff;
+  --pp-btn-primary: #0d8b78;
+  --pp-btn-primary-hover: #0a7566;
+  --pp-btn-danger: #a9473c;
+  --pp-btn-danger-border: #e5b8b2;
+  --pp-btn-danger-bg: #fff7f5;
+}
+
+/* Um unico modelo para botoes de acao em todas as telas. */
+.heading-actions button,
+.modal-actions button,
+.panel-head button,
+.table-wrap td > button,
+.row-actions button,
+.plan-actions button,
+.router-actions button,
+.router-health > button,
+.plan-card > button,
+.backup-box button,
+.router-picker button,
+.connector-buttons button,
+.error-screen button,
+.router-access-button,
+.manual-pay-button,
+.bill-create-actions button,
+.bill-generator-actions button,
+.bill-history-head button,
+.bill-row-actions button,
+.collection-tabs button,
+.collection-table button,
+.collection-date-filters button,
+.settings-actions button,
+.stock-alert button,
+.report-card button {
+  box-sizing: border-box !important;
+  min-height: var(--pp-btn-height) !important;
+  height: var(--pp-btn-height) !important;
+  width: auto;
+  padding: 0 var(--pp-btn-pad-x) !important;
+  color: var(--pp-btn-text) !important;
+  background: var(--pp-btn-bg) !important;
+  border: 1px solid var(--pp-btn-border) !important;
+  border-radius: var(--pp-btn-radius) !important;
+  box-shadow: none !important;
+  font-size: var(--pp-btn-font) !important;
+  font-weight: var(--pp-btn-weight) !important;
+  line-height: 1 !important;
+  white-space: nowrap;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  text-align: center;
+  text-decoration: none;
+  transition: background .15s, border-color .15s, color .15s, opacity .15s;
+}
+
+/* Faz botoes que eram apenas texto passarem a usar o mesmo corpo visual. */
+.panel-head button,
+.table-wrap td > button,
+.row-actions button,
+.stock-alert button,
+.report-card button {
+  display: inline-flex !important;
+}
+
+/* Acao principal: mesmo tamanho e formato, mudando apenas a cor. */
+.primary,
+.heading-actions button.primary,
+.modal-actions button.primary,
+.router-actions button.primary,
+.connector-buttons .primary,
+.settings-actions button.primary,
+.plan-card.featured > button {
+  min-height: var(--pp-btn-height) !important;
+  height: var(--pp-btn-height) !important;
+  padding: 0 var(--pp-btn-pad-x) !important;
+  color: #fff !important;
+  background: var(--pp-btn-primary) !important;
+  border: 1px solid var(--pp-btn-primary) !important;
+  border-radius: var(--pp-btn-radius) !important;
+  box-shadow: none !important;
+  font-size: var(--pp-btn-font) !important;
+  font-weight: var(--pp-btn-weight) !important;
+}
+
+.primary:hover,
+.heading-actions button.primary:hover,
+.modal-actions button.primary:hover,
+.router-actions button.primary:hover,
+.connector-buttons .primary:hover,
+.settings-actions button.primary:hover,
+.plan-card.featured > button:hover {
+  background: var(--pp-btn-primary-hover) !important;
+  border-color: var(--pp-btn-primary-hover) !important;
+}
+
+/* Acoes de linha agora usam o mesmo modelo; nao ha mais botao azul/verde de formato diferente. */
+.row-actions .status-link,
+.row-actions .boleto-link,
+.bill-row-actions .manual-pay-button {
+  color: var(--pp-btn-primary) !important;
+  background: var(--pp-btn-bg) !important;
+  border: 1px solid var(--pp-btn-border) !important;
+  border-radius: var(--pp-btn-radius) !important;
+}
+
+/* Excluir/desativar conserva somente a semantica vermelha, sem mudar o modelo do botao. */
+.danger-link,
+.row-actions .danger-link,
+.plan-actions .danger-link,
+.bill-row-actions .danger-link,
+.router-action-buttons .danger-link,
+.delete-all-bills {
+  min-height: var(--pp-btn-height) !important;
+  height: var(--pp-btn-height) !important;
+  padding: 0 var(--pp-btn-pad-x) !important;
+  color: var(--pp-btn-danger) !important;
+  background: var(--pp-btn-danger-bg) !important;
+  border: 1px solid var(--pp-btn-danger-border) !important;
+  border-radius: var(--pp-btn-radius) !important;
+  box-shadow: none !important;
+  font-size: var(--pp-btn-font) !important;
+  font-weight: var(--pp-btn-weight) !important;
+  line-height: 1 !important;
+  white-space: nowrap;
+}
+
+/* Tabela de boletos: mantem a coluna compacta, mas com o mesmo padrao visual. */
+.bill-row-actions {
+  grid-template-columns: repeat(2, 76px);
+  gap: 5px;
+  min-width: 157px;
+}
+
+.bill-row-actions button {
+  width: 76px !important;
+  padding: 0 6px !important;
+}
+
+/* Abas do Financeiro continuam indicando a aba ativa sem criar outro modelo. */
+.collection-tabs button.active {
+  color: #fff !important;
+  background: var(--pp-btn-primary) !important;
+  border-color: var(--pp-btn-primary) !important;
+}
+
+/* Botao de exportacao no cartao deixa de parecer link solto. */
+.report-card button {
+  justify-self: start;
+  border-top: 1px solid var(--pp-btn-border) !important;
+  grid-column: 1 / -1;
+}
+
+/* Icones de cabecalho tambem usam o mesmo raio e medida externa. */
+.top-actions > button:not(.primary),
+.modal-head button {
+  width: var(--pp-btn-height) !important;
+  min-width: var(--pp-btn-height) !important;
+  height: var(--pp-btn-height) !important;
+  min-height: var(--pp-btn-height) !important;
+  padding: 0 !important;
+  border-radius: var(--pp-btn-radius) !important;
+}
+
+/* Estado desabilitado unico. */
+button:disabled,
+.pdf-button:disabled,
+.delete-all-bills:disabled,
+.router-actions button:disabled,
+.router-health > button:disabled,
+.router-access-button:disabled,
+.sessions button:disabled {
+  cursor: not-allowed !important;
+  opacity: .55 !important;
+}
+
+@media (max-width: 620px) {
+  .modal-actions button,
+  .router-action-buttons button,
+  .bill-create-actions button,
+  .bill-generator-actions button {
+    min-height: var(--pp-btn-height) !important;
+  }
+}
+
+
+
+/* CLIENTES 1.0.17 - manter Editar e Excluir lado a lado, sem alterar outras telas */
+.client-row-actions {
+  display: grid !important;
+  grid-template-columns: repeat(2, max-content);
+  min-width: 0 !important;
+  width: max-content;
+  gap: 7px 9px;
+}

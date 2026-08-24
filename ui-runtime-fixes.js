@@ -43,7 +43,8 @@
       const picker=config.querySelector('.router-picker');
       (picker||config.querySelector('.panel-head'))?.insertAdjacentElement('afterend',note);
     }
-    note.innerHTML='<strong>Integração MikroTik</strong>Gerenciamento do RouterOS 7 via REST HTTPS usando o endereço MikroTik Cloud e a porta 443.';
+    const html='<strong>Integração MikroTik</strong>Gerenciamento do RouterOS 7 via REST HTTPS usando o endereço MikroTik Cloud e a porta 443.';
+    if(note.innerHTML!==html)note.innerHTML=html;
   }
 
   function patchRouterForm(){
@@ -51,29 +52,44 @@
       const api=[...select.options].find(o=>o.value==='api');
       const rest=[...select.options].find(o=>o.value==='rest');
       if(api&&rest){
-        api.hidden=true;api.disabled=true;
-        rest.textContent='REST HTTPS';
+        if(!api.hidden)api.hidden=true;
+        if(!api.disabled)api.disabled=true;
+        if(rest.textContent!=='REST HTTPS')rest.textContent='REST HTTPS';
         if(select.value==='api'&&!select.dataset.cloudNormalized){
-          select.dataset.cloudNormalized='1';select.value='rest';select.dispatchEvent(new Event('change',{bubbles:true}));
+          select.dataset.cloudNormalized='1';
+          select.value='rest';
+          select.dispatchEvent(new Event('change',{bubbles:true}));
         }
       }
     });
     document.querySelectorAll('.router-form.multi input').forEach(input=>{
       const label=input.closest('label');
-      if(label&&label.textContent.includes('Endereço MikroTik Cloud'))input.placeholder='exemplo.sn.mynetname.net';
+      if(label&&label.textContent.includes('Endereço MikroTik Cloud')&&input.placeholder!=='exemplo.sn.mynetname.net')input.placeholder='exemplo.sn.mynetname.net';
     });
   }
 
   let scheduled=false;
+  const observer=new MutationObserver(()=>{
+    if(!scheduled){
+      scheduled=true;
+      requestAnimationFrame(patch);
+    }
+  });
+
   function patch(){
     scheduled=false;
-    document.title='Provedor Plus';
-    const root=document.body;if(!root)return;
-    replaceText(root);
-    patchMikrotikNote();
-    patchRouterForm();
+    observer.disconnect();
+    try{
+      if(document.title!=='Provedor Plus')document.title='Provedor Plus';
+      const root=document.body;if(!root)return;
+      replaceText(root);
+      patchMikrotikNote();
+      patchRouterForm();
+    }finally{
+      observer.observe(document.documentElement,{childList:true,subtree:true,characterData:true});
+    }
   }
-  const requestPatch=()=>{if(!scheduled){scheduled=true;queueMicrotask(patch)}};
-  new MutationObserver(requestPatch).observe(document.documentElement,{childList:true,subtree:true,characterData:true});
+
+  observer.observe(document.documentElement,{childList:true,subtree:true,characterData:true});
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',patch,{once:true});else patch();
 })();

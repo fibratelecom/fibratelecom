@@ -6,7 +6,7 @@ async function call(path, options={}){
   const response=await fetch(`${DATA_API}${path}`,{...options,headers});
   let body='';
   try{body=await response.text()}catch{}
-  return {status:response.status,ok:response.ok,body:body.slice(0,240)};
+  return {status:response.status,ok:response.ok,body:body.slice(0,500)};
 }
 
 module.exports=async function handler(req,res){
@@ -23,7 +23,9 @@ module.exports=async function handler(req,res){
     return res.status(200).json({
       ok:read.status!==401&&read.status!==403&&writeAuthorized,
       readStatus:read.status,
+      readBody:read.body,
       writeProbeStatus:writeProbe.status,
+      writeProbeBody:writeProbe.body,
       writeAuthorized,
       env:{
         databaseUrl:Boolean(process.env.DATABASE_URL||process.env.POSTGRES_URL||process.env.NEON_DATABASE_URL),

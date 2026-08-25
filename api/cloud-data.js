@@ -89,6 +89,17 @@ async function upsert(req,table,payload,{keepIdOnInsert=true}={}){
   return Array.isArray(inserted)?inserted[0]:inserted;
 }
 
+async function findExistingClient(req,payload){
+  const filters=[];
+  if(payload.contract_number)filters.push(['contract_number',payload.contract_number]);
+  if(payload.document)filters.push(['document',payload.document]);
+  for(const [field,value] of filters){
+    const rows=await db(req,`/pp_clients?select=id&${field}=eq.${encodeURIComponent(value)}&limit=1`);
+    if(Array.isArray(rows)&&rows[0]?.id)return num(rows[0].id);
+  }
+  return null;
+}
+
 module.exports=async function handler(req,res){
   res.setHeader('Cache-Control','no-store');
   if(req.method!=='POST')return res.status(405).json({ok:false,error:'Método não permitido.'});
@@ -107,6 +118,7 @@ module.exports=async function handler(req,res){
     else if(action==='clients.save'){
       const payload=clientPayload(data);
       if(!payload.name)throw Object.assign(new Error('Nome do cliente é obrigatório.'),{statusCode:400});
+      if(!payload.id){const existingId=await findExistingClient(req,payload);if(existingId)payload.id=existingId;}
       result=await upsert(req,'pp_clients',payload,{keepIdOnInsert:false});
     }else if(action==='clients.delete'){
       const id=num(data.id);if(!id)throw Object.assign(new Error('Cliente inválido.'),{statusCode:400});

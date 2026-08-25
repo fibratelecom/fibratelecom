@@ -7,11 +7,12 @@
   const bridgeB64=await read(['/packed/bridgegz-01.txt','/packed/bridgegz-02.txt','/packed/bridgegz-03.txt','/packed/bridgegz-04.txt']);
   const bridge=await gunzipB64(bridgeB64);
   await new Promise((resolve,reject)=>{const url=URL.createObjectURL(new Blob([bridge],{type:'text/javascript'})),s=document.createElement('script');s.src=url;s.onload=()=>{URL.revokeObjectURL(url);resolve()};s.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('Falha ao iniciar a ponte web da 1.0.17'))};document.head.appendChild(s)});
-  await loadScript('/cloud-router-store-v2.js?v=1017-cloud11');
-  await loadScript('/cloud-client-store-v2.js?v=1017-cloud11');
-  await loadScript('/cloud-adapter.js?v=1017-cloud11');
+  await loadScript('/cloud-router-store-v2.js?v=1017-cloud12');
+  await loadScript('/cloud-client-store-v2.js?v=1017-cloud12');
+  await loadScript('/cloud-adapter.js?v=1017-cloud12');
   if(typeof window.ProvedorPlusInstallCloudAdapter!=='function')throw new Error('A ponte HTTPS do MikroTik não foi carregada.');
   await window.ProvedorPlusInstallCloudAdapter();
+  await loadScript('/cloud-client-status-fix.js?v=1017-cloud12');
   await loadScript('/ui-runtime-fixes.js?v=1017-fix8');
   const appB64=await read(Array.from({length:33},(_,i)=>`/packed/appgz-${String(i+1).padStart(2,'0')}.txt`));
   const app=await gunzipB64(appB64),appUrl=URL.createObjectURL(new Blob([app],{type:'text/javascript'}));

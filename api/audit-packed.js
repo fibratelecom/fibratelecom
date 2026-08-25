@@ -16,7 +16,8 @@ function contexts(src,term,max=20,before=240,after=620){
   return out;
 }
 function firstConst(src,name){
-  const re=new RegExp(`const\\s+${name}\\s*=\\s*(["'\\`])([^"'\\`]+)\\1`);const m=src.match(re);return m?m[2]:null;
+  const re=new RegExp('const\\s+'+name+'\\s*=\\s*["\\\']([^"\\\']+)["\\\']');
+  const m=src.match(re);return m?m[1]:null;
 }
 module.exports=async function handler(req,res){
   res.setHeader('Cache-Control','no-store');

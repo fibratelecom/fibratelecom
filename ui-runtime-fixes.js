@@ -17,9 +17,17 @@
     ['Configuração da rede e conexão HTTPS com o RouterOS 7 pela nuvem.','Gerencie roteadores MikroTik, sessões PPPoE e sincronização com o RouterOS 7.'],
     ['Conexão direta com o RouterOS 7.','Gerenciamento e sincronização com o RouterOS 7.'],
     ['Conexão HTTPS com o RouterOS 7 pela nuvem.','Gerenciamento e sincronização com o RouterOS 7.'],
-    ['A senha fica criptografada neste navegador e só é enviada ao backend durante a conexão HTTPS com o MikroTik.','Credenciais utilizadas para autenticação segura no RouterOS.'],
+    ['A senha fica criptografada neste navegador e só é enviada ao backend durante a conexão HTTPS com o MikroTik.','A credencial do MikroTik é protegida na nuvem e usada somente nas operações autenticadas com o RouterOS.'],
+    ['A senha deste MikroTik não está salva neste navegador.','A credencial deste MikroTik não está disponível na nuvem.'],
     ['Credenciais protegidas no Windows','Credenciais protegidas com segurança'],
     ['Remover o certificado Efí deste computador?','Remover o certificado Efí configurado?'],
+    ['Navegador / migração para PostgreSQL','Neon PostgreSQL (nuvem)'],
+    ['Pendente no agente local','Pendente na sincronização'],
+    ['Sincronização enviada ao agente local.','Sincronização enviada ao MikroTik.'],
+    ['Alteração PPPoE enviada ao agente local.','Alteração PPPoE enviada ao MikroTik.'],
+    ['Exclusão PPPoE enviada ao agente local.','Exclusão PPPoE enviada ao MikroTik.'],
+    ['Acesso remoto disponível quando o agente local estiver conectado.','Acesso remoto pela integração REST HTTPS em nuvem.'],
+    ['Na versão web, o acesso ao equipamento usa o agente local seguro.','O acesso ao equipamento usa a integração REST HTTPS em nuvem.'],
     ['Provedor Plus Conector não está ativo neste computador. Abra o Conector para usar o MikroTik e o WireGuard.','A integração MikroTik utiliza REST HTTPS pelo MikroTik Cloud.'],
     ['A configuração antiga do Conector local foi desativada nesta versão web. Salve o MikroTik novamente usando REST HTTPS.','A integração MikroTik utiliza REST HTTPS pelo MikroTik Cloud.']
   ];
@@ -69,27 +77,15 @@
   }
 
   let scheduled=false;
-  const observer=new MutationObserver(()=>{
-    if(!scheduled){
-      scheduled=true;
-      requestAnimationFrame(patch);
-    }
-  });
-
+  const observer=new MutationObserver(()=>{if(!scheduled){scheduled=true;requestAnimationFrame(patch)}});
   function patch(){
-    scheduled=false;
-    observer.disconnect();
+    scheduled=false;observer.disconnect();
     try{
       if(document.title!=='Provedor Plus')document.title='Provedor Plus';
       const root=document.body;if(!root)return;
-      replaceText(root);
-      patchMikrotikNote();
-      patchRouterForm();
-    }finally{
-      observer.observe(document.documentElement,{childList:true,subtree:true,characterData:true});
-    }
+      replaceText(root);patchMikrotikNote();patchRouterForm();
+    }finally{observer.observe(document.documentElement,{childList:true,subtree:true,characterData:true})}
   }
-
   observer.observe(document.documentElement,{childList:true,subtree:true,characterData:true});
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',patch,{once:true});else patch();
 })();

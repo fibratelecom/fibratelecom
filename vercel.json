@@ -3,6 +3,9 @@
     { "source": "/api/mikrotik-proxy", "destination": "/api/mikrotik-proxy-v2" }
   ],
   "git": {
-    "deploymentEnabled": false
+    "deploymentEnabled": {
+      "*": false,
+      "main": true
+    }
   }
 }

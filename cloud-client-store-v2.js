@@ -63,7 +63,7 @@
     if(!Array.isArray(remote))return local;
 
     const remoteIds=new Set(remote.map(x=>Number(x?.id)).filter(Boolean));
-    const missing=local.filter(x=>x?.name&&!remoteIds.has(Number(x?.id)));
+    const missing=local.filter(x=>x?.id&&x?.name&&!remoteIds.has(Number(x.id)));
     if(missing.length){
       await Promise.allSettled(missing.map(x=>cloud('clients.save',x)));
       try{remote=await cloud('clients.list')}catch{}

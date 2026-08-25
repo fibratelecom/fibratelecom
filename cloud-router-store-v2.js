@@ -1,14 +1,16 @@
 (()=>{
   const api=window.provedor;
   if(!api?.routers||api.routers.__cloudStoreV2Installed)return;
-  const KEY='provedor_plus_cloud_routers_1017_v1';
-  const DELETED='provedor_plus_cloud_routers_deleted_1017_v1';
+  const STATE_KEY='provedor_plus_web_1_0_17';
+  const LEGACY_KEY='provedor_plus_cloud_routers_1017_v1';
+  const LEGACY_DELETED='provedor_plus_cloud_routers_deleted_1017_v1';
   const original={...api.routers};
-  const readJson=(key,fallback)=>{try{const v=JSON.parse(localStorage.getItem(key)||'');return v??fallback}catch{return fallback}};
-  const writeJson=(key,value)=>localStorage.setItem(key,JSON.stringify(value));
-  const localList=()=>{const v=readJson(KEY,[]);return Array.isArray(v)?v:[]};
-  const deletedSet=()=>new Set((readJson(DELETED,[])||[]).map(Number).filter(Number.isFinite));
+
+  const readState=()=>{try{return JSON.parse(localStorage.getItem(STATE_KEY)||'{}')||{}}catch{return{}}};
+  const writeState=state=>localStorage.setItem(STATE_KEY,JSON.stringify(state||{}));
   const withoutSecret=data=>{const out={...(data||{})};delete out.password;delete out.secret;return out};
+  const readLegacy=()=>{try{const rows=JSON.parse(localStorage.getItem(LEGACY_KEY)||'[]');return Array.isArray(rows)?rows:[]}catch{return[]}};
+  const clearLegacy=()=>{try{localStorage.removeItem(LEGACY_KEY);localStorage.removeItem(LEGACY_DELETED)}catch{}};
 
   async function cloud(action,data={}){
     const response=await fetch('/api/cloud-data',{
@@ -19,49 +21,53 @@
     return body.data;
   }
 
-  async function collectLocal(){
+  function cacheRouters(rows,{markMigrated=true}={}){
+    const state=readState();
+    state.routers=(Array.isArray(rows)?rows:[]).map(withoutSecret);
+    if(markMigrated){state.__cloud_migrations={...(state.__cloud_migrations||{}),routers_v2:true}}
+    writeState(state);
+  }
+
+  async function migrateLegacyIfNeeded(remote){
+    const state=readState();
+    if(state.__cloud_migrations?.routers_v2)return remote;
     let legacy=[];try{legacy=await original.list()}catch{}
-    const deleted=deletedSet(),merged=new Map();
-    for(const r of Array.isArray(legacy)?legacy:[]){const id=Number(r?.id);if(id&&deleted.has(id))continue;if(id)merged.set(id,{...r})}
-    for(const r of localList()){const id=Number(r?.id);if(id&&!deleted.has(id))merged.set(id,{...merged.get(id),...r})}
-    return [...merged.values()].sort((a,b)=>Number(a.id)-Number(b.id));
+    const merged=new Map();
+    for(const r of [...(Array.isArray(legacy)?legacy:[]),...readLegacy()]){const id=Number(r?.id);if(id&&r?.host&&r?.username)merged.set(id,withoutSecret(r))}
+    const candidates=[...merged.values()];
+    if(!remote.length&&candidates.length){
+      await Promise.allSettled(candidates.map(r=>cloud('routers.save',r)));
+      remote=await cloud('routers.list');
+    }
+    cacheRouters(remote,{markMigrated:true});
+    clearLegacy();
+    return remote;
   }
 
   async function list(){
-    const local=await collectLocal();
-    let remote=null;try{remote=await cloud('routers.list')}catch{}
-    if(!Array.isArray(remote))return local;
-
-    const remoteIds=new Set(remote.map(x=>Number(x?.id)).filter(Boolean));
-    const missing=local.filter(x=>x?.id&&x?.host&&x?.username&&!remoteIds.has(Number(x.id)));
-    if(missing.length){
-      await Promise.allSettled(missing.map(x=>cloud('routers.save',withoutSecret(x))));
-      try{remote=await cloud('routers.list')}catch{}
-    }
-
-    const deleted=deletedSet(),merged=new Map();
-    for(const r of Array.isArray(remote)?remote:[]){const id=Number(r?.id);if(id&&!deleted.has(id))merged.set(id,{...r})}
-    for(const r of local){const id=Number(r?.id);if(id&&!deleted.has(id))merged.set(id,{...merged.get(id),...r})}
-    return [...merged.values()].sort((a,b)=>Number(a.id)-Number(b.id));
+    let remote=await cloud('routers.list');
+    if(!Array.isArray(remote))remote=[];
+    remote=await migrateLegacyIfNeeded(remote);
+    cacheRouters(remote,{markMigrated:true});
+    clearLegacy();
+    const state=readState(),clients=Array.isArray(state.clients)?state.clients:[];
+    return remote.map(r=>({...r,has_password:Boolean(r.has_password),client_count:clients.filter(c=>Number(c.router_id)===Number(r.id)).length})).sort((a,b)=>Number(a.id)-Number(b.id));
   }
 
   async function save(data){
-    const current=await list();
-    let id=Number(data?.id)||0;
-    if(!id){id=current.reduce((m,r)=>Math.max(m,Number(r?.id)||0),0)+1;if(id<1)id=1}
-    const existing=current.find(r=>Number(r.id)===id)||{};
-    const record={...existing,...withoutSecret(data),id,connection_method:'rest',host:String(data?.host||existing.host||'').trim(),port:Number(data?.port)||443,updated_at:new Date().toISOString()};
-    const locals=localList().filter(r=>Number(r.id)!==id);locals.push(record);writeJson(KEY,locals);
-    const deleted=deletedSet();deleted.delete(id);writeJson(DELETED,[...deleted]);
+    const record={...withoutSecret(data),connection_method:'rest',host:String(data?.host||'').trim(),port:Number(data?.port)||443,updated_at:new Date().toISOString()};
     const remote=await cloud('routers.save',record);
-    return {...record,...(remote||{}),id};
+    if(!remote?.id)throw new Error('O MikroTik foi enviado à nuvem, mas não retornou o identificador do cadastro.');
+    const rows=await cloud('routers.list');
+    cacheRouters(Array.isArray(rows)?rows:[remote],{markMigrated:true});
+    return {...record,...remote,id:Number(remote.id)};
   }
 
   async function remove(id){
     id=Number(id);if(!id)return {deleted:false,id};
     await cloud('routers.delete',{id});
-    writeJson(KEY,localList().filter(r=>Number(r.id)!==id));
-    const deleted=deletedSet();deleted.add(id);writeJson(DELETED,[...deleted]);
+    const rows=await cloud('routers.list');
+    cacheRouters(Array.isArray(rows)?rows:[],{markMigrated:true});
     return {deleted:true,id};
   }
 
@@ -69,5 +75,5 @@
   api.routers.save=save;
   api.routers.delete=remove;
   Object.defineProperty(api.routers,'__cloudStoreV2Installed',{value:true,enumerable:false});
-  list().catch(()=>{});
+  list().catch(error=>console.error('Provedor Plus: falha ao carregar MikroTiks da nuvem.',error));
 })();

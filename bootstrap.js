@@ -4,15 +4,30 @@
   const gunzipB64=async b64=>{const bin=atob(b64.replace(/\s+/g,'')),bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);if(typeof DecompressionStream!=='function')throw new Error('Este navegador não suporta a descompressão necessária. Atualize o Chrome/Edge.');const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));return new Response(stream).text()};
   const css=await read(['/parts/basecss-01.txt','/parts/basecss-02.txt','/parts/basecss-03.txt','/parts/fincss-01.txt','/ui-fixes.css?v=1017-fix8']);
   const style=document.createElement('style');style.textContent=css;document.head.appendChild(style);
+
+  await loadScript('/auth-gate.js?v=1017-cloud14');
+  if(!window.ProvedorPlusAuth?.ensure)throw new Error('A autenticação do Provedor Plus não foi carregada.');
+  const auth=await window.ProvedorPlusAuth.ensure();
+
+  await loadScript('/cloud-state-store.js?v=1017-cloud14');
+  if(!window.ProvedorPlusCloudState?.prepare)throw new Error('A sincronização com o banco da nuvem não foi carregada.');
+  await window.ProvedorPlusCloudState.prepare();
+  const currentState=window.ProvedorPlusCloudState.getState()||{};
+  currentState.settings={...(currentState.settings||{}),current_user_name:auth?.user?.name||currentState.settings?.current_user_name||'Administrador'};
+  localStorage.setItem('provedor_plus_web_1_0_17',JSON.stringify(currentState));
+  await window.ProvedorPlusCloudState.forceSync();
+
   const bridgeB64=await read(['/packed/bridgegz-01.txt','/packed/bridgegz-02.txt','/packed/bridgegz-03.txt','/packed/bridgegz-04.txt']);
   const bridge=await gunzipB64(bridgeB64);
   await new Promise((resolve,reject)=>{const url=URL.createObjectURL(new Blob([bridge],{type:'text/javascript'})),s=document.createElement('script');s.src=url;s.onload=()=>{URL.revokeObjectURL(url);resolve()};s.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('Falha ao iniciar a ponte web da 1.0.17'))};document.head.appendChild(s)});
-  await loadScript('/cloud-router-store-v2.js?v=1017-cloud12');
-  await loadScript('/cloud-client-store-v2.js?v=1017-cloud12');
-  await loadScript('/cloud-adapter.js?v=1017-cloud12');
+  await loadScript('/cloud-router-store-v2.js?v=1017-cloud14');
+  await loadScript('/cloud-client-store-v2.js?v=1017-cloud14');
+  await loadScript('/cloud-adapter.js?v=1017-cloud14');
   if(typeof window.ProvedorPlusInstallCloudAdapter!=='function')throw new Error('A ponte HTTPS do MikroTik não foi carregada.');
   await window.ProvedorPlusInstallCloudAdapter();
-  await loadScript('/cloud-client-status-fix.js?v=1017-cloud12');
+  await loadScript('/cloud-client-status-fix.js?v=1017-cloud14');
+  await loadScript('/cloud-backup-store.js?v=1017-cloud14');
+  window.ProvedorPlusCloudState.wrapApi(window.provedor);
   await loadScript('/ui-runtime-fixes.js?v=1017-fix8');
   const appB64=await read(Array.from({length:33},(_,i)=>`/packed/appgz-${String(i+1).padStart(2,'0')}.txt`));
   const app=await gunzipB64(appB64),appUrl=URL.createObjectURL(new Blob([app],{type:'text/javascript'}));

@@ -16,25 +16,21 @@
     const form=shell({configured,error});
     return new Promise(resolve=>{
       form.addEventListener('submit',async event=>{
-        event.preventDefault();
-        const fd=new FormData(form),password=String(fd.get('password')||'');
+        event.preventDefault();const fd=new FormData(form),password=String(fd.get('password')||'');
         if(!configured&&password!==String(fd.get('confirm')||'')){resolve(prompt(false,'As senhas não conferem.'));return}
         const button=form.querySelector('button');button.disabled=true;button.textContent='Aguarde...';
-        try{
-          const result=configured?await api('login',{login:String(fd.get('login')||''),password}):await api('setup',{name:String(fd.get('name')||''),login:String(fd.get('login')||''),password});
-          resolve(result);
-        }catch(error){resolve(prompt(configured,error?.message||String(error)))}
+        try{const result=configured?await api('login',{login:String(fd.get('login')||''),password}):await api('setup',{name:String(fd.get('name')||''),login:String(fd.get('login')||''),password});resolve(result)}catch(error){resolve(prompt(configured,error?.message||String(error)))}
       });
     });
   }
 
   async function ensure(){
-    let status;
-    try{status=await api('status')}catch(error){throw new Error(`Não foi possível validar o acesso: ${error?.message||error}`)}
-    if(status?.authenticated&&status?.user)return status;
-    const result=await prompt(Boolean(status?.configured));
-    const root=document.getElementById('root');if(root)root.innerHTML='';
-    return result;
+    let status;try{status=await api('status')}catch(error){throw new Error(`Não foi possível validar o acesso: ${error?.message||error}`)}
+    if(status?.authenticated&&status?.user&&status?.vaultReady)return status;
+    if(status?.authenticated&&status?.user&&!status?.vaultReady){
+      const result=await prompt(true,'Entre novamente uma vez para ativar o cofre seguro da nuvem.');const root=document.getElementById('root');if(root)root.innerHTML='';return result;
+    }
+    const result=await prompt(Boolean(status?.configured));const root=document.getElementById('root');if(root)root.innerHTML='';return result;
   }
 
   async function logout(){await api('logout').catch(()=>{});location.reload()}

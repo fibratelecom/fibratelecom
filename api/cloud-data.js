@@ -73,7 +73,7 @@ function clientPayload(data={}){
   return out;
 }
 
-async function upsert(req,table,payload){
+async function upsert(req,table,payload,{keepIdOnInsert=true}={}){
   const id=num(payload.id);
   if(id){
     const patched=await db(req,`/${table}?id=eq.${id}`,{
@@ -81,8 +81,10 @@ async function upsert(req,table,payload){
     });
     if(Array.isArray(patched)&&patched.length)return patched[0];
   }
+  const insertPayload={...payload};
+  if(!keepIdOnInsert)delete insertPayload.id;
   const inserted=await db(req,`/${table}`,{
-    method:'POST',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(payload)
+    method:'POST',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(insertPayload)
   });
   return Array.isArray(inserted)?inserted[0]:inserted;
 }
@@ -105,7 +107,7 @@ module.exports=async function handler(req,res){
     else if(action==='clients.save'){
       const payload=clientPayload(data);
       if(!payload.name)throw Object.assign(new Error('Nome do cliente é obrigatório.'),{statusCode:400});
-      result=await upsert(req,'pp_clients',payload);
+      result=await upsert(req,'pp_clients',payload,{keepIdOnInsert:false});
     }else if(action==='clients.delete'){
       const id=num(data.id);if(!id)throw Object.assign(new Error('Cliente inválido.'),{statusCode:400});
       await db(req,`/pp_clients?id=eq.${id}`,{method:'DELETE',headers:{Prefer:'return=minimal'}});result={deleted:true,id};

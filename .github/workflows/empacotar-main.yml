@@ -14,6 +14,8 @@ permissions:
 jobs:
   pacote:
     runs-on: ubuntu-latest
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
     steps:
       - name: Baixar main
         uses: actions/checkout@v4
@@ -54,3 +56,11 @@ jobs:
           path: /tmp/pacote/fibratelecom-main.tar.gz
           if-no-files-found: error
           retention-days: 1
+
+      - name: Promover preview cloud17 sem novo build
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "VERCEL_TOKEN_NAO_CONFIGURADO"
+            exit 2
+          fi
+          npx --yes vercel@latest promote https://fibratelecom-fpwf9asjg-fibratelecom.vercel.app --yes --token "$VERCEL_TOKEN" --scope fibratelecom

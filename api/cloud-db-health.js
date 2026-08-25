@@ -13,20 +13,19 @@ module.exports=async function handler(req,res){
   res.setHeader('Cache-Control','no-store');
   if(req.method!=='GET')return res.status(405).json({ok:false,error:'Método não permitido.'});
   try{
+    const oidcToken=String(req.headers['x-vercel-oidc-token']||'');
     const read=await call('/pp_routers?select=id&limit=1');
     const writeProbe=await call('/pp_routers',{
       method:'POST',
       headers:{'Content-Type':'application/json',Prefer:'return=minimal'},
       body:'{}'
     });
-    const writeAuthorized=writeProbe.status!==401&&writeProbe.status!==403;
     return res.status(200).json({
-      ok:read.status!==401&&read.status!==403&&writeAuthorized,
+      oidcAvailable:Boolean(oidcToken),
       readStatus:read.status,
       readBody:read.body,
       writeProbeStatus:writeProbe.status,
       writeProbeBody:writeProbe.body,
-      writeAuthorized,
       env:{
         databaseUrl:Boolean(process.env.DATABASE_URL||process.env.POSTGRES_URL||process.env.NEON_DATABASE_URL),
         dataApiToken:Boolean(process.env.NEON_DATA_API_TOKEN)

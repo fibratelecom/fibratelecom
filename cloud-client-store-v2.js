@@ -33,7 +33,7 @@
   }
 
   const overlayCloudFields=(saved,data)=>{
-    const out={...(saved||{})};
+    const out={...(saved||{}),...(data||{})};
     for(const key of CLOUD_FIELDS){
       if(Object.prototype.hasOwnProperty.call(data||{},key))out[key]=data[key];
     }
@@ -63,7 +63,7 @@
     if(!Array.isArray(remote))return local;
 
     const remoteIds=new Set(remote.map(x=>Number(x?.id)).filter(Boolean));
-    const missing=local.filter(x=>x?.id&&x?.name&&!remoteIds.has(Number(x.id)));
+    const missing=local.filter(x=>x?.name&&!remoteIds.has(Number(x?.id)));
     if(missing.length){
       await Promise.allSettled(missing.map(x=>cloud('clients.save',x)));
       try{remote=await cloud('clients.list')}catch{}
@@ -71,7 +71,10 @@
 
     const merged=new Map();
     for(const r of Array.isArray(remote)?remote:[]){const n=normalize(r),id=Number(n?.id);if(id)merged.set(id,n)}
-    for(const l of local){const id=Number(l?.id);if(id)merged.set(id,mergeRemoteLocal(merged.get(id),l))}
+    for(const l of local){
+      const id=Number(l?.id);
+      if(id&&merged.has(id))merged.set(id,mergeRemoteLocal(merged.get(id),l));
+    }
     return [...merged.values()].sort((a,b)=>Number(a.id)-Number(b.id));
   }
 
@@ -99,24 +102,28 @@
       saved=await pickSaved(localData,raw);
     }
 
-    const cloudRecord=overlayCloudFields(saved,data||{});
-    if(cloudRecord?.id&&cloudRecord?.name)await cloud('clients.save',cloudRecord);
-    return raw;
+    const cloudRecord=overlayCloudFields(saved||data,data||{});
+    if(!cloudRecord?.name)throw new Error('O cliente foi salvo localmente, mas não foi possível identificar os dados para sincronizar com a nuvem.');
+    const remoteSaved=normalize(await cloud('clients.save',cloudRecord));
+    if(!remoteSaved?.id)throw new Error('O cliente foi salvo localmente, mas a nuvem não retornou o identificador do cadastro.');
+
+    if(raw?.client&&typeof raw==='object')return {...raw,client:{...raw.client,...remoteSaved}};
+    if(raw&&typeof raw==='object')return {...raw,...remoteSaved,id:remoteSaved.id};
+    return remoteSaved;
   };
 
   if(typeof original.delete==='function')api.clients.delete=async id=>{
     await cloud('clients.delete',{id});
-    return original.delete(id);
+    try{return await original.delete(id)}catch{return {deleted:true,id}}
   };
 
   if(typeof original.setMikrotikState==='function')api.clients.setMikrotikState=async(id,state)=>{
-    const raw=await original.setMikrotikState(id,state);
-    try{
-      const rows=await original.list();
-      const client=(Array.isArray(rows)?rows:[]).find(x=>Number(x?.id)===Number(id));
-      if(client?.id&&client?.name)await cloud('clients.save',client);
-    }catch{}
-    return raw;
+    let raw=null;
+    try{raw=await original.setMikrotikState(id,state)}catch{}
+    const rows=await list();
+    const client=(Array.isArray(rows)?rows:[]).find(x=>Number(x?.id)===Number(id));
+    if(client?.id&&client?.name)await cloud('clients.save',{...client,mikrotik_secret_id:state?.secretId||client.mikrotik_secret_id,mikrotik_status:state?.status||client.mikrotik_status,mikrotik_last_sync:state?.lastSync||client.mikrotik_last_sync});
+    return raw||{updated:true,id};
   };
 
   Object.defineProperty(api.clients,'__cloudClientStoreV2Installed',{value:true,enumerable:false});

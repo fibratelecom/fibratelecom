@@ -1,0 +1,34 @@
+name: Empacotar main
+
+on:
+  push:
+    branches:
+      - desenvolvimento
+    paths:
+      - .github/workflows/empacotar-main.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pacote:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Gerar pacote da main
+        run: |
+          mkdir -p /tmp/pacote
+          tar --exclude=.git --exclude=.github -czf /tmp/pacote/fibratelecom-main.tar.gz .
+
+      - name: Publicar artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: fibratelecom-main
+          path: /tmp/pacote/fibratelecom-main.tar.gz
+          if-no-files-found: error
+          retention-days: 1

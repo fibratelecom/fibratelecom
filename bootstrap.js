@@ -5,11 +5,11 @@
   const css=await read(['/parts/basecss-01.txt','/parts/basecss-02.txt','/parts/basecss-03.txt','/parts/fincss-01.txt','/ui-fixes.css?v=1017-fix8']);
   const style=document.createElement('style');style.textContent=css;document.head.appendChild(style);
 
-  await loadScript('/auth-gate.js?v=1017-cloud15');
+  await loadScript('/auth-gate.js?v=1017-cloud16');
   if(!window.ProvedorPlusAuth?.ensure)throw new Error('A autenticação do Provedor Plus não foi carregada.');
   const auth=await window.ProvedorPlusAuth.ensure();
 
-  await loadScript('/cloud-state-store.js?v=1017-cloud15');
+  await loadScript('/cloud-state-store.js?v=1017-cloud16');
   if(!window.ProvedorPlusCloudState?.prepare)throw new Error('A sincronização com o banco da nuvem não foi carregada.');
   await window.ProvedorPlusCloudState.prepare();
   const currentState=window.ProvedorPlusCloudState.getState()||{};
@@ -20,13 +20,19 @@
   const bridgeB64=await read(['/packed/bridgegz-01.txt','/packed/bridgegz-02.txt','/packed/bridgegz-03.txt','/packed/bridgegz-04.txt']);
   const bridge=await gunzipB64(bridgeB64);
   await new Promise((resolve,reject)=>{const url=URL.createObjectURL(new Blob([bridge],{type:'text/javascript'})),s=document.createElement('script');s.src=url;s.onload=()=>{URL.revokeObjectURL(url);resolve()};s.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('Falha ao iniciar a ponte web da 1.0.17'))};document.head.appendChild(s)});
-  await loadScript('/cloud-router-store-v2.js?v=1017-cloud15');
-  await loadScript('/cloud-client-store-v2.js?v=1017-cloud15');
-  await loadScript('/cloud-adapter.js?v=1017-cloud15');
+
+  await loadScript('/cloud-router-store-v2.js?v=1017-cloud16');
+  await loadScript('/cloud-client-store-v2.js?v=1017-cloud16');
+
+  // O reparo de status precisa envolver a API antiga antes do adaptador HTTPS.
+  // Assim, um ID que existe na nuvem mas não no cache antigo não interrompe a consulta real ao MikroTik.
+  await loadScript('/cloud-client-status-fix.js?v=1017-cloud16');
+
+  await loadScript('/cloud-adapter.js?v=1017-cloud16');
   if(typeof window.ProvedorPlusInstallCloudAdapter!=='function')throw new Error('A ponte HTTPS do MikroTik não foi carregada.');
   await window.ProvedorPlusInstallCloudAdapter();
-  await loadScript('/cloud-client-status-fix.js?v=1017-cloud15');
-  await loadScript('/cloud-backup-store.js?v=1017-cloud15');
+
+  await loadScript('/cloud-backup-store.js?v=1017-cloud16');
   window.ProvedorPlusCloudState.wrapApi(window.provedor);
   await loadScript('/ui-runtime-fixes.js?v=1017-fix8');
   const appB64=await read(Array.from({length:33},(_,i)=>`/packed/appgz-${String(i+1).padStart(2,'0')}.txt`));

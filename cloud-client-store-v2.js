@@ -26,6 +26,14 @@
     return (Array.isArray(remote)?remote:[]).map(normalize).sort((a,b)=>Number(a.id)-Number(b.id));
   }
 
+  async function findClient(id){
+    id=Number(id);if(!id)throw new Error('Cliente inválido.');
+    const rows=await list();
+    const client=rows.find(x=>Number(x?.id)===id);
+    if(!client)throw new Error('Cliente não encontrado na nuvem.');
+    return client;
+  }
+
   async function save(data={}){
     const payload=normalize(data);
     const remote=normalize(await cloud('clients.save',payload));
@@ -39,11 +47,26 @@
     return {deleted:true,id};
   }
 
+  async function status(id){
+    const client=await findClient(id);
+    return {
+      client,
+      connectionState:client.connection_type==='PPPoE'?'offline':'not_applicable',
+      connectionError:'',
+      liveRatesAvailable:false,
+      downloadBps:0,
+      uploadBps:0,
+      traffic:{
+        downloadBps:0,uploadBps:0,
+        current:{month:new Date().toISOString().slice(0,7),download_bytes:0,upload_bytes:0},
+        history:[]
+      },
+      trust:{active:false,usedThisMonth:false}
+    };
+  }
+
   async function setMikrotikState(id,state={}){
-    id=Number(id);if(!id)throw new Error('Cliente inválido.');
-    const rows=await list();
-    const client=rows.find(x=>Number(x?.id)===id);
-    if(!client)throw new Error('Cliente não encontrado na nuvem.');
+    const client=await findClient(id);
     return save({
       ...client,
       mikrotik_secret_id:state.secretId??client.mikrotik_secret_id,
@@ -55,6 +78,9 @@
   api.clients.list=list;
   api.clients.save=save;
   api.clients.delete=remove;
+  api.clients.status=status;
+  api.clients.block=async id=>({blocked:true,id:Number(id),client:await findClient(id)});
+  api.clients.unblock=async id=>({unblocked:true,id:Number(id),client:await findClient(id)});
   api.clients.setMikrotikState=setMikrotikState;
   api.clients.__legacyLocal=original;
   Object.defineProperty(api.clients,'__cloudClientStoreV2Installed',{value:true,enumerable:false});

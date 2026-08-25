@@ -13,7 +13,7 @@
     const current=traffic.current&&typeof traffic.current==='object'?traffic.current:emptyCurrent();
     out.client=resolvedClient;
     out.connectionState=out.connectionState||(
-      resolvedClient?.connection_type==='PPPoE'?'offline':'not_applicable'
+      resolvedClient?.connection_type==='PPPoE'?'unavailable':'not_applicable'
     );
     out.connectionError=String(out.connectionError||'');
     out.liveRatesAvailable=Boolean(out.liveRatesAvailable||traffic.liveRatesAvailable);
@@ -50,7 +50,7 @@
       if(!/Cliente não encontrado/i.test(message)||!listedClient)throw error;
       return normalizeStatus({
         client:listedClient,
-        connectionState:listedClient.connection_type==='PPPoE'?'offline':'not_applicable',
+        connectionState:listedClient.connection_type==='PPPoE'?'unavailable':'not_applicable',
         connectionError:'',
         liveRatesAvailable:false
       },listedClient);

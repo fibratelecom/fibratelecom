@@ -1,8 +1,6 @@
-const fs=require('fs');
-const path=require('path');
-const zlib=require('zlib');
-const chunks=['01','02','03'].map(n=>fs.readFileSync(path.join(process.cwd(),'packed',`proxygz-${n}.txt`),'utf8').trim()).join('');
-const source=zlib.gunzipSync(Buffer.from(chunks,'base64')).toString('utf8');
-const m={exports:{}};
-new Function('require','module','exports','__filename','__dirname',source)(require,m,m.exports,__filename,__dirname);
-module.exports=m.exports;
+const {requireAuth}=require('../lib/cloud-auth');
+const handler=require('../lib/bank-proxy-handler');
+module.exports=async function(req,res){
+  try{await requireAuth(req);return await handler(req,res)}
+  catch(error){return res.status(Number(error?.statusCode)||401).json({ok:false,error:error instanceof Error?error.message:String(error)})}
+};

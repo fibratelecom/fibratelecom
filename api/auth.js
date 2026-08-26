@@ -83,7 +83,7 @@ module.exports=async function handler(req,res){
         const created=await db(req,'/pp_users',{method:'POST',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(payload)});user=Array.isArray(created)?created[0]:created;
       }
       if(!user?.id)throw Object.assign(new Error('Não foi possível salvar o funcionário.'),{statusCode:500});
-      const active=data.active!==false,permissions=normalizePermissions(data.permissions,user.role),phone=text(data.phone);
+      const active=Number(user.id)===Number(current.user.id)?true:data.active!==false,permissions=normalizePermissions(data.permissions,user.role),phone=text(data.phone);
       if(user.role!=='admin'&&!permissions.length)throw Object.assign(new Error('Selecione pelo menos uma permissão de acesso.'),{statusCode:400});
       await saveProfile(req,user.id,{active,phone,permissions,updated_at:new Date().toISOString()});
       if(id&&Number(id)!==Number(current.user.id))await revokeSessions(req,id);

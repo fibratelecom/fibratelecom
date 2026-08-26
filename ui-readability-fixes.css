@@ -1,0 +1,76 @@
+/* Correções de legibilidade dos módulos novos. Escopo intencional para não alterar o restante do painel. */
+
+/* Status avançado do cliente */
+.client-extra-summary,.client-access-history-panel{font-size:12px}
+.client-extra-title{align-items:flex-start;flex-wrap:wrap}
+.client-extra-title>span{font-size:11px;line-height:1.35}
+.client-extra-title>b{font-size:11px;line-height:1.25;white-space:normal;overflow-wrap:anywhere}
+.client-extra-card>strong{font-size:14px;line-height:1.4;overflow-wrap:anywhere}
+.client-extra-card>strong em{font-size:11px}
+.client-extra-card>small{font-size:11px;line-height:1.5;overflow-wrap:anywhere}
+.client-access-history-head h3{font-size:14px;line-height:1.35}
+.client-access-history-head p{font-size:11px;line-height:1.45}
+.client-access-history-head>span{font-size:11px;white-space:normal}
+.client-access-history-list strong,.client-access-history-list b{font-size:12px;line-height:1.35;overflow-wrap:anywhere}
+.client-access-history-list small{font-size:11px;line-height:1.45;white-space:normal;overflow-wrap:anywhere}
+.client-access-history-empty{font-size:12px;line-height:1.45}
+
+/* Funcionários e acessos */
+.pp-staff-page,.pp-staff-modal{font-size:12px}
+.pp-staff-head span,.pp-staff-modal-head span{font-size:11px}
+.pp-staff-head p,.pp-staff-panel-head p,.pp-staff-permissions p{font-size:13px;line-height:1.45;overflow-wrap:anywhere}
+.pp-staff-head button,.pp-staff-modal button,.pp-staff-actions button{min-height:38px;height:auto;font-size:12px;line-height:1.25;padding:8px 12px;white-space:normal}
+.pp-staff-summary small{font-size:12px;line-height:1.35}.pp-staff-summary strong{font-size:24px}
+.pp-staff-panel-head h2{font-size:16px}.pp-staff-panel-head input{min-height:38px;height:auto;font-size:12px;padding-block:8px}
+.pp-staff-table-wrap th{font-size:11px;line-height:1.3}.pp-staff-table-wrap td{font-size:12px;line-height:1.4}
+.pp-staff-person strong{font-size:12px}.pp-staff-person small{font-size:11px;line-height:1.35;overflow-wrap:anywhere}
+.pp-role,.pp-access{font-size:11px;line-height:1.25;white-space:normal}
+.pp-permission-tags span,.pp-permission-tags em{font-size:10px;line-height:1.3;overflow-wrap:anywhere}
+.pp-staff-actions button{min-height:32px;font-size:11px;padding:6px 9px}
+.pp-staff-form-grid label{font-size:12px;line-height:1.35}.pp-staff-form-grid label small{font-size:11px}
+.pp-staff-form-grid input,.pp-staff-form-grid select{min-height:39px;height:auto;font-size:12px;padding-block:8px}
+.pp-staff-permissions h3{font-size:14px}.pp-staff-permission-grid b,.pp-staff-active b{font-size:12px;line-height:1.35}.pp-staff-permission-grid small,.pp-staff-active small{font-size:11px;line-height:1.4;overflow-wrap:anywhere}
+.pp-staff-toast{font-size:12px;line-height:1.4}
+
+/* Chamados */
+.pp-ticket-page,.pp-ticket-modal{font-size:12px}
+.pp-ticket-head>div>span,.pp-ticket-modal-head>div>span{font-size:11px}
+.pp-ticket-head p{font-size:13px;line-height:1.45;overflow-wrap:anywhere}
+.pp-ticket-head button,.pp-ticket-modal button,.pp-ticket-actions button,.pp-ticket-quick button{min-height:38px;height:auto;font-size:12px;line-height:1.25;padding:8px 12px;white-space:normal}
+.pp-ticket-metrics small,.pp-ticket-metrics span{font-size:11px;line-height:1.35}.pp-ticket-metrics strong{font-size:24px}
+.pp-ticket-filters input,.pp-ticket-filters select{min-height:39px;height:auto;font-size:12px;padding-block:8px}
+.pp-ticket-table-wrap th{font-size:10px;line-height:1.3}.pp-ticket-table-wrap td{font-size:12px;line-height:1.4}
+.pp-ticket-table-wrap td small{font-size:11px;line-height:1.35;white-space:normal;overflow-wrap:anywhere}
+.pp-ticket-priority,.pp-ticket-status,.pp-sla{font-size:10px;line-height:1.3;white-space:normal;overflow-wrap:anywhere}
+.pp-ticket-actions{flex-wrap:wrap}.pp-ticket-actions button{min-height:32px;font-size:11px;padding:6px 9px}
+.pp-ticket-form-grid label,.pp-ticket-rating label{font-size:12px;line-height:1.35}
+.pp-ticket-form-grid input,.pp-ticket-form-grid select,.pp-ticket-form-grid textarea,.pp-ticket-rating select,.pp-ticket-add-comment textarea,.pp-ticket-add-attachment input{font-size:12px;line-height:1.4}
+.pp-ticket-form-grid input,.pp-ticket-form-grid select,.pp-ticket-rating select,.pp-ticket-add-attachment input{min-height:39px;height:auto;padding-block:8px}
+.pp-section-title{flex-wrap:wrap}.pp-section-title h3{font-size:14px;line-height:1.35}.pp-section-title p{font-size:11px;line-height:1.45;overflow-wrap:anywhere}
+.pp-ticket-quick button{min-height:32px;font-size:11px;padding:6px 9px}
+.pp-ticket-client-grid span{font-size:10px}.pp-ticket-client-grid strong{font-size:12px;line-height:1.4;overflow-wrap:anywhere}
+.pp-ticket-client-empty{font-size:11px;line-height:1.45}
+.pp-ticket-live{flex-wrap:wrap}.pp-ticket-live span{font-size:10px}.pp-ticket-live strong{font-size:12px}.pp-ticket-live small{font-size:11px;line-height:1.4;white-space:normal;overflow-wrap:anywhere}
+.pp-ticket-comments strong{font-size:11px}.pp-ticket-comments small,.pp-ticket-comments p{font-size:11px;line-height:1.45;overflow-wrap:anywhere}
+.pp-ticket-attachments a{font-size:11px;line-height:1.4;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+.pp-ticket-attachments>span{font-size:11px}.pp-ticket-add-attachment button{min-height:39px;height:auto}
+.pp-ticket-history article strong,.pp-ticket-history article b{font-size:11px;line-height:1.35}.pp-ticket-history article small{font-size:10px;line-height:1.4;overflow-wrap:anywhere}
+.pp-ticket-toast{font-size:12px;line-height:1.4}
+
+/* Planos: somente o bloco redesenhado anteriormente. */
+.plan-card>em{font-size:10px!important;line-height:1.3!important;white-space:normal!important}
+.plan-head{align-items:flex-start!important;flex-wrap:wrap!important}
+.plan-head>span{font-size:12px!important;line-height:1.35!important;white-space:normal!important;overflow-wrap:anywhere!important}
+.plan-head>small{font-size:11px!important;line-height:1.35!important;white-space:normal!important;overflow-wrap:anywhere!important}
+.plan-card h2{font-size:16px!important;line-height:1.35!important;overflow-wrap:anywhere!important}
+.plan-card>strong small{font-size:11px!important;line-height:1.35!important}
+.plan-card ul{font-size:12px!important;line-height:1.45!important}.plan-card li{overflow-wrap:anywhere!important}
+.plan-card>button,.plan-actions button{min-height:38px!important;height:auto!important;padding:8px 10px!important;font-size:12px!important;line-height:1.25!important;white-space:normal!important}
+
+/* Integrações bancárias: somente o bloco redesenhado anteriormente. */
+.bank-integrations .bank-fields label{font-size:12px!important;line-height:1.35!important;overflow-wrap:anywhere!important}
+.bank-integrations .bank-fields input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),.bank-integrations .bank-fields select,.bank-integrations .bank-issuer select{min-height:40px!important;height:auto!important;font-size:13px!important;line-height:1.3!important;padding-block:8px!important}
+.bank-integrations .bank-fields input::placeholder{font-size:12px!important}
+.bank-integrations .bank-certificate small{font-size:11px!important;line-height:1.45!important;overflow-wrap:anywhere!important}
+.bank-integrations .bank-card button{min-height:38px!important;height:auto!important;padding:8px 12px!important;font-size:12px!important;line-height:1.25!important;white-space:normal!important;overflow-wrap:anywhere!important}
+.bank-integrations .bank-issuer>div:first-child{min-width:0!important}

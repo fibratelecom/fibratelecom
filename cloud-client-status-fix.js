@@ -4,7 +4,8 @@
   const originalStatus=api.clients.status.bind(api.clients);
 
   const number=v=>Number.isFinite(Number(v))?Number(v):0;
-  const emptyCurrent=()=>({month:new Date().toISOString().slice(0,7),download_bytes:0,upload_bytes:0});
+  const localMonthKey=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`};
+  const emptyCurrent=()=>({month:localMonthKey(),download_bytes:0,upload_bytes:0});
 
   function normalizeStatus(value,client){
     const out=value&&typeof value==='object'?{...value}:{};

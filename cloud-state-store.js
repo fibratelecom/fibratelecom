@@ -11,6 +11,7 @@
   let pending=false;
   let latestRaw=null;
   let lastSyncedRaw=null;
+  let retryDelay=1200;
 
   const parse=raw=>{try{return raw?JSON.parse(raw):null}catch{return null}};
 
@@ -48,14 +49,14 @@
     if(syncing){pending=true;return}
     const raw=latestRaw??localRaw();
     if(!raw||raw===lastSyncedRaw)return;
-    syncing=true;
-    try{await saveRaw(raw)}catch(error){
+    syncing=true;let failed=false;
+    try{await saveRaw(raw);retryDelay=1200}catch(error){
+      failed=true;pending=true;retryDelay=Math.min(60000,Math.max(2400,retryDelay*2));
       console.error('Provedor Plus: falha ao sincronizar estado com a nuvem.',error);
-      pending=true;
       window.dispatchEvent(new CustomEvent('provedor-plus-cloud-error',{detail:{message:error?.message||String(error)}}));
     }finally{
       syncing=false;
-      if(pending){pending=false;clearTimeout(timer);timer=setTimeout(flush,1200)}
+      if(pending){pending=false;clearTimeout(timer);timer=setTimeout(flush,failed?retryDelay:1200)}
     }
   }
 
@@ -141,7 +142,7 @@
     apiWrapped=true;
     const skipGroups=new Set(['app','dashboard','reports']);
     for(const [groupName,group] of Object.entries(api)){
-      if(skipGroups.has(groupName)||!group||typeof group!=='object')continue;
+      if(skipGroups.has(groupName)||!group||typeof group!=='object'||group.__cloudOwnsStateSync)continue;
       for(const [methodName,fn] of Object.entries(group)){
         if(typeof fn!=='function')continue;
         group[methodName]=async function(...args){

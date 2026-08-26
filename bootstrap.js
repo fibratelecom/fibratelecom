@@ -1,4 +1,5 @@
 (async()=>{
+  window.__PROVEDOR_PLUS_CLOUD__=true;
   const read=async(paths)=>{const parts=await Promise.all(paths.map(async p=>{const r=await fetch(p,{cache:'no-store'});if(!r.ok)throw new Error(`Falha ao carregar ${p}: ${r.status}`);return r.text()}));return parts.join('')};
   const loadScript=src=>new Promise((resolve,reject)=>{const s=document.createElement('script');s.src=src;s.onload=resolve;s.onerror=()=>reject(new Error(`Falha ao carregar ${src}`));document.head.appendChild(s)});
   const gunzipB64=async b64=>{const bin=atob(b64.replace(/\s+/g,'')),bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);if(typeof DecompressionStream!=='function')throw new Error('Este navegador não suporta a descompressão necessária. Atualize o Chrome/Edge.');const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));return new Response(stream).text()};
@@ -9,7 +10,7 @@
   if(!window.ProvedorPlusAuth?.ensure)throw new Error('A autenticação do Provedor Plus não foi carregada.');
   const auth=await window.ProvedorPlusAuth.ensure();
 
-  await loadScript('/cloud-state-store.js?v=1017-cloud17');
+  await loadScript('/cloud-state-store.js?v=1017-cloud17-audit1');
   if(!window.ProvedorPlusCloudState?.prepare)throw new Error('A sincronização com o banco da nuvem não foi carregada.');
   await window.ProvedorPlusCloudState.prepare();
   const currentState=window.ProvedorPlusCloudState.getState()||{};
@@ -22,16 +23,16 @@
   await new Promise((resolve,reject)=>{const url=URL.createObjectURL(new Blob([bridge],{type:'text/javascript'})),s=document.createElement('script');s.src=url;s.onload=()=>{URL.revokeObjectURL(url);resolve()};s.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('Falha ao iniciar a ponte web da 1.0.17'))};document.head.appendChild(s)});
 
   if(window.provedor?.app?.info){
-    const baseInfo=window.provedor.app.info.bind(window.provedor.app);
-    window.provedor.app.info=async()=>({...await baseInfo(),platform:'web-cloud',databasePath:'Neon PostgreSQL (nuvem)',currentUser:auth?.user?.name||'Administrador'});
+    window.provedor.app.info=async()=>({version:'1.0.17',platform:'web-cloud',databasePath:'Neon PostgreSQL (nuvem)',currentUser:auth?.user?.name||'Administrador',connector:{connected:true,mode:'cloud-rest'},paymentPortal:null});
   }
 
   await loadScript('/cloud-router-store-v2.js?v=1017-cloud17');
-  await loadScript('/cloud-client-store-v2.js?v=1017-cloud17');
-  await loadScript('/cloud-adapter.js?v=1017-cloud17');
+  await loadScript('/cloud-client-store-v2.js?v=1017-cloud17-audit1');
+  await loadScript('/cloud-adapter.js?v=1017-cloud17-audit1');
   if(typeof window.ProvedorPlusInstallCloudAdapter!=='function')throw new Error('A ponte HTTPS do MikroTik não foi carregada.');
   await window.ProvedorPlusInstallCloudAdapter();
-  await loadScript('/cloud-client-status-fix.js?v=1017-cloud17');
+  await loadScript('/cloud-client-status-fix.js?v=1017-cloud17-audit1');
+  if(typeof window.provedor?.invoices?.sync==='function')await window.provedor.invoices.sync().catch(error=>console.error('Provedor Plus: falha na conciliação inicial de cobranças.',error));
 
   await loadScript('/cloud-backup-store.js?v=1017-cloud17');
   window.ProvedorPlusCloudState.wrapApi(window.provedor);

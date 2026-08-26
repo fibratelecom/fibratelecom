@@ -1,7 +1,8 @@
 (()=>{
   const now=()=>new Date().toISOString();
   const clone=v=>v==null?v:JSON.parse(JSON.stringify(v));
-  const bool=(v,fallback=false)=>{if(v===undefined||v===null||v==='')return fallback;if(typeof v==='boolean')return v;if(typeof v==='number')return v!==0;const s=String(v).trim().toLowerCase();if(['true','1','sim','yes','on'].includes(s))return true;if(['false','0','nao','não','no','off'].includes(s))return false;return fallback};
+  const bool=(v,fallback=false)=>{if(v===undefined||v===null||v==='')return fallback;if(typeof v==='boolean')return v;if(typeof v==='number')return v!==0;const x=String(v).trim().toLowerCase();if(['true','1','sim','yes','on'].includes(x))return true;if(['false','0','nao','não','no','off'].includes(x))return false;return fallback};
+  const localMonthKey=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`};
 
   async function dataCall(action,data={}){
     const response=await fetch('/api/cloud-data',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data})});
@@ -12,7 +13,7 @@
   async function secretSet(id,password){return dataCall('routers.secret.save',{id:Number(id),password:String(password||'')})}
   async function secretGet(id){try{return String((await dataCall('routers.secret.get',{id:Number(id)}))?.password||'')}catch{return ''}}
   async function secretDelete(id){try{return await dataCall('routers.secret.delete',{id:Number(id)})}catch{return {deleted:false,id:Number(id)||0}}}
-  async function trafficRecord(clientId,live){return dataCall('traffic.record',{clientId:Number(clientId),live:clone(live)})}
+  async function trafficRecord(clientId,live){return dataCall('traffic.record',{clientId:Number(clientId),month:localMonthKey(),live:clone(live)})}
 
   async function cloudCall(action,{router=null,data=null}={}){
     const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),20000);
@@ -62,9 +63,19 @@
         return {...baseStatus,...live,routerId:Number(client.router_id)||0,routerName:client.router_name||router.name,routerHost:router.host,connectionState:live.online?'online':'offline',connectionError:'',liveRatesAvailable:Boolean(live.liveRatesAvailable)||Number(traffic?.downloadBps)>0||Number(traffic?.uploadBps)>0,downloadBps:Number(live.downloadBps)||Number(traffic?.downloadBps)||0,uploadBps:Number(live.uploadBps)||Number(traffic?.uploadBps)||0,traffic:traffic||baseStatus.traffic};
       }catch(error){return {...baseStatus,connectionState:'unavailable',connectionError:error instanceof Error?error.message:String(error),liveRatesAvailable:false}}
     };
-    api.clients.block=async id=>{const c=await clientRecord(id),r=await routerAuth(c.router_id),remote=await cloudCall('client.block',{router:r,data:clone(c)}),saved=await base.clients.block(id);if(base.clients.setMikrotikState)await base.clients.setMikrotikState(id,{secretId:remote?.secretId||'',status:'Bloqueado no MikroTik',lastSync:now()});return saved};
-    api.clients.unblock=async id=>{const c=await clientRecord(id),r=await routerAuth(c.router_id),remote=await cloudCall('client.unblock',{router:r,data:clone(c)}),saved=await base.clients.unblock(id);if(base.clients.setMikrotikState)await base.clients.setMikrotikState(id,{secretId:remote?.secretId||'',status:'Sincronizado',lastSync:now()});return saved};
-    api.clients.trustRelease=async(id,hours=48)=>{const before=await base.clients.status(id);if(before?.trust?.usedThisMonth)throw Error('A liberação em confiança já foi utilizada neste mês para este cliente.');const c=before?.client||await clientRecord(id),r=await routerAuth(c.router_id);await cloudCall('client.unblock',{router:r,data:clone(c)});return base.clients.trustRelease(id,hours)};
+    api.clients.block=async id=>{
+      const c=await clientRecord(id),r=await routerAuth(c.router_id),remote=await cloudCall('client.block',{router:r,data:clone(c)});let saved;
+      try{saved=await base.clients.block(id)}catch(error){try{await cloudCall('client.unblock',{router:r,data:clone(c)})}catch{}throw error}
+      if(base.clients.setMikrotikState)try{saved=await base.clients.setMikrotikState(id,{secretId:remote?.secretId||'',status:'Bloqueado no MikroTik',lastSync:now()})}catch(error){console.error('Provedor Plus: bloqueio aplicado, mas falhou ao registrar o estado do MikroTik.',error)}
+      return saved;
+    };
+    api.clients.unblock=async id=>{
+      const c=await clientRecord(id),r=await routerAuth(c.router_id),remote=await cloudCall('client.unblock',{router:r,data:clone(c)});let saved;
+      try{saved=await base.clients.unblock(id)}catch(error){try{await cloudCall('client.block',{router:r,data:clone(c)})}catch{}throw error}
+      if(base.clients.setMikrotikState)try{saved=await base.clients.setMikrotikState(id,{secretId:remote?.secretId||'',status:'Sincronizado',lastSync:now()})}catch(error){console.error('Provedor Plus: desbloqueio aplicado, mas falhou ao registrar o estado do MikroTik.',error)}
+      return saved;
+    };
+    api.clients.trustRelease=async(id,hours=48)=>{const before=await base.clients.status(id);if(before?.trust?.usedThisMonth)throw Error('A liberação em confiança já foi utilizada neste mês para este cliente.');const c=before?.client||await clientRecord(id),r=await routerAuth(c.router_id);await cloudCall('client.unblock',{router:r,data:clone(c)});try{return await base.clients.trustRelease(id,hours)}catch(error){try{await cloudCall('client.block',{router:r,data:clone(c)})}catch{}throw error}};
 
     api.vpn.status=async()=>({installed:true,web:true,mode:'cloud-rest',message:'A conexão web usa REST HTTPS pelo MikroTik Cloud.'});
     api.vpn.activate=async()=>({queued:false,mode:'cloud-rest',message:'O acesso é feito diretamente pela integração REST HTTPS em nuvem.'});

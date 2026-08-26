@@ -1,6 +1,7 @@
 (()=>{
   const now=()=>new Date().toISOString();
   const clone=v=>v==null?v:JSON.parse(JSON.stringify(v));
+  const bool=(v,fallback=false)=>{if(v===undefined||v===null||v==='')return fallback;if(typeof v==='boolean')return v;if(typeof v==='number')return v!==0;const s=String(v).trim().toLowerCase();if(['true','1','sim','yes','on'].includes(s))return true;if(['false','0','nao','não','no','off'].includes(s))return false;return fallback};
 
   async function dataCall(action,data={}){
     const response=await fetch('/api/cloud-data',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data})});
@@ -24,7 +25,7 @@
   }
 
   function cleanHost(value){return String(value||'').trim().replace(/^https?:\/\//i,'').replace(/\/.*$/,'').replace(/^\[|\]$/g,'')}
-  function normalizeRouter(r,password=''){let port=Number(r?.port)||443;if(port===8728||port===8729||port===80)port=443;return {id:Number(r?.id)||0,name:String(r?.name||'MikroTik'),connection_method:'rest',host:cleanHost(r?.host),port,username:String(r?.username||'').trim(),password:String(password||''),allow_self_signed:Boolean(r?.allow_self_signed)}}
+  function normalizeRouter(r,password=''){let port=Number(r?.port)||443;if(port===8728||port===8729||port===80)port=443;return {id:Number(r?.id)||0,name:String(r?.name||'MikroTik'),connection_method:'rest',host:cleanHost(r?.host),port,username:String(r?.username||'').trim(),password:String(password||''),allow_self_signed:bool(r?.allow_self_signed,false)}}
 
   window.ProvedorPlusInstallCloudAdapter=async()=>{
     const api=window.provedor;if(!api||api.__cloudAdapterInstalled)return;

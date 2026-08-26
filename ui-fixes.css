@@ -32,7 +32,37 @@ html,body,#root{width:100%;max-width:100%;min-width:0;min-height:100%;overflow-x
 .user-card strong{font-size:13px!important}
 .user-card small{font-size:12px!important;margin-top:3px!important}
 
+/* Integrações bancárias: campos e ações no mesmo padrão visual do painel. */
+.bank-integrations .bank-grid{align-items:stretch!important;gap:18px!important}
+.bank-integrations .bank-card{padding:18px!important;overflow:hidden}
+.bank-integrations .bank-card-head{align-items:center!important;min-height:52px!important}
+.bank-integrations .bank-enable{margin:8px 0 14px!important}
+.bank-integrations .bank-fields{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:13px 14px!important}
+.bank-integrations .bank-fields label{display:flex!important;flex-direction:column!important;align-items:stretch!important;gap:6px!important;min-width:0!important;color:#40534f!important;font-size:11px!important;font-weight:700!important;line-height:1.25!important}
+.bank-integrations .bank-fields input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+.bank-integrations .bank-fields select,
+.bank-integrations .bank-issuer select{display:block!important;width:100%!important;min-width:0!important;height:38px!important;padding:0 10px!important;color:#304640!important;background:#fff!important;border:1px solid #d8e4e0!important;border-radius:8px!important;outline:0!important;font-size:12px!important;line-height:38px!important;box-shadow:none!important}
+.bank-integrations .bank-fields input::placeholder{color:#9aa6a2!important;font-size:11px!important}
+.bank-integrations .bank-fields input:focus,
+.bank-integrations .bank-fields select:focus,
+.bank-integrations .bank-issuer select:focus{border-color:#79b9ab!important;box-shadow:0 0 0 3px #0d8b7812!important}
+.bank-integrations .bank-span-2{grid-column:1/-1!important}
+.bank-integrations .bank-certificate{min-height:60px!important;margin-top:14px!important;padding:12px 13px!important}
+.bank-integrations .bank-certificate>div:first-child{overflow:hidden}
+.bank-integrations .bank-certificate small{white-space:normal!important;line-height:1.35!important}
+.bank-integrations .bank-inline-actions,.bank-integrations .bank-actions{gap:8px!important}
+.bank-integrations .bank-actions{margin-top:16px!important;padding-top:2px!important}
+.bank-integrations .bank-card button{display:inline-flex!important;align-items:center!important;justify-content:center!important;min-height:36px!important;height:36px!important;padding:0 12px!important;color:#536468!important;background:#fff!important;border:1px solid #dce4e2!important;border-radius:8px!important;box-shadow:none!important;font-size:11px!important;font-weight:700!important;line-height:1!important;white-space:nowrap!important}
+.bank-integrations .bank-card button.primary{color:#fff!important;background:#0d8b78!important;border-color:#0d8b78!important}
+.bank-integrations .bank-card button.primary:hover{background:#0a7566!important;border-color:#0a7566!important}
+.bank-integrations .bank-card button:disabled{cursor:not-allowed!important;opacity:.5!important;background:#f3f5f4!important;color:#8d9996!important}
+.bank-integrations .bank-issuer{align-items:center!important;gap:18px!important;padding:13px 15px!important}
+.bank-integrations .bank-issuer>div:first-child{min-width:220px!important}
+.bank-integrations .bank-issuer>div:last-child{flex:1 1 auto!important;justify-content:flex-end!important;min-width:0!important}
+.bank-integrations .bank-issuer select{max-width:360px!important}
+.bank-integrations .bank-live-badge{display:inline-flex!important;align-items:center!important;min-height:28px!important}
+
 @media (max-width:1380px){.router-form.multi{grid-template-columns:repeat(2,minmax(0,1fr))!important}.metrics,.plans-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
-@media (max-width:1180px){.dashboard-grid,.network-module,.bank-grid{grid-template-columns:1fr!important}.page-wrap{padding-inline:16px!important}}
-@media (max-width:900px){.sidebar{transform:translateX(-100%);transition:transform .2s ease;box-shadow:8px 0 30px #10251e18}.sidebar.open{transform:translateX(0)}.content{margin-left:0!important;width:100vw!important;max-width:100vw!important}.mobile-menu{display:inline-grid!important;place-items:center}.sidebar-backdrop{display:block!important;position:fixed!important;inset:0!important;background:#10241f73!important;border:0!important;z-index:25!important}.topbar{padding-inline:14px!important}.page-wrap{padding:16px 12px 36px!important}.page-heading{align-items:flex-start!important;gap:10px!important;flex-wrap:wrap!important}.heading-actions{width:100%;overflow-x:auto}}
-@media (max-width:680px){.metrics,.plans-grid,.router-form.multi,.client-live-metrics,.client-status-columns,.form-row,.bill-summary{grid-template-columns:1fr!important}.topbar{height:60px!important}.page-heading h1{font-size:21px!important}.modal-layer{padding:6px!important}.modal{max-width:calc(100vw - 12px)!important;max-height:calc(100vh - 12px)!important;padding:14px!important}.table-wrap.full th,.table-wrap.full td{padding:10px 11px!important}}
+@media (max-width:1180px){.dashboard-grid,.network-module,.bank-grid{grid-template-columns:1fr!important}.page-wrap{padding-inline:16px!important}.bank-integrations .bank-fields{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
+@media (max-width:900px){.sidebar{transform:translateX(-100%);transition:transform .2s ease;box-shadow:8px 0 30px #10251e18}.sidebar.open{transform:translateX(0)}.content{margin-left:0!important;width:100vw!important;max-width:100vw!important}.mobile-menu{display:inline-grid!important;place-items:center}.sidebar-backdrop{display:block!important;position:fixed!important;inset:0!important;background:#10241f73!important;border:0!important;z-index:25!important}.topbar{padding-inline:14px!important}.page-wrap{padding:16px 12px 36px!important}.page-heading{align-items:flex-start!important;gap:10px!important;flex-wrap:wrap!important}.heading-actions{width:100%;overflow-x:auto}.bank-integrations .bank-issuer{align-items:stretch!important;flex-direction:column!important}.bank-integrations .bank-issuer>div:last-child{align-items:stretch!important;flex-direction:column!important}.bank-integrations .bank-issuer select{max-width:none!important}}
+@media (max-width:680px){.metrics,.plans-grid,.router-form.multi,.client-live-metrics,.client-status-columns,.form-row,.bill-summary,.bank-integrations .bank-fields{grid-template-columns:1fr!important}.bank-integrations .bank-span-2{grid-column:auto!important}.topbar{height:60px!important}.page-heading h1{font-size:21px!important}.modal-layer{padding:6px!important}.modal{max-width:calc(100vw - 12px)!important;max-height:calc(100vh - 12px)!important;padding:14px!important}.table-wrap.full th,.table-wrap.full td{padding:10px 11px!important}}

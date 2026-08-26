@@ -96,3 +96,24 @@ jobs:
           console.log('=== MODULOS REFERENCIADOS ===');
           for(const t of terms)console.log(t, (s.match(new RegExp(`\\.${t}\\b|${t}:`,'g'))||[]).length);
           NODE
+
+      - name: Contexto de funcoes criticas
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs=require('fs');
+          for(const file of ['/tmp/app.mjs','/tmp/bridge.js']){
+            const s=fs.readFileSync(file,'utf8');
+            console.log(`=== ${file} ===`);
+            for(const term of ['backup.restore','backup.create','clients.delete','clients.save','invoices.delete','invoices.pay','routers.delete']){
+              let from=0,count=0;
+              while(count<3){
+                const i=s.indexOf(term,from);if(i<0)break;
+                console.log(`--- ${term} #${count+1} @${i} ---`);
+                console.log(s.slice(Math.max(0,i-260),Math.min(s.length,i+520)).replace(/\s+/g,' '));
+                from=i+term.length;count++;
+              }
+            }
+          }
+          NODE

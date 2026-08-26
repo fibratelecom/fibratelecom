@@ -32,6 +32,28 @@ html,body,#root{width:100%;max-width:100%;min-width:0;min-height:100%;overflow-x
 .user-card strong{font-size:13px!important}
 .user-card small{font-size:12px!important;margin-top:3px!important}
 
+/* Planos — visual em cartões como a referência aprovada. */
+.plans-grid{gap:14px!important;align-items:stretch!important}
+.plan-card{display:flex!important;flex-direction:column!important;min-width:0!important;min-height:322px!important;padding:18px 19px!important;background:#fff!important;border:1px solid #dde7e4!important;border-radius:12px!important;box-shadow:0 3px 14px #173b3506!important;overflow:hidden!important}
+.plan-card.featured{border-color:#62b9aa!important;box-shadow:0 7px 22px #0d8b7810!important}
+.plan-card>em{top:0!important;right:0!important;padding:6px 11px!important;color:#fff!important;background:#0d8b78!important;border-radius:0 11px 0 8px!important;letter-spacing:.7px!important;font-size:8px!important;font-weight:850!important}
+.plan-head{min-height:29px!important;gap:8px!important}
+.plan-head>span{display:inline-flex!important;align-items:center!important;min-height:27px!important;padding:5px 9px!important;color:#087c6b!important;background:#e8f6f2!important;border-radius:8px!important;font-size:11px!important;font-weight:800!important;white-space:nowrap!important}
+.plan-head>small{color:#8d9997!important;font-size:9px!important;white-space:nowrap!important}
+.plan-card h2{margin:14px 0 9px!important;color:#172c29!important;font-size:15px!important;font-weight:700!important;line-height:1.25!important}
+.plan-card>strong{display:flex!important;align-items:baseline!important;gap:3px!important;margin:0 0 17px!important;color:#142623!important;font-size:23px!important;font-weight:800!important;letter-spacing:-.5px!important}
+.plan-card>strong small{margin-left:0!important;color:#879592!important;font-size:9px!important;font-weight:500!important;letter-spacing:0!important}
+.plan-card ul{display:grid!important;gap:10px!important;flex:1 1 auto!important;margin:0 0 16px!important;padding:15px 0!important;color:#657773!important;border-top:1px solid #edf1f0!important;border-bottom:1px solid #edf1f0!important;font-size:10px!important;line-height:1.35!important;list-style:none!important}
+.plan-card li{min-width:0!important}
+.plan-card li b{color:#314743!important;font-weight:750!important}
+.plan-card>button,.plan-actions{margin-top:auto!important}
+.plan-card>button{width:100%!important;min-height:36px!important;height:36px!important;color:#0d8b78!important;background:#fff!important;border:1px solid #d9e4e1!important;border-radius:8px!important;font-size:11px!important;font-weight:750!important}
+.plan-card.featured>button{color:#fff!important;background:#0d8b78!important;border-color:#0d8b78!important}
+.plan-card>button:hover{border-color:#8dc8bc!important;background:#f7fbfa!important}
+.plan-card.featured>button:hover{background:#0a7566!important;border-color:#0a7566!important}
+.plan-actions{width:100%!important;gap:7px!important}
+.plan-actions button{min-height:36px!important;height:36px!important;border-radius:8px!important;font-size:11px!important}
+
 /* Integrações bancárias: campos e ações no mesmo padrão visual do painel. */
 .bank-integrations .bank-grid{align-items:stretch!important;gap:18px!important}
 .bank-integrations .bank-card{padding:18px!important;overflow:hidden}
@@ -62,7 +84,8 @@ html,body,#root{width:100%;max-width:100%;min-width:0;min-height:100%;overflow-x
 .bank-integrations .bank-issuer select{max-width:360px!important}
 .bank-integrations .bank-live-badge{display:inline-flex!important;align-items:center!important;min-height:28px!important}
 
-@media (max-width:1380px){.router-form.multi{grid-template-columns:repeat(2,minmax(0,1fr))!important}.metrics,.plans-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
+@media (max-width:1380px){.router-form.multi{grid-template-columns:repeat(2,minmax(0,1fr))!important}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
+@media (max-width:1100px){.plans-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
 @media (max-width:1180px){.dashboard-grid,.network-module,.bank-grid{grid-template-columns:1fr!important}.page-wrap{padding-inline:16px!important}.bank-integrations .bank-fields{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
 @media (max-width:900px){.sidebar{transform:translateX(-100%);transition:transform .2s ease;box-shadow:8px 0 30px #10251e18}.sidebar.open{transform:translateX(0)}.content{margin-left:0!important;width:100vw!important;max-width:100vw!important}.mobile-menu{display:inline-grid!important;place-items:center}.sidebar-backdrop{display:block!important;position:fixed!important;inset:0!important;background:#10241f73!important;border:0!important;z-index:25!important}.topbar{padding-inline:14px!important}.page-wrap{padding:16px 12px 36px!important}.page-heading{align-items:flex-start!important;gap:10px!important;flex-wrap:wrap!important}.heading-actions{width:100%;overflow-x:auto}.bank-integrations .bank-issuer{align-items:stretch!important;flex-direction:column!important}.bank-integrations .bank-issuer>div:last-child{align-items:stretch!important;flex-direction:column!important}.bank-integrations .bank-issuer select{max-width:none!important}}
 @media (max-width:680px){.metrics,.plans-grid,.router-form.multi,.client-live-metrics,.client-status-columns,.form-row,.bill-summary,.bank-integrations .bank-fields{grid-template-columns:1fr!important}.bank-integrations .bank-span-2{grid-column:auto!important}.topbar{height:60px!important}.page-heading h1{font-size:21px!important}.modal-layer{padding:6px!important}.modal{max-width:calc(100vw - 12px)!important;max-height:calc(100vh - 12px)!important;padding:14px!important}.table-wrap.full th,.table-wrap.full td{padding:10px 11px!important}}

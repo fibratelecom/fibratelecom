@@ -1,0 +1,98 @@
+name: Auditoria geral
+
+on:
+  push:
+    branches: [desenvolvimento]
+    paths: [.github/workflows/auditoria-geral.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  auditoria:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: desenvolvimento
+
+      - name: Sintaxe dos arquivos JavaScript
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== JS DIRETOS ==='
+          while IFS= read -r -d '' f; do
+            node --check "$f" >/dev/null
+            echo "OK $f"
+          done < <(find . -type f -name '*.js' -not -path './.git/*' -print0 | sort -z)
+
+      - name: Descompactar e validar fontes packed
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs=require('fs'),zlib=require('zlib');
+          function unpack(prefix,count,out){
+            let b='';
+            for(let i=1;i<=count;i++)b+=fs.readFileSync(`packed/${prefix}-${String(i).padStart(2,'0')}.txt`,'utf8').trim();
+            const src=zlib.gunzipSync(Buffer.from(b,'base64')).toString('utf8');
+            fs.writeFileSync(`/tmp/${out}`,src);
+            console.log(`${out}: ${src.length} bytes`);
+          }
+          unpack('appgz',33,'app.mjs');
+          unpack('bridgegz',4,'bridge.js');
+          unpack('proxygz',3,'proxy.js');
+          NODE
+          node --check /tmp/app.mjs
+          node --check /tmp/bridge.js
+          node --check /tmp/proxy.js
+          echo 'PACKED_SYNTAX_OK'
+
+      - name: Conferir arquivos referenciados no bootstrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs=require('fs');
+          const src=fs.readFileSync('bootstrap.js','utf8');
+          const refs=[...src.matchAll(/["'`]\/(?!api\/)([^"'`?${}]+)(?:\?[^"'`]*)?["'`]/g)].map(m=>m[1]);
+          const concrete=refs.filter(x=>!x.includes('${'));
+          let fail=0;
+          for(const f of [...new Set(concrete)]){
+            if(!fs.existsSync(f)){console.log('MISSING',f);fail=1}else console.log('FOUND',f);
+          }
+          if(fail)process.exit(1);
+          NODE
+
+      - name: Indicadores de risco e compatibilidade
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== CONTAGENS NO PAINEL PACKED ==='
+          for p in 'localStorage' 'sessionStorage' 'indexedDB' 'eval(' 'new Function' 'TODO' 'FIXME' '/api/' 'password' 'pppoe_password'; do
+            n=$(grep -Fo "$p" /tmp/app.mjs | wc -l || true)
+            printf '%-24s %s\n' "$p" "$n"
+          done
+          echo '=== CONTAGENS NA PONTE ==='
+          for p in 'localStorage' 'indexedDB' 'password' 'pppoe_password'; do
+            n=$(grep -Fo "$p" /tmp/bridge.js | wc -l || true)
+            printf '%-24s %s\n' "$p" "$n"
+          done
+          echo '=== CONTAGENS NO PROXY BANCARIO ==='
+          for p in 'http://' 'https://' 'rejectUnauthorized' 'Authorization' 'client_secret' 'access_token'; do
+            n=$(grep -Fo "$p" /tmp/proxy.js | wc -l || true)
+            printf '%-24s %s\n' "$p" "$n"
+          done
+
+      - name: Resumo de metodos do painel
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs=require('fs');
+          const s=fs.readFileSync('/tmp/app.mjs','utf8');
+          const terms=['clients','routers','plans','invoices','tickets','stock','backup','reports','users','banks','mikrotik','dashboard'];
+          console.log('=== MODULOS REFERENCIADOS ===');
+          for(const t of terms)console.log(t, (s.match(new RegExp(`\\.${t}\\b|${t}:`,'g'))||[]).length);
+          NODE

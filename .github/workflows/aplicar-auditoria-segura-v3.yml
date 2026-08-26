@@ -1,0 +1,104 @@
+name: Aplicar auditoria segura v3
+
+on:
+  push:
+    branches:
+      - desenvolvimento
+    paths:
+      - .github/workflows/aplicar-auditoria-segura-v3.yml
+
+permissions:
+  contents: write
+
+jobs:
+  aplicar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar desenvolvimento
+        uses: actions/checkout@v4
+        with:
+          ref: desenvolvimento
+          fetch-depth: 0
+
+      - name: Reconstruir e validar pacote
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .audit-temp/audit-fixes-01.b64 .audit-temp/audit-fixes-02.b64 .audit-temp/audit-fixes-03.b64 .audit-temp/audit-fixes-04.b64 > /tmp/audit-fixes.b64
+          test "$(wc -c < /tmp/audit-fixes.b64)" -eq 39892
+          base64 -d /tmp/audit-fixes.b64 > /tmp/audit-fixes.tgz
+          echo "8ea5e38c7b8df5ff4bd931bb117cefbb9313b78623a5e396d6b4035f34f6edde  /tmp/audit-fixes.tgz" | sha256sum -c -
+          gzip -t /tmp/audit-fixes.tgz
+          unexpected="$(tar -tzf /tmp/audit-fixes.tgz | grep -Ev '^(bootstrap\.js|cloud-adapter\.js|cloud-client-status-fix\.js|cloud-client-store-v2\.js|cloud-state-store\.js|lib/cloud-data-handler\.js|ui-runtime-fixes\.js|packed/bridgegz-0[1-4]\.txt)$' || true)"
+          if [ -n "$unexpected" ]; then
+            echo "Arquivos não autorizados no lote:"
+            echo "$unexpected"
+            exit 1
+          fi
+          tar -xzf /tmp/audit-fixes.tgz
+          echo PACOTE_AUDITORIA_INTEGRO
+
+      - name: Validar código auditado
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in bootstrap.js cloud-adapter.js cloud-client-status-fix.js cloud-client-store-v2.js cloud-state-store.js lib/cloud-data-handler.js ui-runtime-fixes.js; do
+            node --check "$f"
+          done
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64,gzip
+          raw=''.join((Path('packed')/f'bridgegz-{i:02d}.txt').read_text().strip() for i in range(1,5))
+          src=gzip.decompress(base64.b64decode(raw)).decode()
+          Path('/tmp/bridge-audit.js').write_text(src)
+          checks=[
+            'function addMonths(date,n)',
+            "for(const invoice of s.invoices)if(Number(invoice.client_id)===Number(i))invoice.client_id=null",
+            'cancelIssued',
+            'runAutoBlockWeb',
+            'runExpiredTrustWeb'
+          ]
+          for item in checks:
+            assert item in src, item
+          print('BRIDGE_CRITICAL_GUARDS_OK')
+          PY
+          node --check /tmp/bridge-audit.js
+          grep -Fq "pppoe_password:existing?.pppoe_password" cloud-client-store-v2.js
+          grep -Fq "localMonthKey" cloud-adapter.js
+          grep -Fq "monthKey" cloud-client-store-v2.js
+          grep -Fq "textContent=message" bootstrap.js
+          grep -Fq "const bool=" cloud-adapter.js
+          grep -Fq "const bool=" lib/cloud-data-handler.js
+          echo VALIDACAO_AUDITORIA_OK
+
+      - name: Registrar um único lote funcional
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f \
+            .audit-temp/audit-fixes-01.b64 \
+            .audit-temp/audit-fixes-02.b64 \
+            .audit-temp/audit-fixes-03.b64 \
+            .audit-temp/audit-fixes-04.b64 \
+            .github/workflows/aplicar-auditoria-segura.yml \
+            .github/workflows/aplicar-auditoria-segura-v2.yml \
+            .github/workflows/aplicar-auditoria-segura-v3.yml
+          git add \
+            bootstrap.js \
+            cloud-adapter.js \
+            cloud-client-status-fix.js \
+            cloud-client-store-v2.js \
+            cloud-state-store.js \
+            lib/cloud-data-handler.js \
+            ui-runtime-fixes.js \
+            packed/bridgegz-01.txt \
+            packed/bridgegz-02.txt \
+            packed/bridgegz-03.txt \
+            packed/bridgegz-04.txt
+          git add -u .audit-temp .github/workflows
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m "Auditoria geral: corrige fluxos cloud críticos"
+          git push origin HEAD:desenvolvimento

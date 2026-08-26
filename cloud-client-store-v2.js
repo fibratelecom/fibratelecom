@@ -40,6 +40,19 @@
     return false;
   }
 
+  function hasValue(value){return value!==undefined&&value!==null&&value!==''}
+  function dedupeClients(rows){
+    const out=[];
+    for(const raw of Array.isArray(rows)?rows:[]){
+      const row=normalize(raw),index=out.findIndex(existing=>sameIdentity(existing,row));
+      if(index<0){out.push(row);continue}
+      const merged={...out[index]};
+      for(const [key,value] of Object.entries(row))if(!hasValue(merged[key])&&hasValue(value))merged[key]=value;
+      out[index]=normalize(merged);
+    }
+    return out;
+  }
+
   function overlayCloudFields(base,remote){
     const out={...normalize(base),...normalize(remote)};
     for(const key of CLOUD_FIELDS){if(Object.prototype.hasOwnProperty.call(remote||{},key))out[key]=remote[key]}
@@ -92,9 +105,12 @@
       clients[i]=merged;
     }
     for(const cloud of remote)if(!clients.some(c=>sameIdentity(c,cloud))){clients.push(normalize(cloud));changed=true}
+    const deduped=dedupeClients(clients);
+    if(deduped.length!==clients.length||JSON.stringify(deduped)!==JSON.stringify(clients))changed=true;
+    clients=deduped;
     clients.sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'pt-BR'));
     if(changed){state={...state,clients};state=await writeState(state)}
-    return {state,clients:Array.isArray(state.clients)?state.clients.map(normalize):clients,changed};
+    return {state,clients:Array.isArray(state.clients)?dedupeClients(state.clients):clients,changed};
   }
 
   async function list(){
@@ -104,7 +120,7 @@
   }
 
   async function save(data){
-    let state=await readState();state.clients=Array.isArray(state.clients)?state.clients.map(normalize):[];
+    let state=await readState();state.clients=dedupeClients(Array.isArray(state.clients)?state.clients:[]);
     const existing=state.clients.find(c=>sameIdentity(c,data))||null,oldId=Number(existing?.id||data?.id)||0,candidate=normalize({...existing,...data});
     if(!String(candidate.name||'').trim())throw new Error('Informe o nome ou a razão social do cliente.');
     const remote=normalize(await cloudData('clients.save',candidate));
@@ -114,6 +130,7 @@
     let replaced=false;
     state.clients=state.clients.map(row=>{if(sameIdentity(row,existing||data)){replaced=true;return finalRecord}return row});
     if(!replaced)state.clients.push(finalRecord);
+    state.clients=dedupeClients(state.clients);
     state=await writeState(state);
     const saved=(Array.isArray(state.clients)?state.clients:[]).find(c=>Number(c?.id)===Number(remote.id))||finalRecord;
     return decorate(saved,state);
@@ -143,7 +160,7 @@
   async function block(id){const client=await findClient(id);return save({...client,status:'Bloqueado'})}
   async function unblock(id){const client=await findClient(id);return save({...client,status:'Ativo'})}
   async function trustRelease(id,hours=48){const client=await findClient(id),at=new Date(),until=new Date(at.getTime()+Math.max(1,Number(hours)||48)*3600000);return save({...client,status:'Ativo',trust_release_at:at.toISOString(),trust_release_until:until.toISOString()})}
-  async function nextContract(){const state=await readState(),clients=Array.isArray(state.clients)?state.clients:[],year=new Date().getFullYear();let n=Math.max(0,...clients.map(c=>Number(c?.id)||0))+1,code;do{code=`CTR-${year}-${String(n++).padStart(6,'0')}`}while(clients.some(c=>String(c?.contract_number||'')===code));return code}
+  async function nextContract(){const state=await readState(),clients=dedupeClients(Array.isArray(state.clients)?state.clients:[]),year=new Date().getFullYear();let n=Math.max(0,...clients.map(c=>Number(c?.id)||0))+1,code;do{code=`CTR-${year}-${String(n++).padStart(6,'0')}`}while(clients.some(c=>String(c?.contract_number||'')===code));return code}
 
   api.clients.list=list;api.clients.save=save;api.clients.delete=remove;api.clients.status=status;
   api.clients.setMikrotikState=setMikrotikState;api.clients.block=block;api.clients.unblock=unblock;api.clients.trustRelease=trustRelease;api.clients.nextContract=nextContract;

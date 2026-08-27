@@ -3,7 +3,7 @@
   window.__ProvedorPlusClientStatusEnhancementsInstalled=true;
 
   const css=document.createElement('link');
-  css.rel='stylesheet';css.href='/client-status-enhancements.css?v=1017-status5';css.id='pp-client-status-enhancements-css';
+  css.rel='stylesheet';css.href='/client-status-enhancements.css?v=1017-status6';css.id='pp-client-status-enhancements-css';
   if(!document.getElementById(css.id))document.head.appendChild(css);
 
   const api=window.provedor;
@@ -12,10 +12,9 @@
   const originalBlock=typeof api.clients.block==='function'?api.clients.block.bind(api.clients):null;
   const originalUnblock=typeof api.clients.unblock==='function'?api.clients.unblock.bind(api.clients):null;
   const originalTrust=typeof api.clients.trustRelease==='function'?api.clients.trustRelease.bind(api.clients):null;
-  const originalOpenRouter=typeof api.clients.openRouter==='function'?api.clients.openRouter.bind(api.clients):null;
   let lastResult=null,lastClientId=0,renderTimer=null,liveTimer=null,liveBusy=false,liveSampleCount=0;
 
-  const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[ch]));
   const pad=n=>String(n).padStart(2,'0');
   const dateTime=value=>{const d=new Date(value);return Number.isNaN(d.getTime())?'—':`${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`};
   const dateOnly=value=>{const d=new Date(`${String(value||'').slice(0,10)}T12:00:00`);return Number.isNaN(d.getTime())?'—':`${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()}`};
@@ -37,14 +36,6 @@
     for(const key of ['amount_cents','value_cents','total_cents','price_cents'])if(Number.isFinite(Number(row?.[key])))return Number(row[key]);
     for(const key of ['amount','value','total','price'])if(Number.isFinite(Number(row?.[key])))return Math.round(Number(row[key])*100);
     return NaN;
-  }
-  function planName(client){
-    const current=state(),plans=Array.isArray(current?.plans)?current.plans:[];
-    const byId=client?.plan_id?plans.find(p=>Number(p?.id)===Number(client.plan_id)):null;
-    const direct=String(client?.plan_name||client?.plan||'').trim();
-    if(byId?.name)return String(byId.name);
-    if(direct)return direct;
-    return 'Sem plano contratado';
   }
   function vlanName(result){
     const raw=result?.vlanId??result?.vlan??result?.client?.vlan_id??result?.client?.vlan;
@@ -133,16 +124,31 @@
     if(columns){const visible=[...columns.children].filter(child=>getComputedStyle(child).display!=='none');if(visible.length===1)columns.style.gridTemplateColumns='minmax(0,1fr)'}
   }
 
-  async function openClientRouter(id,button){
-    if(!originalOpenRouter){if(button){button.textContent='Acesso indisponível';button.disabled=true}return}
-    const originalText=button?.textContent||'Acessar roteador / ONU';
-    if(button){button.disabled=true;button.textContent='Abrindo…'}
-    try{await originalOpenRouter(id);if(button)button.textContent='Acesso aberto'}
-    catch(error){
-      const message=error instanceof Error?error.message:String(error);
-      if(button){button.textContent=message||'Não foi possível abrir';button.title=message}
-      console.error('Provedor Plus: falha ao abrir o roteador/ONU do cliente.',error);
-    }finally{if(button)setTimeout(()=>{if(button.isConnected){button.disabled=false;button.textContent=originalText}},1800)}
+  function contractSection(modal){
+    const heading=[...modal.querySelectorAll('h2,h3,h4')].find(el=>normalizeLabel(el.textContent)==='contrato e acesso');
+    if(!heading)return null;
+    let node=heading.parentElement,depth=0;
+    while(node&&node!==modal&&depth<7){const text=normalizeLabel(node.textContent);if(text.includes('contrato e acesso')&&text.includes('roteador/onu do cliente'))return node;node=node.parentElement;depth++}
+    return heading.parentElement;
+  }
+  function setContractValue(section,label,value){
+    if(!section||!value||value==='Não identificado')return;
+    const target=normalizeLabel(label),labelEl=[...section.querySelectorAll('span,small,label,div,p')].find(el=>el.children.length===0&&normalizeLabel(el.textContent)===target);
+    if(!labelEl)return;
+    let row=labelEl.parentElement,depth=0;
+    while(row&&row!==section&&depth<4){
+      const values=[...row.querySelectorAll('strong,b,span,small,p')].filter(el=>el!==labelEl&&el.children.length===0);
+      if(values.length){values[values.length-1].textContent=value;return}
+      row=row.parentElement;depth++;
+    }
+  }
+  function updateContractAccess(modal,result,client){
+    const section=contractSection(modal);if(!section)return;
+    section.style.removeProperty('display');
+    const port=displayValue(result?.accessPort,result?.accessInterface),encoding=displayValue(result?.encoding),device=String(client?.device_ip||'').trim();
+    if(port!=='Não identificado')setContractValue(section,'Porta de acesso',port);
+    if(encoding!=='Não identificado')setContractValue(section,'Codificação PPPoE',encoding);
+    if(device)setContractValue(section,'Roteador/ONU do cliente',device);
   }
 
   function renderConsumption(modal,id,result){
@@ -153,7 +159,7 @@
     const current=result?.traffic?.current||{},monthDown=Math.max(0,num(current.download_bytes)),monthUp=Math.max(0,num(current.upload_bytes)),monthTotal=monthDown+monthUp;
     const down=Math.max(0,num(result?.downloadBps)),up=Math.max(0,num(result?.uploadBps)),online=result?.connectionState==='online'||result?.online===true,liveAvailable=Boolean(result?.liveRatesAvailable);
     const mode=!online?'ready':liveAvailable?'ready':liveSampleCount<2?'collecting':'unavailable',peak=peakStore(id,down,up);
-    const plan=planName(client),vlan=vlanName(result),pppInterface=displayValue(result?.pppoeInterface),profile=displayValue(result?.profile,client?.mikrotik_profile),pppoe=displayValue(result?.username,client?.pppoe_username,client?.pppoe_user),ip=displayValue(result?.ip,client?.ip),mtu=Number(result?.mtu)>0?String(Math.trunc(Number(result.mtu))):'Não identificado',mac=displayValue(result?.callerId,client?.mac_address),accessPort=displayValue(result?.accessPort,result?.accessInterface),encoding=displayValue(result?.encoding),router=displayValue(result?.routerName,client?.router_name),deviceIp=String(client?.device_ip||'').trim();
+    const vlan=vlanName(result),pppInterface=displayValue(result?.pppoeInterface),profile=displayValue(result?.profile,client?.mikrotik_profile),pppoe=displayValue(result?.username,client?.pppoe_username,client?.pppoe_user),ip=displayValue(result?.ip,client?.ip),mtu=Number(result?.mtu)>0?String(Math.trunc(Number(result.mtu))):'Não identificado',mac=displayValue(result?.callerId,client?.mac_address);
     panel.innerHTML=`
       <div class="client-live-consumption-head"><div><h3>Consumo e conexão do cliente</h3><p>Tráfego PPPoE, consumo do mês e dados técnicos da conexão</p></div><span class="tone-${online?'good':result?.connectionState==='offline'?'bad':'warn'}">${esc(online?'Online':result?.connectionState==='offline'?'Offline':'Indisponível')}</span></div>
       <div class="client-live-consumption-body">
@@ -161,22 +167,15 @@
         <div class="client-month-usage"><article><span>Download no mês</span><strong>${esc(formatBytes(monthDown))}</strong></article><article><span>Upload no mês</span><strong>${esc(formatBytes(monthUp))}</strong></article><article><span>Consumo total do mês</span><strong>${esc(formatBytes(monthTotal))}</strong></article></div>
       </div>
       <div class="client-access-facts">
-        <article><span>Cliente</span><strong>${esc(displayValue(client?.name))}</strong></article>
-        <article><span>Plano contratado</span><strong>${esc(plan)}</strong></article>
         <article><span>PPPoE</span><strong>${esc(pppoe)}</strong></article>
         <article><span>IP conectado</span><strong>${esc(ip)}</strong></article>
         <article><span>VLAN</span><strong>${esc(vlan)}</strong></article>
         <article><span>Interface PPPoE</span><strong>${esc(pppInterface)}</strong></article>
         <article><span>Perfil PPPoE</span><strong>${esc(profile)}</strong></article>
-        <article><span>Porta de acesso</span><strong>${esc(accessPort)}</strong></article>
-        <article><span>Codificação PPPoE</span><strong>${esc(encoding)}</strong></article>
         <article><span>MTU</span><strong>${esc(mtu)}</strong></article>
         <article><span>MAC / Caller ID</span><strong>${esc(mac)}</strong></article>
-        <article><span>MikroTik concentrador</span><strong>${esc(router)}</strong></article>
-      </div>
-      <div class="client-remote-access"><div><strong>Acesso remoto ao equipamento</strong><small>${esc(deviceIp?`Roteador / ONU: ${deviceIp}`:'Cadastre o IP do roteador ou ONU do cliente para abrir o equipamento.')}</small></div><button type="button" data-client-open-router>Acessar roteador / ONU</button></div>`;
-    const remoteButton=panel.querySelector('[data-client-open-router]');
-    if(remoteButton)remoteButton.addEventListener('click',()=>openClientRouter(id,remoteButton));
+      </div>`;
+    updateContractAccess(modal,result,client);
   }
 
   function render(id,result){

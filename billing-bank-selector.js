@@ -46,12 +46,20 @@
     field=document.createElement('label');
     field.className='pp-bill-bank-field';
     field.dataset.kind=kind;
-    field.innerHTML='<span>Banco emissor do boleto</span><select class="pp-bill-bank-select" aria-label="Banco emissor do boleto"></select><small>Escolha qual banco configurado será usado para gerar esta cobrança.</small>';
+    field.innerHTML='<span>Banco emissor do boleto</span><select class="pp-bill-bank-select" aria-label="Banco emissor do boleto"></select><small>Escolha qual banco configurado será usado para gerar esta cobrança pela API real.</small>';
     if(container.classList.contains('bill-generator')){
       const title=container.querySelector('.bill-generator-title');
       if(title)title.insertAdjacentElement('afterend',field);else container.prepend(field);
     }else container.prepend(field);
     return field;
+  }
+
+  function readyBanks(banks){
+    const active=[];
+    const efi=banks?.efi||{},mp=banks?.mercadoPago||{};
+    if(efi.enabled&&efi.clientIdConfigured&&efi.clientSecretConfigured)active.push(['efi',`Efí Bank${efi.environment==='production'?' — Produção':' — Homologação'}`]);
+    if(mp.enabled&&mp.accessTokenConfigured)active.push(['mercadoPago',`Mercado Pago${mp.environment==='production'?' — Produção':' — Teste'}`]);
+    return active;
   }
 
   let running=false;
@@ -61,18 +69,16 @@
     if(!targets.length)return;
     running=true;
     try{
-      const banks=await banksState(),active=[];
-      if(banks?.efi?.enabled)active.push(['efi','Efí Bank']);
-      if(banks?.mercadoPago?.enabled)active.push(['mercadoPago','Mercado Pago']);
-      const enabled=new Set(active.map(([value])=>value));
+      const banks=await banksState(),active=readyBanks(banks),enabled=new Set(active.map(([value])=>value));
       const preferred=enabled.has(String(banks?.defaultProvider||''))?String(banks.defaultProvider):active[0]?.[0]||'';
+      const hasEnabledButIncomplete=Boolean(banks?.efi?.enabled||banks?.mercadoPago?.enabled)&&!active.length;
       for(const {container,kind} of targets){
         const field=ensureField(container,kind),select=field.querySelector('select'),help=field.querySelector('small'),previous=enabled.has(select?.value)?select.value:'';
         if(!select)continue;
-        select.innerHTML=active.length?active.map(([value,label])=>`<option value="${value}">${label}</option>`).join(''):'<option value="">Nenhum banco ativo</option>';
+        select.innerHTML=active.length?active.map(([value,label])=>`<option value="${value}">${label}</option>`).join(''):'<option value="">Nenhum banco pronto para emissão</option>';
         select.disabled=!active.length;
         if(active.length)select.value=previous||preferred;
-        if(help)help.textContent=active.length>1?'Escolha qual banco configurado será usado para gerar esta cobrança.':active.length===1?'Este é o banco ativo disponível para a emissão.':'Ative um banco em Integração antes de gerar boletos.';
+        if(help)help.textContent=active.length>1?'Escolha a API bancária que emitirá esta cobrança real.':active.length===1?'Esta cobrança será emitida pela API do banco configurado.':hasEnabledButIncomplete?'O banco está ativado, mas faltam credenciais obrigatórias em Integração.':'Ative e configure Efí Bank ou Mercado Pago em Integração antes de gerar boletos.';
       }
     }finally{running=false}
   }

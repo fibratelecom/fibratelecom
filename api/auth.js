@@ -1,3 +1,4 @@
+const crypto=require('crypto');
 const {db,passwordHash,passwordVerify,createSession,currentSession,requireAuth,requireAdmin,getUserAccess,normalizePermissions,normalizeRole,ALL_PERMISSIONS,PROFILE_PREFIX,clearSessionCookie,cookies,sha256,COOKIE}=require('../lib/cloud-auth');
 const text=v=>String(v??'').trim();
 const profileKey=id=>`${PROFILE_PREFIX}${Number(id)}`;
@@ -88,7 +89,7 @@ module.exports=async function handler(req,res){
         previousProfile=await getProfile(req,id,previousUser.role);
       }
 
-      const payload={email:login,name,role};if(password)payload.password_hash=passwordHash(password);
+      const payload={email:login,name,role};if(id&&password)payload.password_hash=passwordHash(password);if(!id)payload.password_hash=passwordHash(crypto.randomBytes(32).toString('hex'));
       if(id){
         const updated=await db(req,`/pp_users?id=eq.${id}`,{method:'PATCH',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(payload)});user=Array.isArray(updated)?updated[0]:updated;
       }else{
@@ -110,6 +111,16 @@ module.exports=async function handler(req,res){
         throw error;
       }
 
+      if(createdNew){
+        try{
+          const activated=await db(req,`/pp_users?id=eq.${Number(user.id)}`,{method:'PATCH',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify({password_hash:passwordHash(password)})});
+          const activatedUser=Array.isArray(activated)?activated[0]:activated;if(!activatedUser?.id)throw new Error('Não foi possível liberar a senha do funcionário.');user=activatedUser;
+        }catch(error){
+          await db(req,`/pp_users?id=eq.${Number(user.id)}`,{method:'DELETE',headers:{Prefer:'return=minimal'}}).catch(()=>{});
+          await deleteProfile(req,user.id);
+          throw error;
+        }
+      }
       if(id&&Number(id)!==Number(current.user.id))await revokeSessions(req,id);
       return res.status(200).json({ok:true,data:{...safeUser(user),active,phone,permissions}});
     }

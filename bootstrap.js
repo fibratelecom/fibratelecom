@@ -42,7 +42,7 @@
   await loadScript('/client-status-layout-cleanup.js?v=1017-statuslayout1').catch(error=>console.error('Provedor Plus: a organização visual do status do cliente não foi carregada.',error));
   await loadScript('/dashboard-enhancements.js?v=1017-dashboard1').catch(error=>console.error('Provedor Plus: o Dashboard gerencial não foi carregado.',error));
   const appB64=await read(Array.from({length:33},(_,i)=>`/packed/appgz-${String(i+1).padStart(2,'0')}.txt`));
-  const app=await gunzipB64(bridgeB64),appUrl=URL.createObjectURL(new Blob([app],{type:'text/javascript'}));
+  const app=await gunzipB64(appB64),appUrl=URL.createObjectURL(new Blob([app],{type:'text/javascript'}));
   try{await import(appUrl)}finally{setTimeout(()=>URL.revokeObjectURL(appUrl),1500)}
   await loadScript('/billing-bank-selector.js?v=1017-billingbank1').catch(error=>console.error('Provedor Plus: a seleção do banco emissor não foi carregada.',error));
   await loadScript('/staff-access.js?v=1017-staff1').catch(error=>console.error('Provedor Plus: a gestão de funcionários não foi carregada.',error));

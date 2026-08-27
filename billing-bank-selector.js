@@ -6,7 +6,7 @@
   if(!api?.invoices?.save)return;
 
   const normalize=value=>String(value??'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
-  const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[ch]));
+  const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   const localState=()=>{try{return JSON.parse(localStorage.getItem('provedor_plus_web_1_0_17')||'{}')||{}}catch{return{}}};
   const localBanks=()=>localState()?.banks||{};
 

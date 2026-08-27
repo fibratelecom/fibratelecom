@@ -3,7 +3,7 @@
   window.__ProvedorPlusClientStatusEnhancementsInstalled=true;
 
   const css=document.createElement('link');
-  css.rel='stylesheet';css.href='/client-status-enhancements.css?v=1017-status2';css.id='pp-client-status-enhancements-css';
+  css.rel='stylesheet';css.href='/client-status-enhancements.css?v=1017-status3';css.id='pp-client-status-enhancements-css';
   if(!document.getElementById(css.id))document.head.appendChild(css);
 
   const api=window.provedor;
@@ -24,6 +24,8 @@
   const num=value=>Number.isFinite(Number(value))?Number(value):0;
   const formatBytes=value=>{let n=Math.max(0,num(value));const units=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<units.length-1){n/=1024;i++}return `${new Intl.NumberFormat('pt-BR',{maximumFractionDigits:i<2?0:1}).format(n)} ${units[i]}`};
   const rateParts=value=>{let n=Math.max(0,num(value));const units=['bps','Kbps','Mbps','Gbps'];let i=0;while(n>=1000&&i<units.length-1){n/=1000;i++}return {value:new Intl.NumberFormat('pt-BR',{maximumFractionDigits:i<2?0:1}).format(n),unit:units[i]}};
+  const normalizeLabel=value=>String(value??'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
+  const displayValue=(...values)=>{for(const value of values){if(value===undefined||value===null)continue;const text=String(value).trim();if(!text||['undefined','null','nan'].includes(text.toLowerCase()))continue;return text}return 'Não identificado'};
 
   function state(){return window.ProvedorPlusCloudState?.getState?.()||{}}
   function userName(){return String(state()?.settings?.current_user_name||'Administrador').trim()||'Administrador'}
@@ -46,7 +48,9 @@
   function vlanName(result){
     const raw=result?.vlanId??result?.vlan??result?.client?.vlan_id??result?.client?.vlan;
     if(raw===undefined||raw===null||raw==='')return 'Não identificada';
-    const n=Number(raw);return Number.isFinite(n)&&n>0?`VLAN ${Math.trunc(n)}`:String(raw);
+    const text=String(raw).trim();
+    if(!text||['undefined','null','nan','0'].includes(text.toLowerCase()))return 'Não identificada';
+    const n=Number(text);return Number.isFinite(n)&&n>0?`VLAN ${Math.trunc(n)}`:(/^vlan\s+/i.test(text)?text:`VLAN ${text}`);
   }
   function peakStore(clientId,down,up){
     const key=`pp_client_peak_${Number(clientId)||0}_${dayKey(new Date())}`,value={down:0,up:0};
@@ -110,22 +114,53 @@
 
   function scheduleRender(id,result){lastClientId=Number(id)||0;lastResult=result||lastResult;clearTimeout(renderTimer);renderTimer=setTimeout(()=>render(lastClientId,lastResult),40)}
 
+  function hideLegacyDuplicates(modal){
+    const columns=modal.querySelector('.client-status-columns');
+    const duplicateTitles=new Set(['dados da conexao','consumo do cliente','consumo mensal','consumo do mes','trafego do cliente','consumo de dados']);
+    for(const heading of modal.querySelectorAll('h2,h3,h4')){
+      if(heading.closest('.client-live-consumption-panel'))continue;
+      if(!duplicateTitles.has(normalizeLabel(heading.textContent)))continue;
+      let block=heading.closest('section,article,.client-status-card,.status-card,.info-card,.card');
+      if(!block&&columns){block=[...columns.children].find(child=>child.contains(heading))||null}
+      if(block&&block!==modal)block.style.display='none';
+    }
+    if(columns){
+      const visible=[...columns.children].filter(child=>child.style.display!=='none');
+      if(visible.length===1)columns.style.gridTemplateColumns='minmax(0,1fr)';
+    }
+  }
+
   function renderConsumption(modal,id,result){
     const client=result?.client;if(!client)return;
     const columns=modal.querySelector('.client-status-columns');if(!columns)return;
+    hideLegacyDuplicates(modal);
     let panel=modal.querySelector('.client-live-consumption-panel');
     if(!panel){panel=document.createElement('section');panel.className='client-live-consumption-panel';columns.before(panel)}
     const current=result?.traffic?.current||{},monthDown=Math.max(0,num(current.download_bytes)),monthUp=Math.max(0,num(current.upload_bytes)),monthTotal=monthDown+monthUp;
     const down=Math.max(0,num(result?.downloadBps)),up=Math.max(0,num(result?.uploadBps)),online=result?.connectionState==='online'||result?.online===true;
     const collecting=online&&!result?.liveRatesAvailable&&down===0&&up===0;
-    const peak=peakStore(id,down,up),plan=planName(client),vlan=vlanName(result),pppInterface=String(result?.pppoeInterface||'').trim()||'Não identificada',profile=String(result?.profile||client?.mikrotik_profile||'').trim()||'Não informado';
+    const peak=peakStore(id,down,up);
+    const plan=planName(client),vlan=vlanName(result),pppInterface=displayValue(result?.pppoeInterface),profile=displayValue(result?.profile,client?.mikrotik_profile),pppoe=displayValue(result?.username,client?.pppoe_username,client?.pppoe_user),ip=displayValue(result?.ip,client?.ip),mtu=Number(result?.mtu)>0?String(Math.trunc(Number(result.mtu))):'Não identificado',mac=displayValue(result?.callerId,client?.mac_address),accessPort=displayValue(result?.accessPort,result?.accessInterface),encoding=displayValue(result?.encoding),router=displayValue(result?.routerName,client?.router_name);
     panel.innerHTML=`
-      <div class="client-live-consumption-head"><div><h3>Consumo do cliente</h3><p>Tráfego PPPoE e consumo registrado no mês</p></div><span class="tone-${online?'good':result?.connectionState==='offline'?'bad':'warn'}">${esc(online?'Online':result?.connectionState==='offline'?'Offline':'Indisponível')}</span></div>
+      <div class="client-live-consumption-head"><div><h3>Consumo e conexão do cliente</h3><p>Tráfego PPPoE, consumo do mês e dados técnicos da conexão</p></div><span class="tone-${online?'good':result?.connectionState==='offline'?'bad':'warn'}">${esc(online?'Online':result?.connectionState==='offline'?'Offline':'Indisponível')}</span></div>
       <div class="client-live-consumption-body">
         <div class="client-traffic-gauges">${trafficRing(down,peak.down,'down',collecting)}${trafficRing(up,peak.up,'up',collecting)}</div>
         <div class="client-month-usage"><article><span>Download no mês</span><strong>${esc(formatBytes(monthDown))}</strong></article><article><span>Upload no mês</span><strong>${esc(formatBytes(monthUp))}</strong></article><article><span>Consumo total do mês</span><strong>${esc(formatBytes(monthTotal))}</strong></article></div>
       </div>
-      <div class="client-access-facts"><article><span>Plano contratado</span><strong>${esc(plan)}</strong></article><article><span>VLAN</span><strong>${esc(vlan)}</strong></article><article><span>Interface PPPoE</span><strong>${esc(pppInterface)}</strong></article><article><span>Perfil PPPoE</span><strong>${esc(profile)}</strong></article></div>`;
+      <div class="client-access-facts">
+        <article><span>Cliente</span><strong>${esc(displayValue(client?.name))}</strong></article>
+        <article><span>Plano contratado</span><strong>${esc(plan)}</strong></article>
+        <article><span>PPPoE</span><strong>${esc(pppoe)}</strong></article>
+        <article><span>IP conectado</span><strong>${esc(ip)}</strong></article>
+        <article><span>VLAN</span><strong>${esc(vlan)}</strong></article>
+        <article><span>Interface PPPoE</span><strong>${esc(pppInterface)}</strong></article>
+        <article><span>Perfil PPPoE</span><strong>${esc(profile)}</strong></article>
+        <article><span>Porta de acesso</span><strong>${esc(accessPort)}</strong></article>
+        <article><span>Codificação PPPoE</span><strong>${esc(encoding)}</strong></article>
+        <article><span>MTU</span><strong>${esc(mtu)}</strong></article>
+        <article><span>MAC / Caller ID</span><strong>${esc(mac)}</strong></article>
+        <article><span>MikroTik concentrador</span><strong>${esc(router)}</strong></article>
+      </div>`;
   }
 
   function render(id,result){

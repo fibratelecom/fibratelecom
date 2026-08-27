@@ -69,7 +69,10 @@
     const values=new Set([...root.querySelectorAll('input')].map(input=>normalize(input.value)).filter(value=>value.length>2));
     return clients.find(c=>[c?.name,c?.document,c?.contract_number].some(value=>{const v=normalize(value);return v&&values.has(v)}))||null;
   }
-  async function clientsList(){try{return Array.isArray(await api?.clients?.list?.())?await api.clients.list():[]}catch{return Array.isArray(localState()?.clients)?localState().clients:[]}}
+  async function clientsList(){
+    try{const clients=await api?.clients?.list?.();return Array.isArray(clients)?clients:[]}
+    catch{const clients=localState()?.clients;return Array.isArray(clients)?clients:[]}
+  }
 
   function ensureClientConfig(root){
     let block=root.querySelector('.pp-client-extra-config');if(block)return block;
@@ -86,14 +89,14 @@
   async function patchClientEditor(root,banks,active){
     if(!root)return;
     const block=ensureClientConfig(root),clients=await clientsList(),client=currentClientFromRoot(root,clients),preferred=preferredBank(banks,active);
-    const bank=block.querySelector('.pp-client-bank-select'),ip=block.querySelector('.pp-client-device-ip'),port=block.querySelector('.pp-client-device-port');
-    const untouched=block.dataset.initialized!=='true';
-    fillBankSelect(bank,active,client?.billing_bank_provider||preferred);
+    const bank=block.querySelector('.pp-client-bank-select'),ip=block.querySelector('.pp-client-device-ip'),port=block.querySelector('.pp-client-device-port'),untouched=block.dataset.initialized!=='true';
+    fillBankSelect(bank,active,bank?.value||client?.billing_bank_provider||preferred);
     if(untouched){if(ip)ip.value=String(client?.device_ip||'');if(port)port.value=String(client?.device_port||'');block.dataset.initialized='true'}
   }
 
   function ensureBillField(modal){
-    let field=modal.querySelector(':scope .pp-bill-bank-modal-field');if(field)return field;
+    modal.classList.add('pp-client-bills-modal-ready');
+    let field=modal.querySelector('.pp-bill-bank-modal-field');if(field)return field;
     field=document.createElement('label');field.className='pp-bill-bank-field pp-bill-bank-modal-field';
     field.innerHTML='<span>Banco da cobrança</span><select class="pp-bill-bank-select" aria-label="Banco da cobrança"></select><small>Escolha o banco que será usado para esta cobrança.</small>';
     const heading=[...modal.querySelectorAll('h2,h3,h4')].find(el=>normalize(el.textContent)==='gerar cobranca para este cliente');
@@ -103,14 +106,14 @@
   }
   async function patchBillsModal(modal,banks,active){
     if(!modal)return;
-    const field=ensureBillField(modal),clients=await clientsList(),client=currentClientFromRoot(modal,clients),preferred=preferredBank(banks,active);
-    fillBankSelect(field.querySelector('select'),active,field.querySelector('select')?.value||client?.billing_bank_provider||preferred);
+    const field=ensureBillField(modal),clients=await clientsList(),client=currentClientFromRoot(modal,clients),preferred=preferredBank(banks,active),select=field.querySelector('select');
+    fillBankSelect(select,active,select?.value||client?.billing_bank_provider||preferred);
     const help=field.querySelector('small');
     if(help)help.textContent=active.length>1?'Selecione qual banco configurado emitirá a cobrança deste cliente.':active.length===1?'O banco configurado será usado para esta cobrança.':'Configure Efí Bank ou Mercado Pago em Integração antes de emitir cobrança real.';
   }
 
   function selectedBank(){
-    for(const selector of ['.client-bills-modal .pp-bill-bank-select','.pp-bill-bank-modal-field .pp-bill-bank-select','.bill-generator .pp-bill-bank-select','.carnet-fields .pp-bill-bank-select','.pp-client-bank-select']){
+    for(const selector of ['.pp-bill-bank-modal-field .pp-bill-bank-select','.bill-generator .pp-bill-bank-select','.carnet-fields .pp-bill-bank-select','.pp-client-bank-select']){
       const el=[...document.querySelectorAll(selector)].find(x=>x.value&&!x.disabled&&x.offsetParent!==null);if(el)return String(el.value)
     }
     return '';
@@ -149,14 +152,14 @@
   async function patch(){
     if(running)return;running=true;
     try{
-      const banks=await banksState(),active=readyBanks(banks);
+      const banks=await banksState(),active=readyBanks(banks),bills=clientBillsModal();
       await patchClientEditor(clientEditor(),banks,active);
-      await patchBillsModal(clientBillsModal(),banks,active);
+      await patchBillsModal(bills,banks,active);
       for(const container of document.querySelectorAll('.bill-generator,.carnet-fields')){
-        if(container.closest('.client-bills-modal')?.querySelector('.pp-bill-bank-modal-field'))continue;
+        if(container.closest('.pp-client-bills-modal-ready'))continue;
         let field=container.querySelector(':scope > .pp-bill-bank-field');
         if(!field){field=document.createElement('label');field.className='pp-bill-bank-field';field.innerHTML='<span>Banco da cobrança</span><select class="pp-bill-bank-select" aria-label="Banco da cobrança"></select><small>Banco configurado para esta emissão.</small>';container.prepend(field)}
-        fillBankSelect(field.querySelector('select'),active,field.querySelector('select')?.value||preferredBank(banks,active));
+        const select=field.querySelector('select');fillBankSelect(select,active,select?.value||preferredBank(banks,active));
       }
     }finally{running=false}
   }

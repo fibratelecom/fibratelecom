@@ -42,6 +42,7 @@
   const appB64=await read(Array.from({length:33},(_,i)=>`/packed/appgz-${String(i+1).padStart(2,'0')}.txt`));
   const app=await gunzipB64(appB64),appUrl=URL.createObjectURL(new Blob([app],{type:'text/javascript'}));
   try{await import(appUrl)}finally{setTimeout(()=>URL.revokeObjectURL(appUrl),1500)}
+  await loadScript('/billing-bank-selector.js?v=1017-billingbank1').catch(error=>console.error('Provedor Plus: a seleção do banco emissor não foi carregada.',error));
   await loadScript('/staff-access.js?v=1017-staff1').catch(error=>console.error('Provedor Plus: a gestão de funcionários não foi carregada.',error));
   await loadScript('/ticket-enhancements.js?v=1017-ticket1').catch(error=>console.error('Provedor Plus: a gestão avançada de chamados não foi carregada.',error));
 })().catch(err=>{console.error(err);const root=document.getElementById('root')||document.body,message=String(err&&err.message||err);root.innerHTML='<div style="font-family:Segoe UI,Arial,sans-serif;max-width:760px;margin:60px auto;padding:24px;border:1px solid #e5e7eb;border-radius:14px"><h2>Provedor Plus</h2><p>Não foi possível carregar o painel.</p><pre id="pp-startup-error" style="white-space:pre-wrap;color:#b91c1c"></pre><button id="pp-startup-retry">Tentar novamente</button></div>';const pre=root.querySelector('#pp-startup-error'),button=root.querySelector('#pp-startup-retry');if(pre)pre.textContent=message;if(button)button.addEventListener('click',()=>location.reload())});

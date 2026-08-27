@@ -3,7 +3,7 @@
   window.__ProvedorPlusClientStatusEnhancementsInstalled=true;
 
   const css=document.createElement('link');
-  css.rel='stylesheet';css.href='/client-status-enhancements.css?v=1017-status1';css.id='pp-client-status-enhancements-css';
+  css.rel='stylesheet';css.href='/client-status-enhancements.css?v=1017-status2';css.id='pp-client-status-enhancements-css';
   if(!document.getElementById(css.id))document.head.appendChild(css);
 
   const api=window.provedor;
@@ -12,7 +12,7 @@
   const originalBlock=typeof api.clients.block==='function'?api.clients.block.bind(api.clients):null;
   const originalUnblock=typeof api.clients.unblock==='function'?api.clients.unblock.bind(api.clients):null;
   const originalTrust=typeof api.clients.trustRelease==='function'?api.clients.trustRelease.bind(api.clients):null;
-  let lastResult=null,lastClientId=0,renderTimer=null;
+  let lastResult=null,lastClientId=0,renderTimer=null,liveTimer=null,liveBusy=false;
 
   const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   const pad=n=>String(n).padStart(2,'0');
@@ -21,6 +21,9 @@
   const relative=value=>{const d=new Date(value);if(Number.isNaN(d.getTime()))return '';const sec=Math.max(0,Math.floor((Date.now()-d.getTime())/1000));if(sec<60)return `há ${sec}s`;const min=Math.floor(sec/60);if(min<60)return `há ${min} min`;const h=Math.floor(min/60);if(h<24)return `há ${h}h ${min%60}min`;const days=Math.floor(h/24);return `há ${days} dia${days===1?'':'s'}`};
   const money=cents=>Number.isFinite(Number(cents))?new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(Number(cents)/100):'';
   const dayKey=value=>{const d=value instanceof Date?value:new Date(value);return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`};
+  const num=value=>Number.isFinite(Number(value))?Number(value):0;
+  const formatBytes=value=>{let n=Math.max(0,num(value));const units=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<units.length-1){n/=1024;i++}return `${new Intl.NumberFormat('pt-BR',{maximumFractionDigits:i<2?0:1}).format(n)} ${units[i]}`};
+  const rateParts=value=>{let n=Math.max(0,num(value));const units=['bps','Kbps','Mbps','Gbps'];let i=0;while(n>=1000&&i<units.length-1){n/=1000;i++}return {value:new Intl.NumberFormat('pt-BR',{maximumFractionDigits:i<2?0:1}).format(n),unit:units[i]}};
 
   function state(){return window.ProvedorPlusCloudState?.getState?.()||{}}
   function userName(){return String(state()?.settings?.current_user_name||'Administrador').trim()||'Administrador'}
@@ -31,6 +34,31 @@
     for(const key of ['amount_cents','value_cents','total_cents','price_cents'])if(Number.isFinite(Number(row?.[key])))return Number(row[key]);
     for(const key of ['amount','value','total','price'])if(Number.isFinite(Number(row?.[key])))return Math.round(Number(row[key])*100);
     return NaN;
+  }
+  function planName(client){
+    const current=state(),plans=Array.isArray(current?.plans)?current.plans:[];
+    const byId=client?.plan_id?plans.find(p=>Number(p?.id)===Number(client.plan_id)):null;
+    const direct=String(client?.plan_name||client?.plan||'').trim();
+    if(byId?.name)return String(byId.name);
+    if(direct)return direct;
+    return 'Sem plano contratado';
+  }
+  function vlanName(result){
+    const raw=result?.vlanId??result?.vlan??result?.client?.vlan_id??result?.client?.vlan;
+    if(raw===undefined||raw===null||raw==='')return 'Não identificada';
+    const n=Number(raw);return Number.isFinite(n)&&n>0?`VLAN ${Math.trunc(n)}`:String(raw);
+  }
+  function peakStore(clientId,down,up){
+    const key=`pp_client_peak_${Number(clientId)||0}_${dayKey(new Date())}`,value={down:0,up:0};
+    try{Object.assign(value,JSON.parse(localStorage.getItem(key)||'{}'))}catch{}
+    if(Number.isFinite(Number(down)))value.down=Math.max(num(value.down),num(down));
+    if(Number.isFinite(Number(up)))value.up=Math.max(num(value.up),num(up));
+    try{localStorage.setItem(key,JSON.stringify(value))}catch{}
+    return value;
+  }
+  function trafficRing(value,peak,kind,collecting=false){
+    const parts=rateParts(value),deg=collecting?55:(peak>0?Math.max(0,Math.min(360,num(value)/peak*360)):0);
+    return `<div class="client-traffic-gauge-item"><div class="client-traffic-ring ${kind==='up'?'client-traffic-ring-up':''} ${collecting?'is-collecting':''}" style="--client-ring-deg:${deg}deg"><b>${collecting?'…':esc(parts.value)}</b><small>${collecting?'COLETANDO':esc(parts.unit)}</small></div><span>${kind==='up'?'Upload':'Download'} atual</span></div>`;
   }
 
   function financial(clientId){
@@ -82,6 +110,24 @@
 
   function scheduleRender(id,result){lastClientId=Number(id)||0;lastResult=result||lastResult;clearTimeout(renderTimer);renderTimer=setTimeout(()=>render(lastClientId,lastResult),40)}
 
+  function renderConsumption(modal,id,result){
+    const client=result?.client;if(!client)return;
+    const columns=modal.querySelector('.client-status-columns');if(!columns)return;
+    let panel=modal.querySelector('.client-live-consumption-panel');
+    if(!panel){panel=document.createElement('section');panel.className='client-live-consumption-panel';columns.before(panel)}
+    const current=result?.traffic?.current||{},monthDown=Math.max(0,num(current.download_bytes)),monthUp=Math.max(0,num(current.upload_bytes)),monthTotal=monthDown+monthUp;
+    const down=Math.max(0,num(result?.downloadBps)),up=Math.max(0,num(result?.uploadBps)),online=result?.connectionState==='online'||result?.online===true;
+    const collecting=online&&!result?.liveRatesAvailable&&down===0&&up===0;
+    const peak=peakStore(id,down,up),plan=planName(client),vlan=vlanName(result),pppInterface=String(result?.pppoeInterface||'').trim()||'Não identificada',profile=String(result?.profile||client?.mikrotik_profile||'').trim()||'Não informado';
+    panel.innerHTML=`
+      <div class="client-live-consumption-head"><div><h3>Consumo do cliente</h3><p>Tráfego PPPoE e consumo registrado no mês</p></div><span class="tone-${online?'good':result?.connectionState==='offline'?'bad':'warn'}">${esc(online?'Online':result?.connectionState==='offline'?'Offline':'Indisponível')}</span></div>
+      <div class="client-live-consumption-body">
+        <div class="client-traffic-gauges">${trafficRing(down,peak.down,'down',collecting)}${trafficRing(up,peak.up,'up',collecting)}</div>
+        <div class="client-month-usage"><article><span>Download no mês</span><strong>${esc(formatBytes(monthDown))}</strong></article><article><span>Upload no mês</span><strong>${esc(formatBytes(monthUp))}</strong></article><article><span>Consumo total do mês</span><strong>${esc(formatBytes(monthTotal))}</strong></article></div>
+      </div>
+      <div class="client-access-facts"><article><span>Plano contratado</span><strong>${esc(plan)}</strong></article><article><span>VLAN</span><strong>${esc(vlan)}</strong></article><article><span>Interface PPPoE</span><strong>${esc(pppInterface)}</strong></article><article><span>Perfil PPPoE</span><strong>${esc(profile)}</strong></article></div>`;
+  }
+
   function render(id,result){
     const modal=document.querySelector('.client-status-modal');if(!modal||!result?.client)return;
     const client=result.client,title=modal.querySelector('.modal-head h2,h2')?.textContent||'';
@@ -110,16 +156,34 @@
         <small>${esc(financeDetail)}</small>
       </article>`;
 
+    renderConsumption(modal,id,result);
+
     let history=modal.querySelector('.client-access-history-panel');
     if(!history){history=document.createElement('section');history.className='client-access-history-panel';columns.after(history)}
     const rows=(Array.isArray(client.access_history)?client.access_history:[]).slice(0,5);
     history.innerHTML=`<div class="client-access-history-head"><div><h3>Histórico de ações no acesso</h3><p>Bloqueios, desbloqueios e liberações realizados pelo painel.</p></div><span>Últimas ${rows.length||0}</span></div>${rows.length?`<div class="client-access-history-list">${rows.map(item=>`<article><span class="client-access-action-dot"></span><div><strong>${esc(item.action||'Ação')}</strong><small>${esc(item.detail||'Sem observação')}</small></div><div><b>${esc(item.user||'Administrador')}</b><small>${esc(dateTime(item.at))}</small></div></article>`).join('')}</div>`:`<div class="client-access-history-empty">Nenhuma ação de acesso registrada a partir desta atualização.</div>`}`;
   }
 
+  function stopLivePolling(){if(liveTimer){clearInterval(liveTimer);liveTimer=null}liveBusy=false}
+  function startLivePolling(){
+    stopLivePolling();
+    liveTimer=setInterval(async()=>{
+      const modal=document.querySelector('.client-status-modal');
+      if(!modal||!lastClientId){stopLivePolling();return}
+      if(liveBusy)return;
+      liveBusy=true;
+      try{
+        const result=await originalStatus(lastClientId);
+        if(result?.client){const updated=await persistTransition(lastClientId,result);if(updated)result.client={...result.client,...updated}}
+        scheduleRender(lastClientId,result);
+      }catch(error){console.error('Provedor Plus: falha ao atualizar consumo do cliente.',error)}finally{liveBusy=false}
+    },3000);
+  }
+
   api.clients.status=async id=>{
     const result=await originalStatus(id);
     if(result?.client){const updated=await persistTransition(id,result);if(updated)result.client={...result.client,...updated}}
-    scheduleRender(id,result);
+    scheduleRender(id,result);startLivePolling();
     return result;
   };
 
@@ -127,6 +191,6 @@
   if(originalUnblock)api.clients.unblock=async id=>{const saved=await originalUnblock(id);const updated=await appendAccessHistory(saved,'Desbloqueio','Acesso PPPoE liberado pelo painel');scheduleRender(id,{...(lastResult||{}),client:updated||saved,connectionState:lastResult?.connectionState});return updated||saved};
   if(originalTrust)api.clients.trustRelease=async(id,hours=48)=>{const saved=await originalTrust(id,hours);const safeHours=Math.min(48,Math.max(1,Math.floor(Number(hours)||48)));const updated=await appendAccessHistory(saved,'Liberação em confiança',`Liberação temporária por ${safeHours} hora${safeHours===1?'':'s'}`);scheduleRender(id,{...(lastResult||{}),client:updated||saved,connectionState:lastResult?.connectionState});return updated||saved};
 
-  const observer=new MutationObserver(()=>{const modal=document.querySelector('.client-status-modal');if(modal&&lastResult&&!modal.querySelector('.client-extra-summary'))scheduleRender(lastClientId,lastResult)});
+  const observer=new MutationObserver(()=>{const modal=document.querySelector('.client-status-modal');if(modal&&lastResult&&!modal.querySelector('.client-extra-summary'))scheduleRender(lastClientId,lastResult);if(!modal)stopLivePolling()});
   observer.observe(document.body,{childList:true,subtree:true});
 })();

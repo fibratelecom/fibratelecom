@@ -6,7 +6,9 @@
   if(!api?.invoices?.save)return;
 
   const normalize=value=>String(value??'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
-  const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[ch]));
+  const localState=()=>{try{return JSON.parse(localStorage.getItem('provedor_plus_web_1_0_17')||'{}')||{}}catch{return{}}};
+  const localBanks=()=>localState()?.banks||{};
 
   const style=document.createElement('style');
   style.textContent=`
@@ -19,12 +21,22 @@
     .pp-bill-bank-modal-field{max-width:none;margin:10px 0 0;padding:10px 12px;background:#f8fbfa;border:1px solid #dfe9e6;border-radius:9px}
     .carnet-fields>.pp-bill-bank-field{margin:0;max-width:none}
     .pp-client-bank-field{display:grid;gap:5px;max-width:360px;margin:12px 0;padding:12px;border:1px solid #dfe9e6;border-radius:10px;background:#fbfdfc}
-    @media(max-width:900px){.pp-bill-bank-field,.pp-client-bank-field{max-width:none;width:100%}}
+    .pp-bill-discount-field{display:grid;gap:8px;min-width:220px;max-width:360px;margin:0 0 12px;padding:11px 12px;border:1px solid #dfe9e6;border-radius:9px;background:#fbfdfc;color:#405853}
+    .pp-bill-discount-modal-field{max-width:none;margin:10px 0 0}
+    .pp-bill-discount-toggle{display:flex;align-items:center;gap:8px;min-width:0;color:#405853;font-size:11px;font-weight:750;line-height:1.35;cursor:pointer}
+    .pp-bill-discount-toggle input{width:16px;height:16px;margin:0;accent-color:#0d8b78}
+    .pp-bill-discount-value{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:7px}
+    .pp-bill-discount-value>span{color:#657773;font-size:11px;font-weight:750}
+    .pp-bill-discount-value input{box-sizing:border-box;width:100%;height:38px;padding:0 10px;color:#2f4a44;background:#fff;border:1px solid #cfe0dc;border-radius:8px;font-size:12px;font-weight:700;outline:none}
+    .pp-bill-discount-value input:focus{border-color:#4fae9d;box-shadow:0 0 0 3px rgba(79,174,157,.12)}
+    .pp-bill-discount-value input:disabled{color:#9aa6a3;background:#f1f5f4}
+    .pp-bill-discount-field small{color:#71827e;font-size:10px;line-height:1.35;white-space:normal}
+    .pp-bill-discount-summary{display:none;color:#16785f!important;font-weight:700}
+    .pp-bill-discount-field.is-enabled .pp-bill-discount-summary{display:block}
+    @media(max-width:900px){.pp-bill-bank-field,.pp-client-bank-field,.pp-bill-discount-field{max-width:none;width:100%}}
   `;
   document.head.appendChild(style);
 
-  const localState=()=>{try{return JSON.parse(localStorage.getItem('provedor_plus_web_1_0_17')||'{}')||{}}catch{return{}}};
-  const localBanks=()=>localState()?.banks||{};
   async function banksState(){
     try{const value=await api?.banks?.get?.();if(value&&typeof value==='object')return value.banks&&typeof value.banks==='object'?value.banks:value}catch(error){console.error('Provedor Plus: não foi possível ler os bancos configurados.',error)}
     return localBanks();
@@ -58,6 +70,12 @@
   function clientBillsModal(){
     const explicit=document.querySelector('.client-bills-modal');if(explicit)return explicit;
     return [...document.querySelectorAll('.modal,.dialog,[role="dialog"],.modal-card,.modal-content')].find(root=>normalize(root.querySelector('h1,h2,h3')?.textContent||'').startsWith('boletos de '))||null;
+  }
+  function financeInvoiceModal(){
+    return [...document.querySelectorAll('.modal,.dialog,[role="dialog"],.modal-card,.modal-content')].find(root=>{
+      if(root.classList.contains('client-bills-modal')||root.closest('.client-bills-modal'))return false;
+      return normalize(root.querySelector('h1,h2,h3')?.textContent||'')==='emitir cobranca';
+    })||null;
   }
   function currentClientFromRoot(root,clients){
     if(!root||!Array.isArray(clients))return null;
@@ -102,10 +120,72 @@
     fillBankSelect(select,active,select?.value||client?.billing_bank_provider||preferred);
     const help=field.querySelector('small');
     if(help)help.textContent=active.length>1?'Selecione qual banco configurado emitirá a cobrança deste cliente.':active.length===1?'O banco configurado será usado para esta cobrança.':'Configure Efí Bank ou Mercado Pago em Integração antes de emitir cobrança real.';
+    ensureDiscountField(field.parentElement||modal,true);
+  }
+
+  function parseMoney(value){
+    let raw=String(value??'').trim().replace(/[^0-9,.-]/g,'');
+    if(!raw)return 0;
+    if(raw.includes(','))raw=raw.replace(/\./g,'').replace(',','.');
+    else if((raw.match(/\./g)||[]).length>1)raw=raw.replace(/\./g,'');
+    const n=Number(raw);return Number.isFinite(n)&&n>0?Math.round(n*100):0;
+  }
+  function moneyFromCents(cents){return new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(Math.max(0,Number(cents)||0)/100)}
+  function ensureDiscountField(root,modal=false){
+    if(!root)return null;
+    let field=root.querySelector(':scope > .pp-bill-discount-field');
+    if(field)return field;
+    field=document.createElement('section');field.className=`pp-bill-discount-field${modal?' pp-bill-discount-modal-field':''}`;
+    field.innerHTML='<label class="pp-bill-discount-toggle"><input type="checkbox" class="pp-bill-discount-enabled"><span>Desconto até a data do vencimento</span></label><div class="pp-bill-discount-value"><span>R$</span><input type="text" inputmode="decimal" class="pp-bill-discount-input" placeholder="0,00" disabled aria-label="Valor do desconto"></div><small>Opcional. Informe o valor em reais que o cliente terá de desconto se pagar até o vencimento.</small><small class="pp-bill-discount-summary"></small>';
+    const checkbox=field.querySelector('.pp-bill-discount-enabled'),input=field.querySelector('.pp-bill-discount-input'),summary=field.querySelector('.pp-bill-discount-summary');
+    const sync=()=>{const enabled=Boolean(checkbox?.checked);field.classList.toggle('is-enabled',enabled);if(input)input.disabled=!enabled;const cents=parseMoney(input?.value);if(summary)summary.textContent=enabled&&cents?`${moneyFromCents(cents)} de desconto até o vencimento.`:''};
+    checkbox?.addEventListener('change',()=>{sync();if(checkbox.checked)setTimeout(()=>input?.focus(),0)});input?.addEventListener('input',sync);sync();
+    root.appendChild(field);return field;
+  }
+  function visibleDiscountField(){return [...document.querySelectorAll('.pp-bill-discount-field')].find(field=>field.offsetParent!==null)||null}
+  function findDueDate(data,field){
+    for(const value of [data?.due_date,data?.dueDate,data?.expire_at,data?.expiration_date]){const v=String(value||'').slice(0,10);if(/^\d{4}-\d{2}-\d{2}$/.test(v))return v}
+    const root=field?.closest('.client-bills-modal,.modal,.dialog,[role="dialog"],.bill-generator,.carnet-fields,.pix-fields,.charge-generator,.invoice-generator')||document;
+    const inputs=[...root.querySelectorAll('input[type="date"],input[name*="due" i],input[name*="venc" i],input[id*="due" i],input[id*="venc" i]')];
+    for(const input of inputs){const v=String(input.value||'').slice(0,10);if(/^\d{4}-\d{2}-\d{2}$/.test(v))return v}
+    return '';
+  }
+  function visibleBillingKind(){
+    const form=[...document.querySelectorAll('.bill-generator')].find(x=>x.offsetParent!==null);
+    const title=normalize(form?.querySelector('.bill-generator-title strong')?.textContent||'');
+    if(title.includes('carne'))return 'carne';
+    if(title.includes('pix automatico'))return 'pix_auto';
+    if(title.includes('pix com vencimento'))return 'pix_due';
+    if(title.includes('avulso'))return 'avulso';
+    return 'boleto';
+  }
+  function applyDiscount(data){
+    const next={...(data||{})},field=visibleDiscountField(),enabled=Boolean(field?.querySelector('.pp-bill-discount-enabled')?.checked);
+    if(!enabled)return next;
+    const kind=visibleBillingKind();
+    if(kind==='carne')throw new Error('O desconto até o vencimento desta opção deve ser usado em boleto, Pix com vencimento ou cobrança avulsa.');
+    if(kind==='pix_auto')throw new Error('Pix Automático usa a regra da recorrência e não aceita este desconto por cobrança nesta tela.');
+    const bank=selectedBank();
+    if(bank==='mercadoPago')throw new Error('Mercado Pago: a API de boleto usada pelo Provedor Plus não oferece desconto condicional até o vencimento. Selecione Efí Bank para usar este desconto.');
+    const cents=parseMoney(field.querySelector('.pp-bill-discount-input')?.value);
+    if(cents<=0)throw new Error('Informe o valor do desconto até o vencimento.');
+    const dueDate=findDueDate(next,field);
+    if(!dueDate)throw new Error('Informe a data de vencimento antes de gerar a cobrança com desconto.');
+    next.discount_until_due=true;
+    next.discount_type='currency';
+    next.discount_cents=cents;
+    next.discount_value_cents=cents;
+    next.discount_amount=cents/100;
+    if(dueDate){
+      next.discount_until_date=dueDate;
+      next.discount_deadline=dueDate;
+      next.conditional_discount={type:'currency',value:cents,until_date:dueDate};
+    }
+    return next;
   }
 
   function selectedBank(){
-    for(const selector of ['.pp-bill-bank-modal-field .pp-bill-bank-select','.bill-generator .pp-bill-bank-select','.carnet-fields .pp-bill-bank-select','.pp-client-bank-select']){
+    for(const selector of ['.pp-bill-bank-modal-field .pp-bill-bank-select','.bill-generator .pp-bill-bank-select','.carnet-fields .pp-bill-bank-select','.pix-fields .pp-bill-bank-select','.charge-generator .pp-bill-bank-select','.invoice-generator .pp-bill-bank-select','.pp-client-bank-select']){
       const el=[...document.querySelectorAll(selector)].find(x=>x.value&&!x.disabled&&x.offsetParent!==null);if(el)return String(el.value)
     }
     return '';
@@ -117,13 +197,15 @@
 
   const invoiceSave=api.invoices.save.bind(api.invoices);
   api.invoices.save=async data=>{
-    const next={...(data||{})};
-    if(!next.id){const bank=selectedBank()||await clientPreferredBank(next.client_id??next.clientId);if(bank)next.bank_provider=bank}
+    let next={...(data||{})};
+    if(!next.id){const bank=selectedBank()||await clientPreferredBank(next.client_id??next.clientId);if(bank)next.bank_provider=bank;next=applyDiscount(next)}
     return invoiceSave(next);
   };
   if(typeof api.invoices.generateInstallments==='function'){
     const generate=api.invoices.generateInstallments.bind(api.invoices);
-    api.invoices.generateInstallments=async data=>{const next={...(data||{})},bank=selectedBank()||await clientPreferredBank(next.client_id??next.clientId);if(bank)next.bank_provider=bank;return generate(next)};
+    api.invoices.generateInstallments=async data=>{
+      let next={...(data||{})},bank=selectedBank()||await clientPreferredBank(next.client_id??next.clientId);if(bank)next.bank_provider=bank;next=applyDiscount(next);return generate(next)
+    };
   }
 
   if(typeof api?.clients?.save==='function'){
@@ -139,18 +221,20 @@
   async function patch(){
     if(running)return;running=true;
     try{
-      const banks=await banksState(),active=readyBanks(banks),bills=clientBillsModal();
+      const banks=await banksState(),active=readyBanks(banks),bills=clientBillsModal(),finance=financeInvoiceModal();
       await patchClientEditor(clientEditor(),banks,active);
       await patchBillsModal(bills,banks,active);
-      for(const container of document.querySelectorAll('.bill-generator,.carnet-fields')){
+      await patchBillsModal(finance,banks,active);
+      for(const container of document.querySelectorAll('.bill-generator,.carnet-fields,.pix-fields,.charge-generator,.invoice-generator')){
         if(container.closest('.pp-client-bills-modal-ready'))continue;
         let field=container.querySelector(':scope > .pp-bill-bank-field');
         if(!field){field=document.createElement('label');field.className='pp-bill-bank-field';field.innerHTML='<span>Banco da cobrança</span><select class="pp-bill-bank-select" aria-label="Banco da cobrança"></select><small>Banco configurado para esta emissão.</small>';container.prepend(field)}
         const select=field.querySelector('select');fillBankSelect(select,active,select?.value||preferredBank(banks,active));
+        ensureDiscountField(container,false);
       }
     }finally{running=false}
   }
-  const observer=new MutationObserver(()=>{if(scheduled)return;scheduled=true;requestAnimationFrame(()=>{scheduled=false;patch().catch(error=>console.error('Provedor Plus: falha ao preparar banco da cobrança.',error))})});
+  const observer=new MutationObserver(()=>{if(scheduled)return;scheduled=true;requestAnimationFrame(()=>{scheduled=false;patch().catch(error=>console.error('Provedor Plus: falha ao preparar cobrança.',error))})});
   observer.observe(document.documentElement,{childList:true,subtree:true});
-  patch().catch(error=>console.error('Provedor Plus: falha ao preparar banco da cobrança.',error));
+  patch().catch(error=>console.error('Provedor Plus: falha ao preparar cobrança.',error));
 })();

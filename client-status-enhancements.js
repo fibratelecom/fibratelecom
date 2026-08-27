@@ -15,7 +15,7 @@
   const originalOpenRouter=typeof api.clients.openRouter==='function'?api.clients.openRouter.bind(api.clients):null;
   let lastResult=null,lastClientId=0,renderTimer=null,liveTimer=null,liveBusy=false,liveSampleCount=0;
 
-  const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[ch]));
+  const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   const pad=n=>String(n).padStart(2,'0');
   const dateTime=value=>{const d=new Date(value);return Number.isNaN(d.getTime())?'—':`${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`};
   const dateOnly=value=>{const d=new Date(`${String(value||'').slice(0,10)}T12:00:00`);return Number.isNaN(d.getTime())?'—':`${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()}`};
@@ -102,21 +102,26 @@
   }
 
   function scheduleRender(id,result){lastClientId=Number(id)||0;lastResult=result||lastResult;clearTimeout(renderTimer);renderTimer=setTimeout(()=>render(lastClientId,lastResult),20)}
-  function hideBlockFromLabel(label,modal){
-    if(!label||label.closest('.client-live-consumption-panel,.client-extra-summary,.client-access-history-panel'))return;
-    let block=label.closest('article,.client-status-item,.client-stat,.status-item,.info-item,.stat-card,.metric-card,.card,section');
-    if(!block){const columns=modal.querySelector('.client-status-columns');if(columns)block=[...columns.children].find(child=>child.contains(label))||null}
-    if(block&&block!==modal&&!block.classList.contains('client-status-columns'))block.style.display='none';
+  function legacyCandidate(label,modal){
+    if(!label||label.closest('.client-live-consumption-panel,.client-extra-summary,.client-access-history-panel'))return null;
+    const direct=label.closest('article,.client-status-item,.client-stat,.status-item,.info-item,.stat-card,.metric-card,.client-status-progress,.traffic-progress,.progress-card,.status-card,.card');
+    if(direct&&direct!==modal&&!direct.classList.contains('client-status-columns'))return direct;
+    let node=label.parentElement,candidate=null,depth=0;
+    while(node&&node!==modal&&!node.classList.contains('client-status-columns')&&depth<5){
+      const text=normalizeLabel(node.textContent);
+      if(text&&text.length<=260&&!text.includes('controle do acesso')&&!text.includes('conexao recente')&&!text.includes('qualidade da conexao')&&!text.includes('situacao financeira'))candidate=node;
+      node=node.parentElement;depth++;
+    }
+    return candidate;
   }
+  function hideBlockFromLabel(label,modal){const block=legacyCandidate(label,modal);if(block)block.style.display='none'}
   function hideLegacyDuplicates(modal){
     const columns=modal.querySelector('.client-status-columns');
     const duplicateTitles=new Set(['dados da conexao','consumo do cliente','consumo mensal','consumo do mes','trafego do cliente','consumo de dados']);
     for(const heading of modal.querySelectorAll('h2,h3,h4')){
       if(heading.closest('.client-live-consumption-panel,.client-extra-summary,.client-access-history-panel'))continue;
       if(!duplicateTitles.has(normalizeLabel(heading.textContent)))continue;
-      let block=heading.closest('section,article,.client-status-card,.status-card,.info-card,.card');
-      if(!block&&columns)block=[...columns.children].find(child=>child.contains(heading))||null;
-      if(block&&block!==modal)block.style.display='none';
+      const block=legacyCandidate(heading,modal);if(block)block.style.display='none';
     }
     const oldLabels=new Set(['tempo conectado','download agora','upload agora','consumo do mes','download no mes','upload no mes','consumo total do mes']);
     for(const label of modal.querySelectorAll('span,small,b,strong'))if(oldLabels.has(normalizeLabel(label.textContent)))hideBlockFromLabel(label,modal);
@@ -124,10 +129,7 @@
       if(label.closest('.client-live-consumption-panel,.client-extra-summary,.client-access-history-panel'))return false;
       const text=normalizeLabel(label.textContent);return text==='download'||text==='upload';
     });
-    for(const label of oldProgressLabels){
-      const block=label.closest('section,.client-status-progress,.traffic-progress,.progress-card,.status-card,.card');
-      if(block&&block!==modal&&!block.classList.contains('client-status-columns'))block.style.display='none';
-    }
+    for(const label of oldProgressLabels)hideBlockFromLabel(label,modal);
     if(columns){const visible=[...columns.children].filter(child=>getComputedStyle(child).display!=='none');if(visible.length===1)columns.style.gridTemplateColumns='minmax(0,1fr)'}
   }
 

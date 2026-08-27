@@ -3,7 +3,7 @@
   window.__ProvedorPlusClientStatusEnhancementsInstalled=true;
 
   const css=document.createElement('link');
-  css.rel='stylesheet';css.href='/client-status-enhancements.css?v=1017-status4';css.id='pp-client-status-enhancements-css';
+  css.rel='stylesheet';css.href='/client-status-enhancements.css?v=1017-status5';css.id='pp-client-status-enhancements-css';
   if(!document.getElementById(css.id))document.head.appendChild(css);
 
   const api=window.provedor;
@@ -12,9 +12,10 @@
   const originalBlock=typeof api.clients.block==='function'?api.clients.block.bind(api.clients):null;
   const originalUnblock=typeof api.clients.unblock==='function'?api.clients.unblock.bind(api.clients):null;
   const originalTrust=typeof api.clients.trustRelease==='function'?api.clients.trustRelease.bind(api.clients):null;
+  const originalOpenRouter=typeof api.clients.openRouter==='function'?api.clients.openRouter.bind(api.clients):null;
   let lastResult=null,lastClientId=0,renderTimer=null,liveTimer=null,liveBusy=false,liveSampleCount=0;
 
-  const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[ch]));
   const pad=n=>String(n).padStart(2,'0');
   const dateTime=value=>{const d=new Date(value);return Number.isNaN(d.getTime())?'—':`${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`};
   const dateOnly=value=>{const d=new Date(`${String(value||'').slice(0,10)}T12:00:00`);return Number.isNaN(d.getTime())?'—':`${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()}`};
@@ -100,26 +101,46 @@
     try{return await api.clients.save(updated)}catch(error){console.error('Provedor Plus: ação concluída, mas o histórico de acesso não pôde ser registrado.',error);return client}
   }
 
-  function scheduleRender(id,result){lastClientId=Number(id)||0;lastResult=result||lastResult;clearTimeout(renderTimer);renderTimer=setTimeout(()=>render(lastClientId,lastResult),40)}
+  function scheduleRender(id,result){lastClientId=Number(id)||0;lastResult=result||lastResult;clearTimeout(renderTimer);renderTimer=setTimeout(()=>render(lastClientId,lastResult),20)}
   function hideBlockFromLabel(label,modal){
-    if(!label||label.closest('.client-live-consumption-panel,.client-extra-summary'))return;
-    let block=label.closest('article,.client-status-item,.client-stat,.status-item,.info-item');
+    if(!label||label.closest('.client-live-consumption-panel,.client-extra-summary,.client-access-history-panel'))return;
+    let block=label.closest('article,.client-status-item,.client-stat,.status-item,.info-item,.stat-card,.metric-card,.card,section');
     if(!block){const columns=modal.querySelector('.client-status-columns');if(columns)block=[...columns.children].find(child=>child.contains(label))||null}
-    if(block&&block!==modal)block.style.display='none';
+    if(block&&block!==modal&&!block.classList.contains('client-status-columns'))block.style.display='none';
   }
   function hideLegacyDuplicates(modal){
     const columns=modal.querySelector('.client-status-columns');
     const duplicateTitles=new Set(['dados da conexao','consumo do cliente','consumo mensal','consumo do mes','trafego do cliente','consumo de dados']);
     for(const heading of modal.querySelectorAll('h2,h3,h4')){
-      if(heading.closest('.client-live-consumption-panel,.client-extra-summary'))continue;
+      if(heading.closest('.client-live-consumption-panel,.client-extra-summary,.client-access-history-panel'))continue;
       if(!duplicateTitles.has(normalizeLabel(heading.textContent)))continue;
       let block=heading.closest('section,article,.client-status-card,.status-card,.info-card,.card');
       if(!block&&columns)block=[...columns.children].find(child=>child.contains(heading))||null;
       if(block&&block!==modal)block.style.display='none';
     }
-    const oldLabels=new Set(['tempo conectado','download no mes','upload no mes','consumo total do mes']);
+    const oldLabels=new Set(['tempo conectado','download agora','upload agora','consumo do mes','download no mes','upload no mes','consumo total do mes']);
     for(const label of modal.querySelectorAll('span,small,b,strong'))if(oldLabels.has(normalizeLabel(label.textContent)))hideBlockFromLabel(label,modal);
+    const oldProgressLabels=[...modal.querySelectorAll('span,small,b,strong,label')].filter(label=>{
+      if(label.closest('.client-live-consumption-panel,.client-extra-summary,.client-access-history-panel'))return false;
+      const text=normalizeLabel(label.textContent);return text==='download'||text==='upload';
+    });
+    for(const label of oldProgressLabels){
+      const block=label.closest('section,.client-status-progress,.traffic-progress,.progress-card,.status-card,.card');
+      if(block&&block!==modal&&!block.classList.contains('client-status-columns'))block.style.display='none';
+    }
     if(columns){const visible=[...columns.children].filter(child=>getComputedStyle(child).display!=='none');if(visible.length===1)columns.style.gridTemplateColumns='minmax(0,1fr)'}
+  }
+
+  async function openClientRouter(id,button){
+    if(!originalOpenRouter){if(button){button.textContent='Acesso indisponível';button.disabled=true}return}
+    const originalText=button?.textContent||'Acessar roteador / ONU';
+    if(button){button.disabled=true;button.textContent='Abrindo…'}
+    try{await originalOpenRouter(id);if(button)button.textContent='Acesso aberto'}
+    catch(error){
+      const message=error instanceof Error?error.message:String(error);
+      if(button){button.textContent=message||'Não foi possível abrir';button.title=message}
+      console.error('Provedor Plus: falha ao abrir o roteador/ONU do cliente.',error);
+    }finally{if(button)setTimeout(()=>{if(button.isConnected){button.disabled=false;button.textContent=originalText}},1800)}
   }
 
   function renderConsumption(modal,id,result){
@@ -130,7 +151,7 @@
     const current=result?.traffic?.current||{},monthDown=Math.max(0,num(current.download_bytes)),monthUp=Math.max(0,num(current.upload_bytes)),monthTotal=monthDown+monthUp;
     const down=Math.max(0,num(result?.downloadBps)),up=Math.max(0,num(result?.uploadBps)),online=result?.connectionState==='online'||result?.online===true,liveAvailable=Boolean(result?.liveRatesAvailable);
     const mode=!online?'ready':liveAvailable?'ready':liveSampleCount<2?'collecting':'unavailable',peak=peakStore(id,down,up);
-    const plan=planName(client),vlan=vlanName(result),pppInterface=displayValue(result?.pppoeInterface),profile=displayValue(result?.profile,client?.mikrotik_profile),pppoe=displayValue(result?.username,client?.pppoe_username,client?.pppoe_user),ip=displayValue(result?.ip,client?.ip),mtu=Number(result?.mtu)>0?String(Math.trunc(Number(result.mtu))):'Não identificado',mac=displayValue(result?.callerId,client?.mac_address),accessPort=displayValue(result?.accessPort,result?.accessInterface),encoding=displayValue(result?.encoding),router=displayValue(result?.routerName,client?.router_name);
+    const plan=planName(client),vlan=vlanName(result),pppInterface=displayValue(result?.pppoeInterface),profile=displayValue(result?.profile,client?.mikrotik_profile),pppoe=displayValue(result?.username,client?.pppoe_username,client?.pppoe_user),ip=displayValue(result?.ip,client?.ip),mtu=Number(result?.mtu)>0?String(Math.trunc(Number(result.mtu))):'Não identificado',mac=displayValue(result?.callerId,client?.mac_address),accessPort=displayValue(result?.accessPort,result?.accessInterface),encoding=displayValue(result?.encoding),router=displayValue(result?.routerName,client?.router_name),deviceIp=String(client?.device_ip||'').trim();
     panel.innerHTML=`
       <div class="client-live-consumption-head"><div><h3>Consumo e conexão do cliente</h3><p>Tráfego PPPoE, consumo do mês e dados técnicos da conexão</p></div><span class="tone-${online?'good':result?.connectionState==='offline'?'bad':'warn'}">${esc(online?'Online':result?.connectionState==='offline'?'Offline':'Indisponível')}</span></div>
       <div class="client-live-consumption-body">
@@ -150,13 +171,17 @@
         <article><span>MTU</span><strong>${esc(mtu)}</strong></article>
         <article><span>MAC / Caller ID</span><strong>${esc(mac)}</strong></article>
         <article><span>MikroTik concentrador</span><strong>${esc(router)}</strong></article>
-      </div>`;
+      </div>
+      <div class="client-remote-access"><div><strong>Acesso remoto ao equipamento</strong><small>${esc(deviceIp?`Roteador / ONU: ${deviceIp}`:'Cadastre o IP do roteador ou ONU do cliente para abrir o equipamento.')}</small></div><button type="button" data-client-open-router>Acessar roteador / ONU</button></div>`;
+    const remoteButton=panel.querySelector('[data-client-open-router]');
+    if(remoteButton)remoteButton.addEventListener('click',()=>openClientRouter(id,remoteButton));
   }
 
   function render(id,result){
     const modal=document.querySelector('.client-status-modal');if(!modal||!result?.client)return;
     const client=result.client,title=modal.querySelector('.modal-head h2,h2')?.textContent||'';if(client.name&&title&&!title.includes(client.name))return;
     const columns=modal.querySelector('.client-status-columns');if(!columns)return;
+    hideLegacyDuplicates(modal);
     const fin=financial(id),q=quality(result),lastOnline=client.last_online_at,lastOffline=client.last_offline_at,online=result.connectionState==='online'||result.online===true,uptime=online?displayValue(result?.uptime):'—';
     let summary=modal.querySelector('.client-extra-summary');if(!summary){summary=document.createElement('section');summary.className='client-extra-summary';columns.before(summary)}
     const nextText=fin.nextDate?`${dateOnly(fin.nextDate)}${Number.isFinite(fin.nextCents)?` • ${money(fin.nextCents)}`:''}`:'Nenhuma cobrança futura',financeMain=fin.overdueCount?`${fin.overdueCount} vencida${fin.overdueCount===1?'':'s'}`:'Em dia',financeDetail=fin.overdueCount?`${fin.overdueDays} dia${fin.overdueDays===1?'':'s'} de atraso`:`Próxima: ${nextText}`;
@@ -169,6 +194,7 @@
     let history=modal.querySelector('.client-access-history-panel');if(!history){history=document.createElement('section');history.className='client-access-history-panel';columns.after(history)}
     const rows=(Array.isArray(client.access_history)?client.access_history:[]).slice(0,5);
     history.innerHTML=`<div class="client-access-history-head"><div><h3>Histórico de ações no acesso</h3><p>Bloqueios, desbloqueios e liberações realizados pelo painel.</p></div><span>Últimas ${rows.length||0}</span></div>${rows.length?`<div class="client-access-history-list">${rows.map(item=>`<article><span class="client-access-action-dot"></span><div><strong>${esc(item.action||'Ação')}</strong><small>${esc(item.detail||'Sem observação')}</small></div><div><b>${esc(item.user||'Administrador')}</b><small>${esc(dateTime(item.at))}</small></div></article>`).join('')}</div>`:`<div class="client-access-history-empty">Nenhuma ação de acesso registrada a partir desta atualização.</div>`}`;
+    modal.classList.add('pp-client-status-ready');
   }
 
   function stopLivePolling(){if(liveTimer){clearInterval(liveTimer);liveTimer=null}liveBusy=false}
@@ -191,6 +217,10 @@
   if(originalUnblock)api.clients.unblock=async id=>{const saved=await originalUnblock(id),updated=await appendAccessHistory(saved,'Desbloqueio','Acesso PPPoE liberado pelo painel');scheduleRender(id,{...(lastResult||{}),client:updated||saved,connectionState:lastResult?.connectionState});return updated||saved};
   if(originalTrust)api.clients.trustRelease=async(id,hours=48)=>{const saved=await originalTrust(id,hours),safeHours=Math.min(48,Math.max(1,Math.floor(Number(hours)||48))),updated=await appendAccessHistory(saved,'Liberação em confiança',`Liberação temporária por ${safeHours} hora${safeHours===1?'':'s'}`);scheduleRender(id,{...(lastResult||{}),client:updated||saved,connectionState:lastResult?.connectionState});return updated||saved};
 
-  const observer=new MutationObserver(()=>{const modal=document.querySelector('.client-status-modal');if(modal&&lastResult&&!modal.querySelector('.client-extra-summary'))scheduleRender(lastClientId,lastResult);if(!modal)stopLivePolling()});
+  const observer=new MutationObserver(()=>{
+    const modal=document.querySelector('.client-status-modal');
+    if(modal&&lastResult){hideLegacyDuplicates(modal);if(!modal.querySelector('.client-extra-summary'))scheduleRender(lastClientId,lastResult)}
+    if(!modal)stopLivePolling();
+  });
   observer.observe(document.body,{childList:true,subtree:true});
 })();

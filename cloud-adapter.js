@@ -59,8 +59,11 @@
       const baseStatus=await base.clients.status(id),client=baseStatus?.client||await clientRecord(id);
       if(client?.connection_type!=='PPPoE'||!client?.router_id||!client?.pppoe_username)return baseStatus;
       try{
-        const router=await routerAuth(client.router_id),live=await cloudCall('client.status',{router,data:clone(client)}),traffic=await trafficRecord(id,live);
-        return {...baseStatus,...live,routerId:Number(client.router_id)||0,routerName:client.router_name||router.name,routerHost:router.host,connectionState:live.online?'online':'offline',connectionError:'',liveRatesAvailable:Boolean(live.liveRatesAvailable)||Number(traffic?.downloadBps)>0||Number(traffic?.uploadBps)>0,downloadBps:Number(live.downloadBps)||Number(traffic?.downloadBps)||0,uploadBps:Number(live.uploadBps)||Number(traffic?.uploadBps)||0,traffic:traffic||baseStatus.traffic};
+        const router=await routerAuth(client.router_id),live=await cloudCall('client.status',{router,data:clone(client)});
+        let traffic=baseStatus.traffic||null,trafficError='';
+        try{traffic=await trafficRecord(id,live)||traffic}catch(error){trafficError=error instanceof Error?error.message:String(error);console.error('Provedor Plus: leitura do MikroTik concluída, mas o consumo mensal não pôde ser gravado.',error)}
+        const liveDown=Number(live.downloadBps),liveUp=Number(live.uploadBps),trafficDown=Number(traffic?.downloadBps),trafficUp=Number(traffic?.uploadBps);
+        return {...baseStatus,...live,routerId:Number(client.router_id)||0,routerName:client.router_name||router.name,routerHost:router.host,connectionState:live.online?'online':'offline',connectionError:'',trafficError,liveRatesAvailable:Boolean(live.liveRatesAvailable)||(Number.isFinite(trafficDown)&&trafficDown>0)||(Number.isFinite(trafficUp)&&trafficUp>0),downloadBps:Number.isFinite(liveDown)?Math.max(0,liveDown):(Number.isFinite(trafficDown)?Math.max(0,trafficDown):0),uploadBps:Number.isFinite(liveUp)?Math.max(0,liveUp):(Number.isFinite(trafficUp)?Math.max(0,trafficUp):0),traffic:traffic||baseStatus.traffic};
       }catch(error){return {...baseStatus,connectionState:'unavailable',connectionError:error instanceof Error?error.message:String(error),liveRatesAvailable:false}}
     };
     api.clients.block=async id=>{

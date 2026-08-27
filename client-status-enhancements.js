@@ -3,7 +3,7 @@
   window.__ProvedorPlusClientStatusEnhancementsInstalled=true;
 
   const css=document.createElement('link');
-  css.rel='stylesheet';css.href='/client-status-enhancements.css?v=1017-status3';css.id='pp-client-status-enhancements-css';
+  css.rel='stylesheet';css.href='/client-status-enhancements.css?v=1017-status4';css.id='pp-client-status-enhancements-css';
   if(!document.getElementById(css.id))document.head.appendChild(css);
 
   const api=window.provedor;
@@ -12,7 +12,7 @@
   const originalBlock=typeof api.clients.block==='function'?api.clients.block.bind(api.clients):null;
   const originalUnblock=typeof api.clients.unblock==='function'?api.clients.unblock.bind(api.clients):null;
   const originalTrust=typeof api.clients.trustRelease==='function'?api.clients.trustRelease.bind(api.clients):null;
-  let lastResult=null,lastClientId=0,renderTimer=null,liveTimer=null,liveBusy=false;
+  let lastResult=null,lastClientId=0,renderTimer=null,liveTimer=null,liveBusy=false,liveSampleCount=0;
 
   const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   const pad=n=>String(n).padStart(2,'0');
@@ -25,7 +25,7 @@
   const formatBytes=value=>{let n=Math.max(0,num(value));const units=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<units.length-1){n/=1024;i++}return `${new Intl.NumberFormat('pt-BR',{maximumFractionDigits:i<2?0:1}).format(n)} ${units[i]}`};
   const rateParts=value=>{let n=Math.max(0,num(value));const units=['bps','Kbps','Mbps','Gbps'];let i=0;while(n>=1000&&i<units.length-1){n/=1000;i++}return {value:new Intl.NumberFormat('pt-BR',{maximumFractionDigits:i<2?0:1}).format(n),unit:units[i]}};
   const normalizeLabel=value=>String(value??'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
-  const displayValue=(...values)=>{for(const value of values){if(value===undefined||value===null)continue;const text=String(value).trim();if(!text||['undefined','null','nan'].includes(text.toLowerCase()))continue;return text}return 'Não identificado'};
+  const displayValue=(...values)=>{for(const value of values){if(value===undefined||value===null)continue;const valueText=String(value).trim();if(!valueText||['undefined','null','nan'].includes(valueText.toLowerCase()))continue;return valueText}return 'Não identificado'};
 
   function state(){return window.ProvedorPlusCloudState?.getState?.()||{}}
   function userName(){return String(state()?.settings?.current_user_name||'Administrador').trim()||'Administrador'}
@@ -48,9 +48,9 @@
   function vlanName(result){
     const raw=result?.vlanId??result?.vlan??result?.client?.vlan_id??result?.client?.vlan;
     if(raw===undefined||raw===null||raw==='')return 'Não identificada';
-    const text=String(raw).trim();
-    if(!text||['undefined','null','nan','0'].includes(text.toLowerCase()))return 'Não identificada';
-    const n=Number(text);return Number.isFinite(n)&&n>0?`VLAN ${Math.trunc(n)}`:(/^vlan\s+/i.test(text)?text:`VLAN ${text}`);
+    const valueText=String(raw).trim();
+    if(!valueText||['undefined','null','nan','0'].includes(valueText.toLowerCase()))return 'Não identificada';
+    const n=Number(valueText);return Number.isFinite(n)&&n>0?`VLAN ${Math.trunc(n)}`:(/^vlan\s+/i.test(valueText)?valueText:`VLAN ${valueText}`);
   }
   function peakStore(clientId,down,up){
     const key=`pp_client_peak_${Number(clientId)||0}_${dayKey(new Date())}`,value={down:0,up:0};
@@ -60,33 +60,27 @@
     try{localStorage.setItem(key,JSON.stringify(value))}catch{}
     return value;
   }
-  function trafficRing(value,peak,kind,collecting=false){
-    const parts=rateParts(value),deg=collecting?55:(peak>0?Math.max(0,Math.min(360,num(value)/peak*360)):0);
-    return `<div class="client-traffic-gauge-item"><div class="client-traffic-ring ${kind==='up'?'client-traffic-ring-up':''} ${collecting?'is-collecting':''}" style="--client-ring-deg:${deg}deg"><b>${collecting?'…':esc(parts.value)}</b><small>${collecting?'COLETANDO':esc(parts.unit)}</small></div><span>${kind==='up'?'Upload':'Download'} atual</span></div>`;
+  function trafficRing(value,peak,kind,mode='ready'){
+    const parts=rateParts(value),collecting=mode==='collecting',unavailable=mode==='unavailable',deg=collecting?55:(peak>0?Math.max(0,Math.min(360,num(value)/peak*360)):0);
+    const main=collecting?'…':unavailable?'—':esc(parts.value),unit=collecting?'COLETANDO':unavailable?'SEM LEITURA':esc(parts.unit);
+    return `<div class="client-traffic-gauge-item"><div class="client-traffic-ring ${kind==='up'?'client-traffic-ring-up':''} ${collecting?'is-collecting':''} ${unavailable?'is-unavailable':''}" style="--client-ring-deg:${deg}deg"><b>${main}</b><small>${unit}</small></div><span>${kind==='up'?'Upload':'Download'} atual</span></div>`;
   }
 
   function financial(clientId){
     const current=state(),invoices=(Array.isArray(current?.invoices)?current.invoices:[]).filter(x=>invoiceClientId(x)===Number(clientId)&&!isPaid(x));
-    const today=dayKey(new Date());
-    const pending=invoices.filter(x=>String(x?.due_date||x?.dueDate||'').slice(0,10));
+    const today=dayKey(new Date()),pending=invoices.filter(x=>String(x?.due_date||x?.dueDate||'').slice(0,10));
     const overdue=pending.filter(x=>String(x?.due_date||x?.dueDate||'').slice(0,10)<today).sort((a,b)=>String(a?.due_date||a?.dueDate||'').localeCompare(String(b?.due_date||b?.dueDate||'')));
     const future=pending.filter(x=>String(x?.due_date||x?.dueDate||'').slice(0,10)>=today).sort((a,b)=>String(a?.due_date||a?.dueDate||'').localeCompare(String(b?.due_date||b?.dueDate||'')));
     let overdueDays=0;
-    if(overdue[0]){
-      const due=new Date(`${String(overdue[0]?.due_date||overdue[0]?.dueDate).slice(0,10)}T12:00:00`),now=new Date();now.setHours(12,0,0,0);
-      overdueDays=Math.max(0,Math.floor((now-due)/86400000));
-    }
+    if(overdue[0]){const due=new Date(`${String(overdue[0]?.due_date||overdue[0]?.dueDate).slice(0,10)}T12:00:00`),now=new Date();now.setHours(12,0,0,0);overdueDays=Math.max(0,Math.floor((now-due)/86400000))}
     const next=future[0]||(!overdue.length?pending[0]:null);
     return {overdueCount:overdue.length,overdueDays,next,nextDate:next?String(next?.due_date||next?.dueDate||'').slice(0,10):'',nextCents:next?invoiceCents(next):NaN};
   }
-
   function quality(result){
     if(result?.connectionState==='offline')return {label:'Sem conexão',tone:'bad',detail:'PPPoE offline',latency:'—',loss:'—'};
     if(result?.connectionState==='unavailable')return {label:'Indisponível',tone:'warn',detail:'MikroTik sem resposta',latency:'—',loss:'—'};
     if(result?.qualityAvailable){
-      const latency=Math.max(0,Math.round(Number(result.latencyMs)||0)),loss=Math.max(0,Math.min(100,Number(result.packetLoss)||0));
-      const raw=String(result.quality||'').toLowerCase();
-      const tone=raw.includes('ruim')?'bad':raw.includes('aten')?'warn':'good';
+      const latency=Math.max(0,Math.round(Number(result.latencyMs)||0)),loss=Math.max(0,Math.min(100,Number(result.packetLoss)||0)),raw=String(result.quality||'').toLowerCase(),tone=raw.includes('ruim')?'bad':raw.includes('aten')?'warn':'good';
       return {label:String(result.quality||'Boa'),tone,detail:'Ping pelo MikroTik',latency:`${latency} ms`,loss:`${Math.round(loss)}%`};
     }
     if(result?.connectionState==='online')return {label:'Conectado',tone:'good',detail:'Sessão PPPoE ativa',latency:'Não medido',loss:'Não medido'};
@@ -95,56 +89,52 @@
 
   async function persistTransition(id,result){
     const client=result?.client;if(!client)return client;
-    const next=result?.connectionState;
-    if(next!=='online'&&next!=='offline')return client;
-    if(String(client.connection_last_state||'')===next)return client;
-    const at=String(result?.checkedAt||new Date().toISOString());
-    const patch={...client,connection_last_state:next,connection_last_checked_at:at};
+    const next=result?.connectionState;if(next!=='online'&&next!=='offline')return client;if(String(client.connection_last_state||'')===next)return client;
+    const at=String(result?.checkedAt||new Date().toISOString()),patch={...client,connection_last_state:next,connection_last_checked_at:at};
     if(next==='online')patch.last_online_at=at;else patch.last_offline_at=at;
     try{return await api.clients.save(patch)}catch(error){console.error('Provedor Plus: não foi possível registrar a transição da conexão.',error);return patch}
   }
-
   async function appendAccessHistory(client,action,detail=''){
     if(!client?.id)return client;
-    const current=Array.isArray(client.access_history)?client.access_history:[];
-    const event={at:new Date().toISOString(),action:String(action),user:userName(),detail:String(detail||'')};
-    const updated={...client,access_history:[event,...current].slice(0,20)};
+    const current=Array.isArray(client.access_history)?client.access_history:[],event={at:new Date().toISOString(),action:String(action),user:userName(),detail:String(detail||'')},updated={...client,access_history:[event,...current].slice(0,20)};
     try{return await api.clients.save(updated)}catch(error){console.error('Provedor Plus: ação concluída, mas o histórico de acesso não pôde ser registrado.',error);return client}
   }
 
   function scheduleRender(id,result){lastClientId=Number(id)||0;lastResult=result||lastResult;clearTimeout(renderTimer);renderTimer=setTimeout(()=>render(lastClientId,lastResult),40)}
-
+  function hideBlockFromLabel(label,modal){
+    if(!label||label.closest('.client-live-consumption-panel,.client-extra-summary'))return;
+    let block=label.closest('article,.client-status-item,.client-stat,.status-item,.info-item');
+    if(!block){const columns=modal.querySelector('.client-status-columns');if(columns)block=[...columns.children].find(child=>child.contains(label))||null}
+    if(block&&block!==modal)block.style.display='none';
+  }
   function hideLegacyDuplicates(modal){
     const columns=modal.querySelector('.client-status-columns');
     const duplicateTitles=new Set(['dados da conexao','consumo do cliente','consumo mensal','consumo do mes','trafego do cliente','consumo de dados']);
     for(const heading of modal.querySelectorAll('h2,h3,h4')){
-      if(heading.closest('.client-live-consumption-panel'))continue;
+      if(heading.closest('.client-live-consumption-panel,.client-extra-summary'))continue;
       if(!duplicateTitles.has(normalizeLabel(heading.textContent)))continue;
       let block=heading.closest('section,article,.client-status-card,.status-card,.info-card,.card');
-      if(!block&&columns){block=[...columns.children].find(child=>child.contains(heading))||null}
+      if(!block&&columns)block=[...columns.children].find(child=>child.contains(heading))||null;
       if(block&&block!==modal)block.style.display='none';
     }
-    if(columns){
-      const visible=[...columns.children].filter(child=>child.style.display!=='none');
-      if(visible.length===1)columns.style.gridTemplateColumns='minmax(0,1fr)';
-    }
+    const oldLabels=new Set(['tempo conectado','download no mes','upload no mes','consumo total do mes']);
+    for(const label of modal.querySelectorAll('span,small,b,strong'))if(oldLabels.has(normalizeLabel(label.textContent)))hideBlockFromLabel(label,modal);
+    if(columns){const visible=[...columns.children].filter(child=>getComputedStyle(child).display!=='none');if(visible.length===1)columns.style.gridTemplateColumns='minmax(0,1fr)'}
   }
 
   function renderConsumption(modal,id,result){
     const client=result?.client;if(!client)return;
     const columns=modal.querySelector('.client-status-columns');if(!columns)return;
     hideLegacyDuplicates(modal);
-    let panel=modal.querySelector('.client-live-consumption-panel');
-    if(!panel){panel=document.createElement('section');panel.className='client-live-consumption-panel';columns.before(panel)}
+    let panel=modal.querySelector('.client-live-consumption-panel');if(!panel){panel=document.createElement('section');panel.className='client-live-consumption-panel';columns.before(panel)}
     const current=result?.traffic?.current||{},monthDown=Math.max(0,num(current.download_bytes)),monthUp=Math.max(0,num(current.upload_bytes)),monthTotal=monthDown+monthUp;
-    const down=Math.max(0,num(result?.downloadBps)),up=Math.max(0,num(result?.uploadBps)),online=result?.connectionState==='online'||result?.online===true;
-    const collecting=online&&!result?.liveRatesAvailable&&down===0&&up===0;
-    const peak=peakStore(id,down,up);
+    const down=Math.max(0,num(result?.downloadBps)),up=Math.max(0,num(result?.uploadBps)),online=result?.connectionState==='online'||result?.online===true,liveAvailable=Boolean(result?.liveRatesAvailable);
+    const mode=!online?'ready':liveAvailable?'ready':liveSampleCount<2?'collecting':'unavailable',peak=peakStore(id,down,up);
     const plan=planName(client),vlan=vlanName(result),pppInterface=displayValue(result?.pppoeInterface),profile=displayValue(result?.profile,client?.mikrotik_profile),pppoe=displayValue(result?.username,client?.pppoe_username,client?.pppoe_user),ip=displayValue(result?.ip,client?.ip),mtu=Number(result?.mtu)>0?String(Math.trunc(Number(result.mtu))):'Não identificado',mac=displayValue(result?.callerId,client?.mac_address),accessPort=displayValue(result?.accessPort,result?.accessInterface),encoding=displayValue(result?.encoding),router=displayValue(result?.routerName,client?.router_name);
     panel.innerHTML=`
       <div class="client-live-consumption-head"><div><h3>Consumo e conexão do cliente</h3><p>Tráfego PPPoE, consumo do mês e dados técnicos da conexão</p></div><span class="tone-${online?'good':result?.connectionState==='offline'?'bad':'warn'}">${esc(online?'Online':result?.connectionState==='offline'?'Offline':'Indisponível')}</span></div>
       <div class="client-live-consumption-body">
-        <div class="client-traffic-gauges">${trafficRing(down,peak.down,'down',collecting)}${trafficRing(up,peak.up,'up',collecting)}</div>
+        <div class="client-traffic-gauges">${trafficRing(down,peak.down,'down',mode)}${trafficRing(up,peak.up,'up',mode)}</div>
         <div class="client-month-usage"><article><span>Download no mês</span><strong>${esc(formatBytes(monthDown))}</strong></article><article><span>Upload no mês</span><strong>${esc(formatBytes(monthUp))}</strong></article><article><span>Consumo total do mês</span><strong>${esc(formatBytes(monthTotal))}</strong></article></div>
       </div>
       <div class="client-access-facts">
@@ -165,36 +155,18 @@
 
   function render(id,result){
     const modal=document.querySelector('.client-status-modal');if(!modal||!result?.client)return;
-    const client=result.client,title=modal.querySelector('.modal-head h2,h2')?.textContent||'';
-    if(client.name&&title&&!title.includes(client.name))return;
+    const client=result.client,title=modal.querySelector('.modal-head h2,h2')?.textContent||'';if(client.name&&title&&!title.includes(client.name))return;
     const columns=modal.querySelector('.client-status-columns');if(!columns)return;
-    const fin=financial(id),q=quality(result),lastOnline=client.last_online_at,lastOffline=client.last_offline_at;
-    let summary=modal.querySelector('.client-extra-summary');
-    if(!summary){summary=document.createElement('section');summary.className='client-extra-summary';columns.before(summary)}
-    const nextText=fin.nextDate?`${dateOnly(fin.nextDate)}${Number.isFinite(fin.nextCents)?` • ${money(fin.nextCents)}`:''}`:'Nenhuma cobrança futura';
-    const financeMain=fin.overdueCount?`${fin.overdueCount} vencida${fin.overdueCount===1?'':'s'}`:'Em dia';
-    const financeDetail=fin.overdueCount?`${fin.overdueDays} dia${fin.overdueDays===1?'':'s'} de atraso`:`Próxima: ${nextText}`;
+    const fin=financial(id),q=quality(result),lastOnline=client.last_online_at,lastOffline=client.last_offline_at,online=result.connectionState==='online'||result.online===true,uptime=online?displayValue(result?.uptime):'—';
+    let summary=modal.querySelector('.client-extra-summary');if(!summary){summary=document.createElement('section');summary.className='client-extra-summary';columns.before(summary)}
+    const nextText=fin.nextDate?`${dateOnly(fin.nextDate)}${Number.isFinite(fin.nextCents)?` • ${money(fin.nextCents)}`:''}`:'Nenhuma cobrança futura',financeMain=fin.overdueCount?`${fin.overdueCount} vencida${fin.overdueCount===1?'':'s'}`:'Em dia',financeDetail=fin.overdueCount?`${fin.overdueDays} dia${fin.overdueDays===1?'':'s'} de atraso`:`Próxima: ${nextText}`;
     summary.innerHTML=`
-      <article class="client-extra-card">
-        <div class="client-extra-title"><span>CONEXÃO RECENTE</span><b class="tone-${result.connectionState==='online'?'good':result.connectionState==='offline'?'bad':'warn'}">${esc(result.connectionState==='online'?'Online':result.connectionState==='offline'?'Offline':'Indisponível')}</b></div>
-        <strong>${esc(lastOnline?dateTime(lastOnline):'Último online não registrado')}</strong>
-        <small>${esc(lastOffline?`Última queda detectada: ${dateTime(lastOffline)} ${relative(lastOffline)}`:'Nenhuma queda registrada pelo painel')}</small>
-      </article>
-      <article class="client-extra-card">
-        <div class="client-extra-title"><span>QUALIDADE DA CONEXÃO</span><b class="tone-${q.tone}">${esc(q.label)}</b></div>
-        <strong>${esc(q.latency)} <em>latência</em></strong>
-        <small>Perda: ${esc(q.loss)} • ${esc(q.detail)}</small>
-      </article>
-      <article class="client-extra-card">
-        <div class="client-extra-title"><span>SITUAÇÃO FINANCEIRA</span><b class="tone-${fin.overdueCount?'bad':'good'}">${esc(fin.overdueCount?'Atenção':'Regular')}</b></div>
-        <strong>${esc(financeMain)}</strong>
-        <small>${esc(financeDetail)}</small>
-      </article>`;
-
+      <article class="client-extra-card"><div class="client-extra-title"><span>CONEXÃO RECENTE</span><b class="tone-${online?'good':result.connectionState==='offline'?'bad':'warn'}">${esc(online?'Online':result.connectionState==='offline'?'Offline':'Indisponível')}</b></div><strong>${esc(lastOnline?dateTime(lastOnline):'Último online não registrado')}</strong><small>${esc(lastOffline?`Última queda detectada: ${dateTime(lastOffline)} ${relative(lastOffline)}`:'Nenhuma queda registrada pelo painel')}</small></article>
+      <article class="client-extra-card"><div class="client-extra-title"><span>QUALIDADE DA CONEXÃO</span><b class="tone-${q.tone}">${esc(q.label)}</b></div><strong>${esc(q.latency)} <em>latência</em></strong><small>Perda: ${esc(q.loss)} • ${esc(q.detail)}</small></article>
+      <article class="client-extra-card"><div class="client-extra-title"><span>SITUAÇÃO FINANCEIRA</span><b class="tone-${fin.overdueCount?'bad':'good'}">${esc(fin.overdueCount?'Atenção':'Regular')}</b></div><strong>${esc(financeMain)}</strong><small>${esc(financeDetail)}</small></article>
+      <article class="client-extra-card client-uptime-card"><div class="client-extra-title"><span>◷ TEMPO CONECTADO</span><b class="tone-${online?'good':'neutral'}">${esc(online?'Ativo':'Offline')}</b></div><strong>${esc(uptime)}</strong><small>${esc(online?'Sessão ativa':'Sem sessão PPPoE ativa')}</small></article>`;
     renderConsumption(modal,id,result);
-
-    let history=modal.querySelector('.client-access-history-panel');
-    if(!history){history=document.createElement('section');history.className='client-access-history-panel';columns.after(history)}
+    let history=modal.querySelector('.client-access-history-panel');if(!history){history=document.createElement('section');history.className='client-access-history-panel';columns.after(history)}
     const rows=(Array.isArray(client.access_history)?client.access_history:[]).slice(0,5);
     history.innerHTML=`<div class="client-access-history-head"><div><h3>Histórico de ações no acesso</h3><p>Bloqueios, desbloqueios e liberações realizados pelo painel.</p></div><span>Últimas ${rows.length||0}</span></div>${rows.length?`<div class="client-access-history-list">${rows.map(item=>`<article><span class="client-access-action-dot"></span><div><strong>${esc(item.action||'Ação')}</strong><small>${esc(item.detail||'Sem observação')}</small></div><div><b>${esc(item.user||'Administrador')}</b><small>${esc(dateTime(item.at))}</small></div></article>`).join('')}</div>`:`<div class="client-access-history-empty">Nenhuma ação de acesso registrada a partir desta atualização.</div>`}`;
   }
@@ -203,28 +175,21 @@
   function startLivePolling(){
     stopLivePolling();
     liveTimer=setInterval(async()=>{
-      const modal=document.querySelector('.client-status-modal');
-      if(!modal||!lastClientId){stopLivePolling();return}
-      if(liveBusy)return;
+      const modal=document.querySelector('.client-status-modal');if(!modal||!lastClientId){stopLivePolling();return}if(liveBusy)return;
       liveBusy=true;
-      try{
-        const result=await originalStatus(lastClientId);
-        if(result?.client){const updated=await persistTransition(lastClientId,result);if(updated)result.client={...result.client,...updated}}
-        scheduleRender(lastClientId,result);
-      }catch(error){console.error('Provedor Plus: falha ao atualizar consumo do cliente.',error)}finally{liveBusy=false}
+      try{const result=await originalStatus(lastClientId);liveSampleCount++;if(result?.client){const updated=await persistTransition(lastClientId,result);if(updated)result.client={...result.client,...updated}}scheduleRender(lastClientId,result)}
+      catch(error){console.error('Provedor Plus: falha ao atualizar consumo do cliente.',error)}finally{liveBusy=false}
     },3000);
   }
 
   api.clients.status=async id=>{
-    const result=await originalStatus(id);
-    if(result?.client){const updated=await persistTransition(id,result);if(updated)result.client={...result.client,...updated}}
-    scheduleRender(id,result);startLivePolling();
-    return result;
+    const numericId=Number(id)||0;if(numericId!==lastClientId)liveSampleCount=0;
+    const result=await originalStatus(id);if(result?.client){const updated=await persistTransition(id,result);if(updated)result.client={...result.client,...updated}}
+    scheduleRender(id,result);startLivePolling();return result;
   };
-
-  if(originalBlock)api.clients.block=async id=>{const saved=await originalBlock(id);const updated=await appendAccessHistory(saved,'Bloqueio','Acesso PPPoE bloqueado pelo painel');scheduleRender(id,{...(lastResult||{}),client:updated||saved,connectionState:lastResult?.connectionState});return updated||saved};
-  if(originalUnblock)api.clients.unblock=async id=>{const saved=await originalUnblock(id);const updated=await appendAccessHistory(saved,'Desbloqueio','Acesso PPPoE liberado pelo painel');scheduleRender(id,{...(lastResult||{}),client:updated||saved,connectionState:lastResult?.connectionState});return updated||saved};
-  if(originalTrust)api.clients.trustRelease=async(id,hours=48)=>{const saved=await originalTrust(id,hours);const safeHours=Math.min(48,Math.max(1,Math.floor(Number(hours)||48)));const updated=await appendAccessHistory(saved,'Liberação em confiança',`Liberação temporária por ${safeHours} hora${safeHours===1?'':'s'}`);scheduleRender(id,{...(lastResult||{}),client:updated||saved,connectionState:lastResult?.connectionState});return updated||saved};
+  if(originalBlock)api.clients.block=async id=>{const saved=await originalBlock(id),updated=await appendAccessHistory(saved,'Bloqueio','Acesso PPPoE bloqueado pelo painel');scheduleRender(id,{...(lastResult||{}),client:updated||saved,connectionState:lastResult?.connectionState});return updated||saved};
+  if(originalUnblock)api.clients.unblock=async id=>{const saved=await originalUnblock(id),updated=await appendAccessHistory(saved,'Desbloqueio','Acesso PPPoE liberado pelo painel');scheduleRender(id,{...(lastResult||{}),client:updated||saved,connectionState:lastResult?.connectionState});return updated||saved};
+  if(originalTrust)api.clients.trustRelease=async(id,hours=48)=>{const saved=await originalTrust(id,hours),safeHours=Math.min(48,Math.max(1,Math.floor(Number(hours)||48))),updated=await appendAccessHistory(saved,'Liberação em confiança',`Liberação temporária por ${safeHours} hora${safeHours===1?'':'s'}`);scheduleRender(id,{...(lastResult||{}),client:updated||saved,connectionState:lastResult?.connectionState});return updated||saved};
 
   const observer=new MutationObserver(()=>{const modal=document.querySelector('.client-status-modal');if(modal&&lastResult&&!modal.querySelector('.client-extra-summary'))scheduleRender(lastClientId,lastResult);if(!modal)stopLivePolling()});
   observer.observe(document.body,{childList:true,subtree:true});

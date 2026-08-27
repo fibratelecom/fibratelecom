@@ -1,4 +1,5 @@
-const {db,passwordHash,passwordVerify,createSession,currentSession,requireAuth,requireAdmin,getUserAccess,defaultPermissions,normalizePermissions,normalizeRole,ALL_PERMISSIONS,PROFILE_PREFIX,clearSessionCookie,cookies,sha256,COOKIE}=require('../lib/cloud-auth');
+const crypto=require('crypto');
+const {db,passwordHash,passwordVerify,createSession,currentSession,requireAuth,requireAdmin,getUserAccess,normalizePermissions,normalizeRole,ALL_PERMISSIONS,PROFILE_PREFIX,clearSessionCookie,cookies,sha256,COOKIE}=require('../lib/cloud-auth');
 const text=v=>String(v??'').trim();
 const profileKey=id=>`${PROFILE_PREFIX}${Number(id)}`;
 const safeUser=user=>user?{id:Number(user.id),email:text(user.email),name:text(user.name),role:normalizeRole(user.role),created_at:user.created_at||null}:null;
@@ -15,6 +16,7 @@ async function saveProfile(req,id,profile){
   return Array.isArray(inserted)?inserted[0]:inserted;
 }
 async function revokeSessions(req,userId){await db(req,`/pp_sessions?user_id=eq.${Number(userId)}`,{method:'DELETE',headers:{Prefer:'return=minimal'}}).catch(()=>{})}
+async function deleteProfile(req,id){await db(req,`/pp_settings?key=eq.${encodeURIComponent(profileKey(id))}`,{method:'DELETE',headers:{Prefer:'return=minimal'}}).catch(()=>{})}
 
 module.exports=async function handler(req,res){
   res.setHeader('Cache-Control','no-store');
@@ -70,22 +72,55 @@ module.exports=async function handler(req,res){
       return res.status(200).json({ok:true,data:out});
     }
     if(action==='employees.save'){
-      const current=await requireAdmin(req),id=Number(data.id)||0,name=text(data.name),login=text(data.login||data.email).toLowerCase(),role=normalizeRole(data.role),password=String(data.password||'');
+      const current=await requireAdmin(req),id=Number(data.id)||0,name=text(data.name),login=text(data.login||data.email).toLowerCase(),role=normalizeRole(data.role),password=String(data.password||''),phone=text(data.phone);
       if(name.length<2)throw Object.assign(new Error('Informe o nome do funcionário.'),{statusCode:400});
       if(login.length<3)throw Object.assign(new Error('Informe o usuário de acesso.'),{statusCode:400});
       if(!id&&password.length<8)throw Object.assign(new Error('A senha inicial deve ter pelo menos 8 caracteres.'),{statusCode:400});
+      if(password&&password.length<8)throw Object.assign(new Error('A nova senha deve ter pelo menos 8 caracteres.'),{statusCode:400});
       if(id===Number(current.user.id)&&role!=='admin')throw Object.assign(new Error('O administrador atual não pode remover o próprio perfil de administrador.'),{statusCode:400});
-      const payload={email:login,name,role};if(password)payload.password_hash=passwordHash(password);
-      let user;
+      const active=id===Number(current.user.id)?true:data.active!==false,permissions=normalizePermissions(data.permissions,role);
+      if(role!=='admin'&&!permissions.length)throw Object.assign(new Error('Selecione pelo menos uma permissão de acesso.'),{statusCode:400});
+
+      let previousUser=null,previousProfile=null,user=null,createdNew=false;
+      if(id){
+        const rows=await db(req,`/pp_users?id=eq.${id}&select=id,email,name,role,password_hash,created_at&limit=1`);
+        previousUser=Array.isArray(rows)?rows[0]:null;
+        if(!previousUser)throw Object.assign(new Error('Funcionário não encontrado.'),{statusCode:404});
+        previousProfile=await getProfile(req,id,previousUser.role);
+      }
+
+      const payload={email:login,name,role};if(id&&password)payload.password_hash=passwordHash(password);if(!id)payload.password_hash=passwordHash(crypto.randomBytes(32).toString('hex'));
       if(id){
         const updated=await db(req,`/pp_users?id=eq.${id}`,{method:'PATCH',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(payload)});user=Array.isArray(updated)?updated[0]:updated;
       }else{
-        const created=await db(req,'/pp_users',{method:'POST',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(payload)});user=Array.isArray(created)?created[0]:created;
+        const created=await db(req,'/pp_users',{method:'POST',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(payload)});user=Array.isArray(created)?created[0]:created;createdNew=Boolean(user?.id);
       }
       if(!user?.id)throw Object.assign(new Error('Não foi possível salvar o funcionário.'),{statusCode:500});
-      const active=Number(user.id)===Number(current.user.id)?true:data.active!==false,permissions=normalizePermissions(data.permissions,user.role),phone=text(data.phone);
-      if(user.role!=='admin'&&!permissions.length)throw Object.assign(new Error('Selecione pelo menos uma permissão de acesso.'),{statusCode:400});
-      await saveProfile(req,user.id,{active,phone,permissions,updated_at:new Date().toISOString()});
+
+      try{
+        await saveProfile(req,user.id,{active,phone,permissions,updated_at:new Date().toISOString()});
+      }catch(error){
+        if(createdNew){
+          await db(req,`/pp_users?id=eq.${Number(user.id)}`,{method:'DELETE',headers:{Prefer:'return=minimal'}}).catch(()=>{});
+          await deleteProfile(req,user.id);
+        }else if(previousUser){
+          const rollback={email:previousUser.email,name:previousUser.name,role:previousUser.role,password_hash:previousUser.password_hash};
+          await db(req,`/pp_users?id=eq.${id}`,{method:'PATCH',headers:{'Content-Type':'application/json',Prefer:'return=minimal'},body:JSON.stringify(rollback)}).catch(()=>{});
+          if(previousProfile)await saveProfile(req,id,{...previousProfile,updated_at:new Date().toISOString()}).catch(()=>{});
+        }
+        throw error;
+      }
+
+      if(createdNew){
+        try{
+          const activated=await db(req,`/pp_users?id=eq.${Number(user.id)}`,{method:'PATCH',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify({password_hash:passwordHash(password)})});
+          const activatedUser=Array.isArray(activated)?activated[0]:activated;if(!activatedUser?.id)throw new Error('Não foi possível liberar a senha do funcionário.');user=activatedUser;
+        }catch(error){
+          await db(req,`/pp_users?id=eq.${Number(user.id)}`,{method:'DELETE',headers:{Prefer:'return=minimal'}}).catch(()=>{});
+          await deleteProfile(req,user.id);
+          throw error;
+        }
+      }
       if(id&&Number(id)!==Number(current.user.id))await revokeSessions(req,id);
       return res.status(200).json({ok:true,data:{...safeUser(user),active,phone,permissions}});
     }
@@ -104,9 +139,11 @@ module.exports=async function handler(req,res){
       const current=await requireAdmin(req),id=Number(data.id)||0;
       if(!id)throw Object.assign(new Error('Funcionário inválido.'),{statusCode:400});
       if(id===Number(current.user.id))throw Object.assign(new Error('Você não pode excluir o próprio acesso.'),{statusCode:400});
+      const rows=await db(req,`/pp_users?id=eq.${id}&select=id&limit=1`),user=Array.isArray(rows)?rows[0]:null;
+      if(!user)throw Object.assign(new Error('Funcionário não encontrado.'),{statusCode:404});
       await revokeSessions(req,id);
-      await db(req,`/pp_settings?key=eq.${encodeURIComponent(profileKey(id))}`,{method:'DELETE',headers:{Prefer:'return=minimal'}}).catch(()=>{});
       await db(req,`/pp_users?id=eq.${id}`,{method:'DELETE',headers:{Prefer:'return=minimal'}});
+      await deleteProfile(req,id);
       return res.status(200).json({ok:true,data:{deleted:true,id}});
     }
     throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});

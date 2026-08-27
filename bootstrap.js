@@ -37,7 +37,7 @@
   await loadScript('/cloud-backup-store.js?v=1017-cloud17');
   window.ProvedorPlusCloudState.wrapApi(window.provedor);
   await loadScript('/ui-runtime-fixes.js?v=1017-fix9');
-  await loadScript('/client-status-enhancements.js?v=1017-status3').catch(error=>console.error('Provedor Plus: os indicadores avançados do cliente não foram carregados.',error));
+  await loadScript('/client-status-enhancements.js?v=1017-status4').catch(error=>console.error('Provedor Plus: os indicadores avançados do cliente não foram carregados.',error));
   await loadScript('/dashboard-enhancements.js?v=1017-dashboard1').catch(error=>console.error('Provedor Plus: o Dashboard gerencial não foi carregado.',error));
   const appB64=await read(Array.from({length:33},(_,i)=>`/packed/appgz-${String(i+1).padStart(2,'0')}.txt`));
   const app=await gunzipB64(appB64),appUrl=URL.createObjectURL(new Blob([app],{type:'text/javascript'}));

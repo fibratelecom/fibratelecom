@@ -5,11 +5,34 @@
   const api=window.provedor;
   const normalize=value=>String(value??'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
 
-  // Segurança: o modal original nunca pode ficar invisível esperando a telemetria.
+  // Evita mostrar o modelo antigo enquanto a telemetria atual ainda está sendo montada.
   if(!document.getElementById('pp-client-status-visibility-safety')){
     const style=document.createElement('style');
     style.id='pp-client-status-visibility-safety';
-    style.textContent='.client-status-modal{visibility:visible!important}.client-status-modal .client-access-facts{grid-template-columns:repeat(4,minmax(0,1fr))}.client-status-modal .client-remote-access{display:flex!important}@media(max-width:900px){.client-status-modal .client-access-facts{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:600px){.client-status-modal .client-access-facts{grid-template-columns:1fr}}';
+    style.textContent=`
+      .client-status-modal{visibility:visible!important;position:relative!important}
+      .client-status-modal .client-access-facts{grid-template-columns:repeat(4,minmax(0,1fr))}
+      .client-status-modal .client-remote-access{display:flex!important}
+      .client-status-modal:not(:has(.client-live-consumption-panel))>:not(.modal-head){visibility:hidden!important}
+      .client-status-modal:not(:has(.client-live-consumption-panel))::after{
+        content:'Atualizando status do cliente…';
+        position:absolute;
+        left:0;right:0;top:64px;bottom:0;
+        z-index:40;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        padding:24px;
+        color:#5f736f;
+        background:#fff;
+        font-size:13px;
+        font-weight:700;
+        letter-spacing:.1px;
+        text-align:center;
+      }
+      @media(max-width:900px){.client-status-modal .client-access-facts{grid-template-columns:repeat(2,minmax(0,1fr))}}
+      @media(max-width:600px){.client-status-modal .client-access-facts{grid-template-columns:1fr}}
+    `;
     document.head.appendChild(style);
   }
 
@@ -81,7 +104,8 @@
     if(!client)return '';
     const state=currentState(),plans=Array.isArray(state?.plans)?state.plans:[];
     const byId=client?.plan_id?plans.find(plan=>Number(plan?.id)===Number(client.plan_id)):null;
-    return String(client?.plan_name||byId?.name||client?.plan||'').trim();
+    const byName=!byId&&String(client?.plan||client?.plan_name||'').trim()?plans.find(plan=>normalize(plan?.name)===normalize(client?.plan||client?.plan_name)):null;
+    return String(client?.plan_name||byId?.name||byName?.name||client?.plan||'').trim();
   }
 
   function routerName(client){
@@ -122,7 +146,6 @@
   async function patch(){
     if(running)return;
     const modal=document.querySelector('.client-status-modal');if(!modal)return;
-    modal.style.visibility='visible';
     const panel=modal.querySelector('.client-live-consumption-panel'),facts=panel?.querySelector('.client-access-facts');
     if(!panel||!facts)return;
     running=true;
@@ -137,7 +160,6 @@
         ensureFact(facts,'Status do cadastro',rowValue(section,'Status do cadastro'));
         ensureFact(facts,'Roteador/ONU do cliente',client?.device_ip||rowValue(section,'Roteador/ONU do cliente'));
         const remotePreserved=ensureRemoteAccess(panel,section,client);
-        // Só elimina a duplicidade depois que o conteúdo novo existe e o acesso original foi preservado.
         if(remotePreserved||!section.querySelector('button')){
           section.style.display='none';
           section.dataset.ppContractAccessHidden='true';
@@ -151,8 +173,6 @@
 
   let scheduled=false;
   const observer=new MutationObserver(()=>{
-    const modal=document.querySelector('.client-status-modal');
-    if(modal)modal.style.visibility='visible';
     if(scheduled)return;
     scheduled=true;
     requestAnimationFrame(()=>{scheduled=false;patch().catch(error=>console.error('Provedor Plus: falha ao organizar o status do cliente.',error))});

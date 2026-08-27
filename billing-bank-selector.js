@@ -11,17 +11,15 @@
   const style=document.createElement('style');
   style.textContent=`
     .pp-bill-bank-field{display:grid;gap:5px;min-width:220px;max-width:360px;margin:0 0 12px;color:#405853}
-    .pp-bill-bank-field>span,.pp-client-extra-field>span{font-size:11px;font-weight:750;line-height:1.25;color:#405853}
-    .pp-bill-bank-field select,.pp-client-extra-field select,.pp-client-extra-field input{box-sizing:border-box;width:100%;height:38px;padding:0 10px;color:#2f4a44;background:#fff;border:1px solid #cfe0dc;border-radius:8px;font-size:12px;font-weight:650;outline:none}
-    .pp-bill-bank-field select:focus,.pp-client-extra-field select:focus,.pp-client-extra-field input:focus{border-color:#4fae9d;box-shadow:0 0 0 3px rgba(79,174,157,.12)}
-    .pp-bill-bank-field select:disabled,.pp-client-extra-field select:disabled{color:#899793;background:#f5f8f7;cursor:not-allowed}
-    .pp-bill-bank-field small,.pp-client-extra-field small{color:#71827e;font-size:10px;line-height:1.35;white-space:normal}
+    .pp-bill-bank-field>span,.pp-client-bank-field>span{font-size:11px;font-weight:750;line-height:1.25;color:#405853}
+    .pp-bill-bank-field select,.pp-client-bank-field select{box-sizing:border-box;width:100%;height:38px;padding:0 10px;color:#2f4a44;background:#fff;border:1px solid #cfe0dc;border-radius:8px;font-size:12px;font-weight:650;outline:none}
+    .pp-bill-bank-field select:focus,.pp-client-bank-field select:focus{border-color:#4fae9d;box-shadow:0 0 0 3px rgba(79,174,157,.12)}
+    .pp-bill-bank-field select:disabled,.pp-client-bank-field select:disabled{color:#899793;background:#f5f8f7;cursor:not-allowed}
+    .pp-bill-bank-field small,.pp-client-bank-field small{color:#71827e;font-size:10px;line-height:1.35;white-space:normal}
     .pp-bill-bank-modal-field{max-width:none;margin:10px 0 0;padding:10px 12px;background:#f8fbfa;border:1px solid #dfe9e6;border-radius:9px}
     .carnet-fields>.pp-bill-bank-field{margin:0;max-width:none}
-    .pp-client-extra-config{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:14px 0;padding:14px;border:1px solid #dfe9e6;border-radius:10px;background:#fbfdfc}
-    .pp-client-extra-config-title{grid-column:1/-1;margin:0;color:#304843;font-size:12px;font-weight:800}
-    .pp-client-extra-field{display:grid;gap:5px;min-width:0}
-    @media(max-width:900px){.pp-bill-bank-field{max-width:none;width:100%}.pp-client-extra-config{grid-template-columns:1fr}}
+    .pp-client-bank-field{display:grid;gap:5px;max-width:360px;margin:12px 0;padding:12px;border:1px solid #dfe9e6;border-radius:10px;background:#fbfdfc}
+    @media(max-width:900px){.pp-bill-bank-field,.pp-client-bank-field{max-width:none;width:100%}}
   `;
   document.head.appendChild(style);
 
@@ -74,24 +72,18 @@
     catch{const clients=localState()?.clients;return Array.isArray(clients)?clients:[]}
   }
 
-  function ensureClientConfig(root){
-    let block=root.querySelector('.pp-client-extra-config');if(block)return block;
-    block=document.createElement('section');block.className='pp-client-extra-config';
-    block.innerHTML=`<h4 class="pp-client-extra-config-title">Cobrança e acesso remoto</h4>
-      <label class="pp-client-extra-field"><span>Banco da cobrança</span><select class="pp-client-bank-select" aria-label="Banco da cobrança"></select><small>Banco preferencial deste cliente para boleto, carnê e PIX.</small></label>
-      <label class="pp-client-extra-field"><span>IP do roteador/ONU</span><input class="pp-client-device-ip" type="text" autocomplete="off" placeholder="Ex.: 192.168.1.1 ou https://endereco"/><small>Endereço do equipamento do cliente, não do MikroTik concentrador.</small></label>
-      <label class="pp-client-extra-field"><span>Porta do roteador/ONU</span><input class="pp-client-device-port" type="number" min="1" max="65535" inputmode="numeric" placeholder="Vazio = padrão"/><small>Informe somente quando o acesso usar uma porta específica.</small></label>`;
-    const form=root.querySelector('form'),actions=root.querySelector('.modal-actions,.form-actions,.actions');
-    if(actions&&actions.parentElement)actions.parentElement.insertBefore(block,actions);else if(form)form.appendChild(block);else root.appendChild(block);
-    return block;
+  function ensureClientBankField(root){
+    let field=root.querySelector('.pp-client-bank-field');if(field)return field;
+    field=document.createElement('label');field.className='pp-client-bank-field';
+    field.innerHTML='<span>Banco da cobrança</span><select class="pp-client-bank-select" aria-label="Banco da cobrança"></select><small>Banco preferencial deste cliente para boleto, carnê e PIX.</small>';
+    const actions=root.querySelector('.modal-actions,.form-actions,.actions'),form=root.querySelector('form');
+    if(actions&&actions.parentElement)actions.parentElement.insertBefore(field,actions);else if(form)form.appendChild(field);else root.appendChild(field);
+    return field;
   }
-
   async function patchClientEditor(root,banks,active){
     if(!root)return;
-    const block=ensureClientConfig(root),clients=await clientsList(),client=currentClientFromRoot(root,clients),preferred=preferredBank(banks,active);
-    const bank=block.querySelector('.pp-client-bank-select'),ip=block.querySelector('.pp-client-device-ip'),port=block.querySelector('.pp-client-device-port'),untouched=block.dataset.initialized!=='true';
-    fillBankSelect(bank,active,bank?.value||client?.billing_bank_provider||preferred);
-    if(untouched){if(ip)ip.value=String(client?.device_ip||'');if(port)port.value=String(client?.device_port||'');block.dataset.initialized='true'}
+    const field=ensureClientBankField(root),clients=await clientsList(),client=currentClientFromRoot(root,clients),preferred=preferredBank(banks,active),select=field.querySelector('select');
+    fillBankSelect(select,active,select?.value||client?.billing_bank_provider||preferred);
   }
 
   function ensureBillField(modal){
@@ -137,13 +129,8 @@
   if(typeof api?.clients?.save==='function'){
     const clientSave=api.clients.save.bind(api.clients);
     api.clients.save=async data=>{
-      const next={...(data||{})},root=clientEditor(),block=root?.querySelector('.pp-client-extra-config');
-      if(block){
-        const bank=String(block.querySelector('.pp-client-bank-select')?.value||'').trim(),ip=String(block.querySelector('.pp-client-device-ip')?.value||'').trim(),portRaw=String(block.querySelector('.pp-client-device-port')?.value||'').trim(),port=Number(portRaw);
-        if(bank)next.billing_bank_provider=bank;
-        next.device_ip=ip;
-        next.device_port=portRaw&&Number.isInteger(port)&&port>=1&&port<=65535?port:'';
-      }
+      const next={...(data||{})},root=clientEditor(),select=root?.querySelector('.pp-client-bank-select');
+      if(select?.value)next.billing_bank_provider=String(select.value);
       return clientSave(next);
     };
   }
@@ -163,7 +150,7 @@
       }
     }finally{running=false}
   }
-  const observer=new MutationObserver(()=>{if(scheduled)return;scheduled=true;requestAnimationFrame(()=>{scheduled=false;patch().catch(error=>console.error('Provedor Plus: falha ao preparar cobrança e acesso do cliente.',error))})});
+  const observer=new MutationObserver(()=>{if(scheduled)return;scheduled=true;requestAnimationFrame(()=>{scheduled=false;patch().catch(error=>console.error('Provedor Plus: falha ao preparar banco da cobrança.',error))})});
   observer.observe(document.documentElement,{childList:true,subtree:true});
-  patch().catch(error=>console.error('Provedor Plus: falha ao preparar cobrança e acesso do cliente.',error));
+  patch().catch(error=>console.error('Provedor Plus: falha ao preparar banco da cobrança.',error));
 })();

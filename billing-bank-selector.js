@@ -216,13 +216,13 @@
   api.invoices.save=async data=>{
     let next={...(data||{})};
     const bank=selectedBank()||await clientPreferredBank(next.client_id??next.clientId);if(bank&&!next.id)next.bank_provider=bank;
-    if(visibleDiscountField())next=applyDiscount(next);
-    const saved=await invoiceSave(next);resetDiscountField(visibleDiscountField());return saved;
+    const discountField=visibleDiscountField();if(discountField)next=applyDiscount(next);
+    const saved=await invoiceSave(next);resetDiscountField(discountField);return saved;
   };
   if(typeof api.invoices.generateInstallments==='function'){
     const generate=api.invoices.generateInstallments.bind(api.invoices);
     api.invoices.generateInstallments=async data=>{
-      let next={...(data||{})},bank=selectedBank()||await clientPreferredBank(next.client_id??next.clientId);if(bank)next.bank_provider=bank;if(visibleDiscountField())next=applyDiscount(next);const saved=await generate(next);resetDiscountField(visibleDiscountField());return saved
+      let next={...(data||{})},bank=selectedBank()||await clientPreferredBank(next.client_id??next.clientId);if(bank)next.bank_provider=bank;const discountField=visibleDiscountField();if(discountField)next=applyDiscount(next);const saved=await generate(next);resetDiscountField(discountField);return saved
     };
   }
 

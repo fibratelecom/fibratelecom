@@ -51,6 +51,89 @@
     }
   }
 
+  function installShellStyles(){
+    if(document.getElementById('pp-shell-layout-fixes'))return;
+    const style=document.createElement('style');
+    style.id='pp-shell-layout-fixes';
+    style.textContent=`
+      .brand{height:82px!important;min-height:82px!important;padding:7px 10px 0!important;align-items:center!important;overflow:visible!important}
+      .brand-mark{flex:0 0 31px!important;margin-top:2px!important}
+      .workspace{min-height:52px!important;margin:12px 5px 12px!important;padding:8px 9px!important;gap:8px!important}
+      .workspace-logo{width:30px!important;height:30px!important;flex:0 0 30px!important;border-radius:8px!important;font-size:11px!important}
+      .workspace small{font-size:10px!important;line-height:1.2!important}
+      .workspace strong{font-size:13px!important;line-height:1.25!important;white-space:normal!important}
+      .user-card{min-height:52px!important;padding:8px 5px 6px!important;gap:7px!important;align-items:center!important}
+      .user-card>span{width:30px!important;height:30px!important;flex:0 0 30px!important;font-size:11px!important}
+      .user-card>div{min-width:0!important}
+      .user-card strong{font-size:12px!important;line-height:1.2!important}
+      .user-card small{font-size:10px!important;line-height:1.2!important;margin-top:2px!important}
+      .user-card .pp-shell-logout{display:inline-flex!important;align-items:center!important;justify-content:center!important;flex:0 0 auto!important;min-width:48px!important;height:30px!important;padding:0 9px!important;color:#5f706d!important;background:#f6f9f8!important;border:1px solid #dfe8e5!important;border-radius:7px!important;font-size:10px!important;font-weight:750!important;line-height:1!important}
+      .user-card .pp-shell-logout:hover{color:#0a7566!important;background:#eaf6f2!important;border-color:#b8ddd4!important}
+      .user-card .pp-shell-logout:disabled{opacity:.55!important;cursor:wait!important}
+      .topbar .system-online{display:none!important}
+      .pp-dashboard-title-row{display:flex!important;align-items:center!important;flex-wrap:wrap!important;gap:11px!important;min-width:0!important}
+      .pp-dashboard-title-row h1{margin:0!important}
+      .pp-dashboard-system-online{display:inline-flex!important;align-items:center!important;gap:7px!important;min-height:29px!important;padding:5px 10px!important;color:#55716b!important;background:#eef8f5!important;border:1px solid #d7ebe5!important;border-radius:20px!important;font-size:11px!important;font-weight:700!important;line-height:1.2!important;white-space:nowrap!important}
+      .pp-dashboard-system-online i{display:block!important;width:7px!important;height:7px!important;background:#24b888!important;border-radius:50%!important;box-shadow:0 0 0 4px #dff5ed!important}
+      .pp-dashboard-host{padding-top:20px!important}
+      @media(min-width:901px){
+        .topbar{display:none!important;height:0!important;min-height:0!important;border:0!important;padding:0!important;overflow:hidden!important}
+        .content{padding-top:0!important}
+      }
+      @media(max-width:900px){
+        .brand{height:76px!important;min-height:76px!important;padding-top:5px!important}
+        .topbar{display:flex!important}
+        .pp-dashboard-host{padding-top:16px!important}
+        .pp-dashboard-title-row{gap:8px!important}
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function patchDashboardStatus(){
+    const heading=document.querySelector('.pp-dashboard-heading');
+    const title=heading?.querySelector('h1');
+    if(!heading||!title)return;
+    let row=heading.querySelector('.pp-dashboard-title-row');
+    if(!row){
+      row=document.createElement('div');
+      row.className='pp-dashboard-title-row';
+      title.parentNode?.insertBefore(row,title);
+      row.appendChild(title);
+    }
+    if(!row.querySelector('.pp-dashboard-system-online')){
+      const status=document.createElement('span');
+      status.className='pp-dashboard-system-online';
+      status.innerHTML='<i></i><span>Sistema online</span>';
+      row.appendChild(status);
+    }
+  }
+
+  function patchLogout(){
+    const card=document.querySelector('.user-card');
+    if(!card||card.querySelector('.pp-shell-logout'))return;
+    const button=document.createElement('button');
+    button.type='button';
+    button.className='pp-shell-logout';
+    button.textContent='Sair';
+    button.title='Sair do Provedor Plus';
+    button.setAttribute('aria-label','Sair do Provedor Plus');
+    button.addEventListener('click',async()=>{
+      if(button.disabled)return;
+      button.disabled=true;
+      button.textContent='Saindo…';
+      try{
+        if(window.ProvedorPlusAuth?.logout)await window.ProvedorPlusAuth.logout();
+        else location.reload();
+      }catch(error){
+        console.error('Provedor Plus: falha ao sair.',error);
+        button.disabled=false;
+        button.textContent='Sair';
+      }
+    });
+    card.appendChild(button);
+  }
+
   function patchMikrotikNote(){
     const config=document.querySelector('.router-config');
     if(!config)return;
@@ -93,7 +176,7 @@
     try{
       if(document.title!=='Provedor Plus')document.title='Provedor Plus';
       const root=document.body;if(!root)return;
-      replaceText(root);patchMikrotikNote();patchRouterForm();
+      installShellStyles();replaceText(root);patchDashboardStatus();patchLogout();patchMikrotikNote();patchRouterForm();
     }finally{observer.observe(document.documentElement,{childList:true,subtree:true,characterData:true})}
   }
   observer.observe(document.documentElement,{childList:true,subtree:true,characterData:true});

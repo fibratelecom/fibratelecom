@@ -22,6 +22,7 @@
     .carnet-fields>.pp-bill-bank-field{margin:0;max-width:none}
     .pp-client-bank-field{display:grid;gap:5px;max-width:360px;margin:12px 0;padding:12px;border:1px solid #dfe9e6;border-radius:10px;background:#fbfdfc}
     .pp-bill-discount-field{display:grid;gap:8px;min-width:220px;max-width:360px;margin:0 0 12px;padding:11px 12px;border:1px solid #dfe9e6;border-radius:9px;background:#fbfdfc;color:#405853}
+    .pp-bill-discount-field.is-unsupported{display:none}
     .pp-bill-discount-modal-field{max-width:none;margin:10px 0 0}
     .pp-bill-discount-toggle{display:flex;align-items:center;gap:8px;min-width:0;color:#405853;font-size:11px;font-weight:750;line-height:1.35;cursor:pointer}
     .pp-bill-discount-toggle input{width:16px;height:16px;margin:0;accent-color:#0d8b78}
@@ -120,7 +121,7 @@
     fillBankSelect(select,active,select?.value||client?.billing_bank_provider||preferred);
     const help=field.querySelector('small');
     if(help)help.textContent=active.length>1?'Selecione qual banco configurado emitirá a cobrança deste cliente.':active.length===1?'O banco configurado será usado para esta cobrança.':'Configure Efí Bank ou Mercado Pago em Integração antes de emitir cobrança real.';
-    ensureDiscountField(field.parentElement||modal,true);
+    const discount=ensureDiscountField(field.parentElement||modal,true);syncDiscountAvailability(discount,visibleBillingKind());
   }
 
   function parseMoney(value){
@@ -131,18 +132,23 @@
     const n=Number(raw);return Number.isFinite(n)&&n>0?Math.round(n*100):0;
   }
   function moneyFromCents(cents){return new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(Math.max(0,Number(cents)||0)/100)}
+  function resetDiscountField(field){
+    if(!field)return;
+    const checkbox=field.querySelector('.pp-bill-discount-enabled'),input=field.querySelector('.pp-bill-discount-input'),summary=field.querySelector('.pp-bill-discount-summary');
+    if(checkbox)checkbox.checked=false;if(input){input.value='';input.disabled=true}if(summary)summary.textContent='';field.classList.remove('is-enabled');
+  }
   function ensureDiscountField(root,modal=false){
     if(!root)return null;
     let field=root.querySelector(':scope > .pp-bill-discount-field');
     if(field)return field;
     field=document.createElement('section');field.className=`pp-bill-discount-field${modal?' pp-bill-discount-modal-field':''}`;
-    field.innerHTML='<label class="pp-bill-discount-toggle"><input type="checkbox" class="pp-bill-discount-enabled"><span>Desconto até a data do vencimento</span></label><div class="pp-bill-discount-value"><span>R$</span><input type="text" inputmode="decimal" class="pp-bill-discount-input" placeholder="0,00" disabled aria-label="Valor do desconto"></div><small>Opcional. Informe o valor em reais que o cliente terá de desconto se pagar até o vencimento.</small><small class="pp-bill-discount-summary"></small>';
+    field.innerHTML='<label class="pp-bill-discount-toggle"><input type="checkbox" class="pp-bill-discount-enabled"><span>Desconto até a data do vencimento</span></label><div class="pp-bill-discount-value"><span>R$</span><input type="text" inputmode="decimal" class="pp-bill-discount-input" placeholder="0,00" disabled aria-label="Valor do desconto"></div><small>Opcional. Marque somente quando quiser conceder desconto se o pagamento ocorrer até o vencimento.</small><small class="pp-bill-discount-summary"></small>';
     const checkbox=field.querySelector('.pp-bill-discount-enabled'),input=field.querySelector('.pp-bill-discount-input'),summary=field.querySelector('.pp-bill-discount-summary');
     const sync=()=>{const enabled=Boolean(checkbox?.checked);field.classList.toggle('is-enabled',enabled);if(input)input.disabled=!enabled;const cents=parseMoney(input?.value);if(summary)summary.textContent=enabled&&cents?`${moneyFromCents(cents)} de desconto até o vencimento.`:''};
-    checkbox?.addEventListener('change',()=>{sync();if(checkbox.checked)setTimeout(()=>input?.focus(),0)});input?.addEventListener('input',sync);sync();
+    checkbox?.addEventListener('change',()=>{if(!checkbox.checked&&input)input.value='';sync();if(checkbox.checked)setTimeout(()=>input?.focus(),0)});input?.addEventListener('input',sync);sync();
     root.appendChild(field);return field;
   }
-  function visibleDiscountField(){return [...document.querySelectorAll('.pp-bill-discount-field')].find(field=>field.offsetParent!==null)||null}
+  function visibleDiscountField(){return [...document.querySelectorAll('.pp-bill-discount-field')].find(field=>field.offsetParent!==null&&!field.classList.contains('is-unsupported'))||null}
   function findDueDate(data,field){
     for(const value of [data?.due_date,data?.dueDate,data?.expire_at,data?.expiration_date]){const v=String(value||'').slice(0,10);if(/^\d{4}-\d{2}-\d{2}$/.test(v))return v}
     const root=field?.closest('.client-bills-modal,.modal,.dialog,[role="dialog"],.bill-generator,.carnet-fields,.pix-fields,.charge-generator,.invoice-generator')||document;
@@ -159,12 +165,25 @@
     if(title.includes('avulso'))return 'avulso';
     return 'boleto';
   }
+  function discountSupported(kind){return ['boleto','pix_due','avulso'].includes(String(kind||''))}
+  function syncDiscountAvailability(field,kind){
+    if(!field)return;
+    const nextKind=String(kind||'boleto'),changed=Boolean(field.dataset.billingKind&&field.dataset.billingKind!==nextKind),supported=discountSupported(nextKind);
+    if(changed||!supported)resetDiscountField(field);
+    field.dataset.billingKind=nextKind;field.classList.toggle('is-unsupported',!supported);
+    const checkbox=field.querySelector('.pp-bill-discount-enabled');if(checkbox)checkbox.disabled=!supported;
+  }
+  function clearDiscountData(data){
+    const next={...(data||{})};
+    for(const key of ['discount_until_due','discount_type','discount_cents','discount_value_cents','discount_amount','discount_until_date','discount_deadline','conditional_discount'])delete next[key];
+    return next;
+  }
   function applyDiscount(data){
-    const next={...(data||{})},field=visibleDiscountField(),enabled=Boolean(field?.querySelector('.pp-bill-discount-enabled')?.checked);
+    const field=visibleDiscountField();if(!field)return {...(data||{})};
+    const kind=visibleBillingKind();syncDiscountAvailability(field,kind);
+    let next=clearDiscountData(data),enabled=Boolean(field.querySelector('.pp-bill-discount-enabled')?.checked);
     if(!enabled)return next;
-    const kind=visibleBillingKind();
-    if(kind==='carne')throw new Error('O desconto até o vencimento desta opção deve ser usado em boleto, Pix com vencimento ou cobrança avulsa.');
-    if(kind==='pix_auto')throw new Error('Pix Automático usa a regra da recorrência e não aceita este desconto por cobrança nesta tela.');
+    if(!discountSupported(kind))return next;
     const bank=selectedBank();
     if(bank==='mercadoPago')throw new Error('Mercado Pago: a API de boleto usada pelo Provedor Plus não oferece desconto condicional até o vencimento. Selecione Efí Bank para usar este desconto.');
     const cents=parseMoney(field.querySelector('.pp-bill-discount-input')?.value);
@@ -176,11 +195,9 @@
     next.discount_cents=cents;
     next.discount_value_cents=cents;
     next.discount_amount=cents/100;
-    if(dueDate){
-      next.discount_until_date=dueDate;
-      next.discount_deadline=dueDate;
-      next.conditional_discount={type:'currency',value:cents,until_date:dueDate};
-    }
+    next.discount_until_date=dueDate;
+    next.discount_deadline=dueDate;
+    next.conditional_discount={type:'currency',value:cents,until_date:dueDate};
     return next;
   }
 
@@ -198,13 +215,14 @@
   const invoiceSave=api.invoices.save.bind(api.invoices);
   api.invoices.save=async data=>{
     let next={...(data||{})};
-    if(!next.id){const bank=selectedBank()||await clientPreferredBank(next.client_id??next.clientId);if(bank)next.bank_provider=bank;next=applyDiscount(next)}
-    return invoiceSave(next);
+    const bank=selectedBank()||await clientPreferredBank(next.client_id??next.clientId);if(bank&&!next.id)next.bank_provider=bank;
+    if(visibleDiscountField())next=applyDiscount(next);
+    const saved=await invoiceSave(next);resetDiscountField(visibleDiscountField());return saved;
   };
   if(typeof api.invoices.generateInstallments==='function'){
     const generate=api.invoices.generateInstallments.bind(api.invoices);
     api.invoices.generateInstallments=async data=>{
-      let next={...(data||{})},bank=selectedBank()||await clientPreferredBank(next.client_id??next.clientId);if(bank)next.bank_provider=bank;next=applyDiscount(next);return generate(next)
+      let next={...(data||{})},bank=selectedBank()||await clientPreferredBank(next.client_id??next.clientId);if(bank)next.bank_provider=bank;if(visibleDiscountField())next=applyDiscount(next);const saved=await generate(next);resetDiscountField(visibleDiscountField());return saved
     };
   }
 
@@ -221,7 +239,7 @@
   async function patch(){
     if(running)return;running=true;
     try{
-      const banks=await banksState(),active=readyBanks(banks),bills=clientBillsModal(),finance=financeInvoiceModal();
+      const banks=await banksState(),active=readyBanks(banks),bills=clientBillsModal(),finance=financeInvoiceModal(),kind=visibleBillingKind();
       await patchClientEditor(clientEditor(),banks,active);
       await patchBillsModal(bills,banks,active);
       await patchBillsModal(finance,banks,active);
@@ -230,7 +248,7 @@
         let field=container.querySelector(':scope > .pp-bill-bank-field');
         if(!field){field=document.createElement('label');field.className='pp-bill-bank-field';field.innerHTML='<span>Banco da cobrança</span><select class="pp-bill-bank-select" aria-label="Banco da cobrança"></select><small>Banco configurado para esta emissão.</small>';container.prepend(field)}
         const select=field.querySelector('select');fillBankSelect(select,active,select?.value||preferredBank(banks,active));
-        ensureDiscountField(container,false);
+        const discount=ensureDiscountField(container,false);syncDiscountAvailability(discount,kind);
       }
     }finally{running=false}
   }

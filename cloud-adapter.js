@@ -3,6 +3,7 @@
   const clone=v=>v==null?v:JSON.parse(JSON.stringify(v));
   const bool=(v,fallback=false)=>{if(v===undefined||v===null||v==='')return fallback;if(typeof v==='boolean')return v;if(typeof v==='number')return v!==0;const x=String(v).trim().toLowerCase();if(['true','1','sim','yes','on'].includes(x))return true;if(['false','0','nao','não','no','off'].includes(x))return false;return fallback};
   const localMonthKey=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`};
+  const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
   async function dataCall(action,data={}){
     const response=await fetch('/api/cloud-data',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data})});
@@ -23,6 +24,14 @@
       if(!response.ok||!body.ok)throw Error(body.error||`Falha na integração MikroTik (HTTP ${response.status}).`);
       return body.data;
     }finally{clearTimeout(timer)}
+  }
+  async function cloudRead(action,options){
+    let lastError=null;
+    for(let attempt=0;attempt<2;attempt++){
+      try{return await cloudCall(action,options)}
+      catch(error){lastError=error;if(attempt===0)await wait(450)}
+    }
+    throw lastError||Error('Falha temporária na leitura do MikroTik.');
   }
 
   function cleanHost(value){return String(value||'').trim().replace(/^https?:\/\//i,'').replace(/\/.*$/,'').replace(/^\[|\]$/g,'')}
@@ -49,9 +58,9 @@
     };
     api.routers.delete=async id=>{const r=await base.routers.delete(id);await secretDelete(id);return r};
 
-    api.mikrotik.sync=async routerId=>{const r=await routerRecord(routerId),result=await cloudCall('router.sync',{router:await routerAuth(routerId)});return {...result,routerId:Number(routerId),routerName:r.name}};
-    api.mikrotik.profiles=async routerId=>{const r=await routerRecord(routerId),result=await cloudCall('router.profiles',{router:await routerAuth(routerId)});return {...result,routerId:Number(routerId),routerName:r.name}};
-    api.mikrotik.remoteAccess=async routerId=>{const r=await routerRecord(routerId),result=await cloudCall('router.remote',{router:await routerAuth(routerId)});return {...result,routerId:Number(routerId),routerName:r.name}};
+    api.mikrotik.sync=async routerId=>{const r=await routerRecord(routerId),result=await cloudRead('router.sync',{router:await routerAuth(routerId)});return {...result,routerId:Number(routerId),routerName:r.name}};
+    api.mikrotik.profiles=async routerId=>{const r=await routerRecord(routerId),result=await cloudRead('router.profiles',{router:await routerAuth(routerId)});return {...result,routerId:Number(routerId),routerName:r.name}};
+    api.mikrotik.remoteAccess=async routerId=>{const r=await routerRecord(routerId),result=await cloudRead('router.remote',{router:await routerAuth(routerId)});return {...result,routerId:Number(routerId),routerName:r.name}};
     api.mikrotik.savePppoe=async(routerId,data)=>{const r=await routerRecord(routerId),result=await cloudCall('pppoe.save',{router:await routerAuth(routerId),data:clone(data)});return {...result,routerId:Number(routerId),routerName:r.name}};
     api.mikrotik.deletePppoe=async(routerId,data)=>{const r=await routerRecord(routerId),result=await cloudCall('pppoe.delete',{router:await routerAuth(routerId),data:clone(data)});return {...result,routerId:Number(routerId),routerName:r.name}};
 
@@ -59,7 +68,7 @@
       const baseStatus=await base.clients.status(id),client=baseStatus?.client||await clientRecord(id);
       if(client?.connection_type!=='PPPoE'||!client?.router_id||!client?.pppoe_username)return baseStatus;
       try{
-        const router=await routerAuth(client.router_id),live=await cloudCall('client.status',{router,data:clone(client)});
+        const router=await routerAuth(client.router_id),live=await cloudRead('client.status',{router,data:clone(client)});
         let traffic=baseStatus.traffic||null,trafficError='';
         try{traffic=await trafficRecord(id,live)||traffic}catch(error){trafficError=error instanceof Error?error.message:String(error);console.error('Provedor Plus: leitura do MikroTik concluída, mas o consumo mensal não pôde ser gravado.',error)}
         const liveDown=Number(live.downloadBps),liveUp=Number(live.uploadBps),trafficDown=Number(traffic?.downloadBps),trafficUp=Number(traffic?.uploadBps);

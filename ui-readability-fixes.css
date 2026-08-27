@@ -1,5 +1,9 @@
 /* Correções de legibilidade dos módulos novos. Escopo intencional para não alterar o restante do painel. */
 
+/* Dashboard: mantém os textos auxiliares legíveis sem aumentar desnecessariamente os cartões. */
+.pp-dashboard-v2 .pp-health-ring small,.pp-dashboard-v2 .pp-health-stats span,.pp-dashboard-v2 .pp-live-card-head>b,.pp-dashboard-v2 .pp-live-trio span,.pp-dashboard-v2 .pp-traffic-lines small,.pp-dashboard-v2 .pp-rank-number,.pp-dashboard-v2 .pp-rank-main small,.pp-dashboard-v2 .pp-dashboard-list small{font-size:11px;line-height:1.4}
+.pp-dashboard-v2 .pp-router-mini-list article>b{font-size:11px;line-height:1.35}
+
 /* Status avançado do cliente */
 .client-extra-summary,.client-access-history-panel{font-size:12px}
 .client-extra-title{align-items:flex-start;flex-wrap:wrap}
@@ -24,7 +28,7 @@
 .pp-staff-panel-head h2{font-size:16px}.pp-staff-panel-head input{min-height:38px;height:auto;font-size:12px;padding-block:8px}
 .pp-staff-table-wrap th{font-size:11px;line-height:1.3}.pp-staff-table-wrap td{font-size:12px;line-height:1.4}
 .pp-staff-person strong{font-size:12px}.pp-staff-person small{font-size:11px;line-height:1.35;overflow-wrap:anywhere}
-.pp-role,.pp-access{font-size:11px;line-height:1.25;white-space:normal}
+.pp-staff-page .pp-role,.pp-staff-page .pp-access{font-size:11px;line-height:1.25;white-space:normal}
 .pp-permission-tags span,.pp-permission-tags em{font-size:10px;line-height:1.3;overflow-wrap:anywhere}
 .pp-staff-actions button{min-height:32px;font-size:11px;padding:6px 9px}
 .pp-staff-form-grid label{font-size:12px;line-height:1.35}.pp-staff-form-grid label small{font-size:11px}
@@ -46,7 +50,7 @@
 .pp-ticket-form-grid label,.pp-ticket-rating label{font-size:12px;line-height:1.35}
 .pp-ticket-form-grid input,.pp-ticket-form-grid select,.pp-ticket-form-grid textarea,.pp-ticket-rating select,.pp-ticket-add-comment textarea,.pp-ticket-add-attachment input{font-size:12px;line-height:1.4}
 .pp-ticket-form-grid input,.pp-ticket-form-grid select,.pp-ticket-rating select,.pp-ticket-add-attachment input{min-height:39px;height:auto;padding-block:8px}
-.pp-section-title{flex-wrap:wrap}.pp-section-title h3{font-size:14px;line-height:1.35}.pp-section-title p{font-size:11px;line-height:1.45;overflow-wrap:anywhere}
+.pp-ticket-modal .pp-section-title{flex-wrap:wrap}.pp-ticket-modal .pp-section-title h3{font-size:14px;line-height:1.35}.pp-ticket-modal .pp-section-title p{font-size:11px;line-height:1.45;overflow-wrap:anywhere}
 .pp-ticket-quick button{min-height:32px;font-size:11px;padding:6px 9px}
 .pp-ticket-client-grid span{font-size:10px}.pp-ticket-client-grid strong{font-size:12px;line-height:1.4;overflow-wrap:anywhere}
 .pp-ticket-client-empty{font-size:11px;line-height:1.45}

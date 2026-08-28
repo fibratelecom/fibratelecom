@@ -40,6 +40,7 @@
   await loadScript('/ui-runtime-fixes.js?v=1017-fix9');
   await loadScript('/client-status-enhancements.js?v=1017-status6').catch(error=>console.error('Provedor Plus: os indicadores avançados do cliente não foram carregados.',error));
   await loadScript('/client-status-layout-cleanup.js?v=1017-statuslayout2').catch(error=>console.error('Provedor Plus: a organização visual do status do cliente não foi carregada.',error));
+  await loadScript('/client-status-transition-fix.js?v=1017-status-transition1').catch(error=>console.error('Provedor Plus: a transição do novo status do cliente não foi carregada.',error));
   await loadScript('/dashboard-enhancements.js?v=1017-dashboard1').catch(error=>console.error('Provedor Plus: o Dashboard gerencial não foi carregado.',error));
   await loadScript('/billing-bank-selector.js?v=1017-billingbank3').catch(error=>console.error('Provedor Plus: a seleção do banco emissor não foi carregada.',error));
   const appB64=await read(Array.from({length:33},(_,i)=>`/packed/appgz-${String(i+1).padStart(2,'0')}.txt`));

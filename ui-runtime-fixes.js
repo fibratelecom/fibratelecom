@@ -87,8 +87,8 @@
       .pp-dashboard-system-online{display:inline-flex!important;align-items:center!important;gap:7px!important;min-height:29px!important;padding:5px 10px!important;color:#55716b!important;background:#eef8f5!important;border:1px solid #d7ebe5!important;border-radius:20px!important;font-size:11px!important;font-weight:700!important;line-height:1.2!important;white-space:nowrap!important}
       .pp-dashboard-system-online i{display:block!important;width:7px!important;height:7px!important;background:#24b888!important;border-radius:50%!important;box-shadow:0 0 0 4px #dff5ed!important}
       .pp-dashboard-host{padding-top:20px!important}
-      .pp-client-view-eye{display:inline-flex!important;align-items:center!important;justify-content:center!important;min-width:34px!important;width:34px!important;height:32px!important;padding:0!important}
-      .pp-client-view-eye svg{width:17px!important;height:17px!important;pointer-events:none!important}
+      .pp-client-view-eye{display:inline-flex!important;align-items:center!important;justify-content:center!important;min-width:36px!important;width:36px!important;height:36px!important;padding:0!important;color:#0b8f7c!important}
+      .pp-client-view-eye svg{width:21px!important;height:21px!important;pointer-events:none!important}
       @media(min-width:901px){.topbar{display:none!important;height:0!important;min-height:0!important;border:0!important;padding:0!important;overflow:hidden!important}.content{padding-top:0!important}}
       @media(max-width:900px){.brand{height:76px!important;min-height:76px!important;padding-top:5px!important}.topbar{display:flex!important}.pp-dashboard-host{padding-top:16px!important}.pp-dashboard-title-row{gap:8px!important}}
     `;
@@ -109,18 +109,21 @@
     return heading.closest('.content,[role="main"],main')||heading.parentElement?.parentElement||null;
   }
 
+  const eyeMarkup=()=>'<svg data-pp-eye-icon="true" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="2.7"></circle></svg>';
+
   function patchClientViewButtons(){
     const area=clientContentRoot();if(!area)return;
     area.querySelectorAll('button').forEach(button=>{
       if(button.closest('.client-status-modal'))return;
-      if(button.classList.contains('pp-client-view-eye'))return;
-      if(String(button.textContent||'').trim().toLowerCase()!=='status')return;
-      button.classList.add('pp-client-view-eye');
+      const isEye=button.classList.contains('pp-client-view-eye'),text=String(button.textContent||'').trim().toLowerCase();
+      if(!isEye&&text!=='status')return;
+      if(!isEye)button.classList.add('pp-client-view-eye');
       button.title='Visualizar cliente';
       button.setAttribute('aria-label','Visualizar cliente');
-      button.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="2.7"></circle></svg>';
+      if(!button.querySelector('svg[data-pp-eye-icon]'))button.innerHTML=eyeMarkup();
     });
   }
+  window.ProvedorPlusPatchClientViewButtons=patchClientViewButtons;
 
   function patchLogout(){
     const card=document.querySelector('.user-card');if(!card||card.querySelector('.pp-shell-logout'))return;
@@ -149,8 +152,8 @@
 
   function patchAddedNode(node){
     replaceText(node);
-    if(!(node instanceof Element))return;
     patchClientViewButtons();
+    if(!(node instanceof Element))return;
     if(node.matches('.user-card,.router-config,.router-form,.pp-dashboard-heading')||node.querySelector('.user-card,.router-config,.router-form,.pp-dashboard-heading'))patchStatic();
   }
 

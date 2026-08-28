@@ -1,0 +1,50 @@
+name: Load Bank Enabled Persistence
+
+on:
+  push:
+    branches:
+      - fix/global-navigation-duplication
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Load and validate bank persistence patch
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('bootstrap.js')
+          s=p.read_text()
+          marker="  await loadScript('/ui-runtime-fixes.js?v=1017-fix13-client-actions');\n"
+          addition=marker+"  await loadScript('/bank-enabled-persistence.js?v=1017-bank-enabled1').catch(error=>console.error('Provedor Plus: a persistência da ativação bancária não foi carregada.',error));\n"
+          if '/bank-enabled-persistence.js?v=1017-bank-enabled1' not in s:
+              if s.count(marker)!=1: raise SystemExit('Bootstrap marker not found exactly once')
+              p.write_text(s.replace(marker,addition,1))
+          PY
+          node --check bootstrap.js
+          node --check bank-enabled-persistence.js
+          grep -Fq "input.name!=='enabled'" bank-enabled-persistence.js
+          grep -Fq "input.closest('.bank-enable')" bank-enabled-persistence.js
+          grep -Fq "form.requestSubmit()" bank-enabled-persistence.js
+          grep -Fq "bank-enabled-persistence.js?v=1017-bank-enabled1" bootstrap.js
+          git fetch origin main
+          if ! git diff --quiet origin/main -- packed/appgz-*.txt; then
+            echo 'Packed application differs from main.'
+            exit 1
+          fi
+          if git diff --quiet -- bootstrap.js; then
+            echo 'Bootstrap loader already applied.'
+            exit 0
+          fi
+          git config user.name fibratelecom
+          git config user.email lanconta2015@gmail.com
+          git add bootstrap.js
+          git commit -m 'Carrega persistência da ativação bancária'
+          git push origin HEAD:fix/global-navigation-duplication

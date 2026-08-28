@@ -1,0 +1,43 @@
+name: Prepublish Package Check
+
+on:
+  push:
+    branches:
+      - fix/efi-authorization-diagnostics
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate frontend JavaScript
+        run: |
+          node --check bootstrap.js
+          node --check dashboard-transition-guard.js
+          node --check ui-runtime-fixes.js
+          grep -q "dashboard-transition-guard.js?v=1017-dashboard-guard1" bootstrap.js
+          grep -q "ui-runtime-fixes.js?v=1017-fix13-client-actions" bootstrap.js
+          grep -q "ProvedorPlusPatchClientViewButtons" bootstrap.js
+          grep -q "pp-client-action-icon" ui-runtime-fixes.js
+          grep -q "characterData:true" ui-runtime-fixes.js
+          grep -q "bootstrap.js?v=1017-cloud17-prod7" index.html
+      - name: Rebuild and validate bank proxy
+        run: |
+          node - <<'NODE'
+          const fs=require('fs'),zlib=require('zlib');
+          const chunks=['01','02','03'].map(n=>fs.readFileSync(`packed/proxygz-${n}.txt`,'utf8').trim()).join('');
+          const source=zlib.gunzipSync(Buffer.from(chunks,'base64')).toString('utf8');
+          fs.writeFileSync('/tmp/bank-proxy-source.js',source);
+          NODE
+          node --check /tmp/bank-proxy-source.js
+          grep -q "function efiCredentials" /tmp/bank-proxy-source.js
+          grep -q "function efiEnvironment" /tmp/bank-proxy-source.js
+          grep -q "diagnoseEnvironment:true" /tmp/bank-proxy-source.js
+          grep -q "function mpAccessToken" /tmp/bank-proxy-source.js
+          grep -q "api.mercadolibre.com/users/me" /tmp/bank-proxy-source.js
+          grep -q "async function issueMp" /tmp/bank-proxy-source.js
+          grep -q "api.mercadopago.com/v1/orders" /tmp/bank-proxy-source.js
+          grep -q "payment_method:{id:'boleto',type:'ticket'}" /tmp/bank-proxy-source.js
+          grep -q "X-Idempotency-Key" /tmp/bank-proxy-source.js
+          grep -q "expiration_time" /tmp/bank-proxy-source.js
+          if grep -q "api.mercadopago.com/users/me" /tmp/bank-proxy-source.js; then echo "Legacy Mercado Pago test endpoint still present"; exit 1; fi

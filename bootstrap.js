@@ -2,8 +2,9 @@
   window.__PROVEDOR_PLUS_CLOUD__=true;
   const read=async(paths)=>{const parts=await Promise.all(paths.map(async p=>{const r=await fetch(p,{cache:'no-store'});if(!r.ok)throw new Error(`Falha ao carregar ${p}: ${r.status}`);return r.text()}));return parts.join('')};
   const loadScript=src=>new Promise((resolve,reject)=>{const s=document.createElement('script');s.src=src;s.onload=resolve;s.onerror=()=>reject(new Error(`Falha ao carregar ${src}`));document.head.appendChild(s)});
+  const loadStyle=(href,id)=>new Promise((resolve,reject)=>{const existing=document.getElementById(id);if(existing){resolve();return}const link=document.createElement('link');link.rel='stylesheet';link.href=href;link.id=id;link.onload=resolve;link.onerror=()=>reject(new Error(`Falha ao carregar ${href}`));document.head.appendChild(link)});
   const gunzipB64=async b64=>{const bin=atob(b64.replace(/\s+/g,'')),bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);if(typeof DecompressionStream!=='function')throw new Error('Este navegador não suporta a descompressão necessária. Atualize o Chrome/Edge.');const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));return new Response(stream).text()};
-  const css=await read(['/parts/basecss-01.txt','/parts/basecss-02.txt','/parts/basecss-03.txt','/parts/fincss-01.txt','/ui-fixes.css?v=1017-fix8','/client-status-stable-view.css?v=1017-status-stable1']);
+  const css=await read(['/parts/basecss-01.txt','/parts/basecss-02.txt','/parts/basecss-03.txt','/parts/fincss-01.txt','/ui-fixes.css?v=1017-fix8']);
   const style=document.createElement('style');style.textContent=css;document.head.appendChild(style);
 
   await loadScript('/auth-gate.js?v=1017-cloud17');
@@ -37,14 +38,32 @@
   await loadScript('/cloud-backup-store.js?v=1017-cloud17');
   window.ProvedorPlusCloudState.wrapApi(window.provedor);
   await loadScript('/mikrotik-read-stability.js?v=1017-mikrotikstable1').catch(error=>console.error('Provedor Plus: a estabilização das leituras MikroTik não foi carregada.',error));
-  await loadScript('/ui-runtime-fixes.js?v=1017-fix9');
-  await loadScript('/client-status-enhancements.js?v=1017-status6').catch(error=>console.error('Provedor Plus: os indicadores avançados do cliente não foram carregados.',error));
-  await loadScript('/client-status-layout-cleanup.js?v=1017-statuslayout2').catch(error=>console.error('Provedor Plus: a organização visual do status do cliente não foi carregada.',error));
-  await loadScript('/dashboard-enhancements.js?v=1017-dashboard1').catch(error=>console.error('Provedor Plus: o Dashboard gerencial não foi carregado.',error));
-  await loadScript('/billing-bank-selector.js?v=1017-billingbank3').catch(error=>console.error('Provedor Plus: a seleção do banco emissor não foi carregada.',error));
+
+  // Carrega os estilos aprovados antes da interface para evitar mudança visual depois que a tela já apareceu.
+  await Promise.all([
+    loadStyle('/client-status-enhancements.css?v=1017-status6','pp-client-status-enhancements-css'),
+    loadStyle('/dashboard-enhancements.css?v=1017-dashboard1','pp-dashboard-enhancements-css'),
+    loadStyle('/staff-access.css?v=1017-staff1','pp-staff-access-css'),
+    loadStyle('/ticket-enhancements.css?v=1017-ticket1','pp-ticket-enhancements-css'),
+    loadStyle('/ui-readability-fixes.css?v=1017-readability1','pp-ui-readability-fixes-css')
+  ]);
+
+  // O Status precisa envolver a API antes do aplicativo, mas agora não cria um segundo polling.
+  await loadScript('/client-status-enhancements.js?v=1017-status7-stable').catch(error=>console.error('Provedor Plus: os indicadores avançados do cliente não foram carregados.',error));
+  await loadScript('/client-status-layout-cleanup.js?v=1017-statuslayout3-stable').catch(error=>console.error('Provedor Plus: a organização visual do status do cliente não foi carregada.',error));
+
+  const root=document.getElementById('root');
+  if(root)root.style.visibility='hidden';
   const appB64=await read(Array.from({length:33},(_,i)=>`/packed/appgz-${String(i+1).padStart(2,'0')}.txt`));
   const app=await gunzipB64(appB64),appUrl=URL.createObjectURL(new Blob([app],{type:'text/javascript'}));
   try{await import(appUrl)}finally{setTimeout(()=>URL.revokeObjectURL(appUrl),1500)}
+
+  // Ajustes de interface entram depois do aplicativo principal para não disputar a primeira renderização.
+  await loadScript('/ui-runtime-fixes.js?v=1017-fix10-stable');
+  await loadScript('/dashboard-enhancements.js?v=1017-dashboard1').catch(error=>console.error('Provedor Plus: o Dashboard gerencial não foi carregado.',error));
+  await loadScript('/billing-bank-selector.js?v=1017-billingbank3').catch(error=>console.error('Provedor Plus: a seleção do banco emissor não foi carregada.',error));
   await loadScript('/staff-access.js?v=1017-staff1').catch(error=>console.error('Provedor Plus: a gestão de funcionários não foi carregada.',error));
   await loadScript('/ticket-enhancements.js?v=1017-ticket1').catch(error=>console.error('Provedor Plus: a gestão avançada de chamados não foi carregada.',error));
-})().catch(err=>{console.error(err);const root=document.getElementById('root')||document.body,message=String(err&&err.message||err);root.innerHTML='<div style="font-family:Segoe UI,Arial,sans-serif;max-width:760px;margin:60px auto;padding:24px;border:1px solid #e5e7eb;border-radius:14px"><h2>Provedor Plus</h2><p>Não foi possível carregar o painel.</p><pre id="pp-startup-error" style="white-space:pre-wrap;color:#b91c1c"></pre><button id="pp-startup-retry">Tentar novamente</button></div>';const pre=root.querySelector('#pp-startup-error'),button=root.querySelector('#pp-startup-retry');if(pre)pre.textContent=message;if(button)button.addEventListener('click',()=>location.reload())});
+  await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+  if(root)root.style.visibility='';
+})().catch(err=>{console.error(err);const root=document.getElementById('root')||document.body;if(root)root.style.visibility='';const message=String(err&&err.message||err);root.innerHTML='<div style="font-family:Segoe UI,Arial,sans-serif;max-width:760px;margin:60px auto;padding:24px;border:1px solid #e5e7eb;border-radius:14px"><h2>Provedor Plus</h2><p>Não foi possível carregar o painel.</p><pre id="pp-startup-error" style="white-space:pre-wrap;color:#b91c1c"></pre><button id="pp-startup-retry">Tentar novamente</button></div>';const pre=root.querySelector('#pp-startup-error'),button=root.querySelector('#pp-startup-retry');if(pre)pre.textContent=message;if(button)button.addEventListener('click',()=>location.reload())});

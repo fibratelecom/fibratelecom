@@ -10,13 +10,9 @@ permissions:
 
 jobs:
   fix:
-    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
       - name: Corrigir e validar proxy bancário
         run: |
           node - <<'NODE'
@@ -25,9 +21,9 @@ jobs:
           const chunks=files.map(f=>fs.readFileSync(f,'utf8').trim()).join('');
           let source=zlib.gunzipSync(Buffer.from(chunks,'base64')).toString('utf8');
           let lines=source.split('\n');
+          if(lines.some(line=>line.includes('async function issueMp('))){fs.writeFileSync('/tmp/bank-proxy-source.js',source);process.exit(0);}
           const testIndex=lines.findIndex(line=>line.startsWith('async function testMp('));
           if(testIndex<0)throw new Error('testMp não encontrado.');
-          if(lines.some(line=>line.includes('async function issueMp(')))throw new Error('issueMp já existe; ajuste manual necessário.');
           const mpHelpers=`function mpAccessToken(m){const token=String(m?.accessToken||'').trim();if(!token)throw new Error('Mercado Pago: informe o Access Token.');return token;}
 function mpEnvironment(m){const value=String(m?.environment||'production').trim().toLowerCase();return ['test','teste','sandbox','homologation','homologacao'].includes(value)?'test':'production';}
 async function testMp(m){const token=mpAccessToken(m);const r=await jsonRequest('https://api.mercadolibre.com/users/me',{headers:{Authorization:\`Bearer \${token}\`},timeout:15000});if(r.status===401||r.status===403)throw new Error('Mercado Pago: Access Token não autorizado. Verifique se o token foi copiado completo, se pertence à aplicação correta e, em Produção, se as credenciais de produção foram ativadas.');if(r.status<200||r.status>=300||!r.data?.id)throw new Error(errMsg('Mercado Pago',r.status,r.data));return {connected:true,accountId:String(r.data.id),nickname:String(r.data.nickname||''),countryId:String(r.data.country_id||''),environment:mpEnvironment(m),message:\`Conectado à conta Mercado Pago\${r.data.nickname?\` (\${r.data.nickname})\`:''}.\`,checkedAt:new Date().toISOString()};}`;
@@ -60,5 +56,6 @@ async function testMp(m){const token=mpAccessToken(m);const r=await jsonRequest(
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add packed/proxygz-01.txt packed/proxygz-02.txt packed/proxygz-03.txt
+          if git diff --cached --quiet; then exit 0; fi
           git commit -m "Corrige autenticação e emissão Mercado Pago"
           git push

@@ -1,4 +1,7 @@
 (()=>{
+  if(window.__ProvedorPlusUiRuntimeStableInstalled)return;
+  window.__ProvedorPlusUiRuntimeStableInstalled=true;
+
   const replacements=[
     ['Provedor Plus 1.0.17','Provedor Plus'],
     ['Visão geral','Dashboard'],
@@ -43,6 +46,14 @@
   ];
 
   function replaceText(root){
+    if(!root)return;
+    if(root.nodeType===Node.TEXT_NODE){
+      let value=root.nodeValue||'',next=value;
+      for(const [from,to] of replacements)if(next.includes(from))next=next.replaceAll(from,to);
+      if(next!==value)root.nodeValue=next;
+      return;
+    }
+    if(!(root instanceof Element)&&root!==document.body)return;
     const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let n;
     while((n=walker.nextNode())){
       let value=n.nodeValue||'',next=value;
@@ -76,109 +87,60 @@
       .pp-dashboard-system-online{display:inline-flex!important;align-items:center!important;gap:7px!important;min-height:29px!important;padding:5px 10px!important;color:#55716b!important;background:#eef8f5!important;border:1px solid #d7ebe5!important;border-radius:20px!important;font-size:11px!important;font-weight:700!important;line-height:1.2!important;white-space:nowrap!important}
       .pp-dashboard-system-online i{display:block!important;width:7px!important;height:7px!important;background:#24b888!important;border-radius:50%!important;box-shadow:0 0 0 4px #dff5ed!important}
       .pp-dashboard-host{padding-top:20px!important}
-      @media(min-width:901px){
-        .topbar{display:none!important;height:0!important;min-height:0!important;border:0!important;padding:0!important;overflow:hidden!important}
-        .content{padding-top:0!important}
-      }
-      @media(max-width:900px){
-        .brand{height:76px!important;min-height:76px!important;padding-top:5px!important}
-        .topbar{display:flex!important}
-        .pp-dashboard-host{padding-top:16px!important}
-        .pp-dashboard-title-row{gap:8px!important}
-      }
+      @media(min-width:901px){.topbar{display:none!important;height:0!important;min-height:0!important;border:0!important;padding:0!important;overflow:hidden!important}.content{padding-top:0!important}}
+      @media(max-width:900px){.brand{height:76px!important;min-height:76px!important;padding-top:5px!important}.topbar{display:flex!important}.pp-dashboard-host{padding-top:16px!important}.pp-dashboard-title-row{gap:8px!important}}
     `;
     document.head.appendChild(style);
   }
 
   function patchDashboardStatus(){
-    const heading=document.querySelector('.pp-dashboard-heading');
-    const title=heading?.querySelector('h1');
+    const heading=document.querySelector('.pp-dashboard-heading'),title=heading?.querySelector('h1');
     if(!heading||!title)return;
     let row=heading.querySelector('.pp-dashboard-title-row');
-    if(!row){
-      row=document.createElement('div');
-      row.className='pp-dashboard-title-row';
-      title.parentNode?.insertBefore(row,title);
-      row.appendChild(title);
-    }
-    if(!row.querySelector('.pp-dashboard-system-online')){
-      const status=document.createElement('span');
-      status.className='pp-dashboard-system-online';
-      status.innerHTML='<i></i><span>Sistema online</span>';
-      row.appendChild(status);
-    }
+    if(!row){row=document.createElement('div');row.className='pp-dashboard-title-row';title.parentNode?.insertBefore(row,title);row.appendChild(title)}
+    if(!row.querySelector('.pp-dashboard-system-online')){const status=document.createElement('span');status.className='pp-dashboard-system-online';status.innerHTML='<i></i><span>Sistema online</span>';row.appendChild(status)}
   }
 
   function patchLogout(){
-    const card=document.querySelector('.user-card');
-    if(!card||card.querySelector('.pp-shell-logout'))return;
-    const button=document.createElement('button');
-    button.type='button';
-    button.className='pp-shell-logout';
-    button.textContent='Sair';
-    button.title='Sair do Provedor Plus';
-    button.setAttribute('aria-label','Sair do Provedor Plus');
-    button.addEventListener('click',async()=>{
-      if(button.disabled)return;
-      button.disabled=true;
-      button.textContent='Saindo…';
-      try{
-        if(window.ProvedorPlusAuth?.logout)await window.ProvedorPlusAuth.logout();
-        else location.reload();
-      }catch(error){
-        console.error('Provedor Plus: falha ao sair.',error);
-        button.disabled=false;
-        button.textContent='Sair';
-      }
-    });
+    const card=document.querySelector('.user-card');if(!card||card.querySelector('.pp-shell-logout'))return;
+    const button=document.createElement('button');button.type='button';button.className='pp-shell-logout';button.textContent='Sair';button.title='Sair do Provedor Plus';button.setAttribute('aria-label','Sair do Provedor Plus');
+    button.addEventListener('click',async()=>{if(button.disabled)return;button.disabled=true;button.textContent='Saindo…';try{if(window.ProvedorPlusAuth?.logout)await window.ProvedorPlusAuth.logout();else location.reload()}catch(error){console.error('Provedor Plus: falha ao sair.',error);button.disabled=false;button.textContent='Sair'}});
     card.appendChild(button);
   }
 
   function patchMikrotikNote(){
-    const config=document.querySelector('.router-config');
-    if(!config)return;
+    const config=document.querySelector('.router-config');if(!config)return;
     let note=config.querySelector('.cloud-mode-note');
-    if(!note){
-      note=document.createElement('div');
-      note.className='cloud-mode-note';
-      const picker=config.querySelector('.router-picker');
-      (picker||config.querySelector('.panel-head'))?.insertAdjacentElement('afterend',note);
-    }
+    if(!note){note=document.createElement('div');note.className='cloud-mode-note';const picker=config.querySelector('.router-picker');(picker||config.querySelector('.panel-head'))?.insertAdjacentElement('afterend',note)}
     const html='<strong>Integração MikroTik</strong>Gerenciamento do RouterOS 7 via REST HTTPS usando o endereço MikroTik Cloud e a porta 443.';
     if(note.innerHTML!==html)note.innerHTML=html;
   }
 
   function patchRouterForm(){
-    document.querySelectorAll('.router-form.multi select').forEach(select=>{
-      const api=[...select.options].find(o=>o.value==='api');
-      const rest=[...select.options].find(o=>o.value==='rest');
-      if(api&&rest){
-        if(!api.hidden)api.hidden=true;
-        if(!api.disabled)api.disabled=true;
-        if(rest.textContent!=='REST HTTPS')rest.textContent='REST HTTPS';
-        if(select.value==='api'&&!select.dataset.cloudNormalized){
-          select.dataset.cloudNormalized='1';
-          select.value='rest';
-          select.dispatchEvent(new Event('change',{bubbles:true}));
-        }
-      }
-    });
-    document.querySelectorAll('.router-form.multi input').forEach(input=>{
-      const label=input.closest('label');
-      if(label&&label.textContent.includes('Endereço MikroTik Cloud')&&input.placeholder!=='exemplo.sn.mynetname.net')input.placeholder='exemplo.sn.mynetname.net';
-    });
+    document.querySelectorAll('.router-form.multi select').forEach(select=>{const api=[...select.options].find(o=>o.value==='api'),rest=[...select.options].find(o=>o.value==='rest');if(api&&rest){if(!api.hidden)api.hidden=true;if(!api.disabled)api.disabled=true;if(rest.textContent!=='REST HTTPS')rest.textContent='REST HTTPS';if(select.value==='api'&&!select.dataset.cloudNormalized){select.dataset.cloudNormalized='1';select.value='rest';select.dispatchEvent(new Event('change',{bubbles:true}))}}});
+    document.querySelectorAll('.router-form.multi input').forEach(input=>{const label=input.closest('label');if(label&&label.textContent.includes('Endereço MikroTik Cloud')&&input.placeholder!=='exemplo.sn.mynetname.net')input.placeholder='exemplo.sn.mynetname.net'});
   }
 
-  let scheduled=false;
-  const observer=new MutationObserver(()=>{if(!scheduled){scheduled=true;requestAnimationFrame(patch)}});
-  function patch(){
-    scheduled=false;observer.disconnect();
-    try{
-      if(document.title!=='Provedor Plus')document.title='Provedor Plus';
-      const root=document.body;if(!root)return;
-      installShellStyles();replaceText(root);patchDashboardStatus();patchLogout();patchMikrotikNote();patchRouterForm();
-    }finally{observer.observe(document.documentElement,{childList:true,subtree:true,characterData:true})}
+  function patchStatic(){
+    if(document.title!=='Provedor Plus')document.title='Provedor Plus';
+    installShellStyles();patchDashboardStatus();patchLogout();patchMikrotikNote();patchRouterForm();
   }
-  observer.observe(document.documentElement,{childList:true,subtree:true,characterData:true});
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',patch,{once:true});else patch();
+
+  function patchAddedNode(node){
+    replaceText(node);
+    if(!(node instanceof Element))return;
+    if(node.matches('.user-card,.router-config,.router-form,.pp-dashboard-heading')||node.querySelector('.user-card,.router-config,.router-form,.pp-dashboard-heading'))patchStatic();
+  }
+
+  function initial(){replaceText(document.body);patchStatic()}
+
+  const observer=new MutationObserver(records=>{
+    let structural=false;
+    for(const record of records){
+      for(const node of record.addedNodes){patchAddedNode(node);structural=true}
+    }
+    if(structural)patchStatic();
+  });
+  observer.observe(document.documentElement,{childList:true,subtree:true});
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initial,{once:true});else initial();
 })();

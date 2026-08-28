@@ -1,24 +1,64 @@
-name: Inspect Mercado Pago
+name: Fix Mercado Pago
 
 on:
   push:
     branches:
       - fix/efi-authorization-diagnostics
 
+permissions:
+  contents: write
+
 jobs:
-  inspect:
+  fix:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Inspect bank proxy
+      - name: Corrigir e validar proxy bancário
         run: |
           node - <<'NODE'
           const fs=require('fs'),zlib=require('zlib');
-          const chunks=['01','02','03'].map(n=>fs.readFileSync(`packed/proxygz-${n}.txt`,'utf8').trim()).join('');
-          const source=zlib.gunzipSync(Buffer.from(chunks,'base64')).toString('utf8');
+          const files=['01','02','03'].map(n=>`packed/proxygz-${n}.txt`);
+          const chunks=files.map(f=>fs.readFileSync(f,'utf8').trim()).join('');
+          let source=zlib.gunzipSync(Buffer.from(chunks,'base64')).toString('utf8');
+          let lines=source.split('\n');
+          const testIndex=lines.findIndex(line=>line.startsWith('async function testMp('));
+          if(testIndex<0)throw new Error('testMp não encontrado.');
+          if(lines.some(line=>line.includes('async function issueMp(')))throw new Error('issueMp já existe; ajuste manual necessário.');
+          const mpHelpers=`function mpAccessToken(m){const token=String(m?.accessToken||'').trim();if(!token)throw new Error('Mercado Pago: informe o Access Token.');return token;}
+function mpEnvironment(m){const value=String(m?.environment||'production').trim().toLowerCase();return ['test','teste','sandbox','homologation','homologacao'].includes(value)?'test':'production';}
+async function testMp(m){const token=mpAccessToken(m);const r=await jsonRequest('https://api.mercadolibre.com/users/me',{headers:{Authorization:\`Bearer \${token}\`},timeout:15000});if(r.status===401||r.status===403)throw new Error('Mercado Pago: Access Token não autorizado. Verifique se o token foi copiado completo, se pertence à aplicação correta e, em Produção, se as credenciais de produção foram ativadas.');if(r.status<200||r.status>=300||!r.data?.id)throw new Error(errMsg('Mercado Pago',r.status,r.data));return {connected:true,accountId:String(r.data.id),nickname:String(r.data.nickname||''),countryId:String(r.data.country_id||''),environment:mpEnvironment(m),message:\`Conectado à conta Mercado Pago\${r.data.nickname?\` (\${r.data.nickname})\`:''}.\`,checkedAt:new Date().toISOString()};}`;
+          lines.splice(testIndex,1,...mpHelpers.split('\n'));
+          const syncIndex=lines.findIndex(line=>line.startsWith('async function syncInvoice('));
+          if(syncIndex<0)throw new Error('syncInvoice não encontrado.');
+          const issueMp=`async function issueMp(invoice,client,m){const token=mpAccessToken(m),env=mpEnvironment(m),c=customer(client,'Mercado Pago'),ext=external(invoice),amountCents=Math.floor(Number(invoice?.amount_cents)||0);if(amountCents<=0)throw new Error('Mercado Pago: o valor da cobrança precisa ser maior que zero.');const days=mpDays(invoice?.due_date);if(!Number.isFinite(days)||days<1||days>30)throw new Error('Mercado Pago: o vencimento do boleto precisa ficar entre 1 e 30 dias a partir da emissão.');const amount=(amountCents/100).toFixed(2),name=String(c.name||'').trim(),parts=name.split(/\\s+/).filter(Boolean),firstName=parts.shift()||name,lastName=parts.join(' ')||firstName,email=env==='test'?'test_user_br@testuser.com':c.email;const body={type:'online',external_reference:String(ext).slice(0,64),processing_mode:'automatic',total_amount:amount,description:String(invoice.description||invoice.billing_type||'Mensalidade Provedor Plus').slice(0,255),payer:{email,first_name:firstName,last_name:lastName,identification:{type:c.documentType,number:c.document},address:{street_name:c.street,street_number:String(c.addressNumber||'S/N'),zip_code:c.cep,neighborhood:c.neighborhood,state:c.state,city:c.city}},transactions:{payments:[{amount,payment_method:{id:'boleto',type:'ticket'},expiration_time:\`P\${days}D\`}]}};const r=await jsonRequest('https://api.mercadopago.com/v1/orders',{method:'POST',headers:{Authorization:\`Bearer \${token}\`,'X-Idempotency-Key':crypto.randomUUID()},body,timeout:18000});if(r.status<200||r.status>=300||!r.data?.id)throw new Error(errMsg('Mercado Pago',r.status,r.data));const p=r.data?.transactions?.payments?.[0]||{},method=p.payment_method||{};return {bank_provider:'mercadoPago',bank_environment:env,bank_charge_id:String(p.id||r.data.id),bank_order_id:String(r.data.id),bank_payment_id:String(p.id||''),bank_external_reference:String(r.data.external_reference||ext),bank_status:String(r.data.status||p.status||'action_required'),bank_status_detail:String(r.data.status_detail||p.status_detail||'waiting_payment'),bank_barcode:String(method.barcode_content||''),bank_digitable_line:String(method.digitable_line||method.barcode_content||''),bank_ticket_url:String(method.ticket_url||''),bank_pdf_url:'',bank_pix_code:'',bank_last_sync_at:new Date().toISOString()};}`;
+          lines.splice(syncIndex,0,issueMp);
+          lines=lines.map(line=>{
+            if(line.startsWith('async function syncInvoice(')||line.startsWith('async function cancelInvoice(')){
+              line=line.replace("if(invoice.bank_provider==='mercadoPago'){if(!m?.accessToken)throw new Error('Mercado Pago: Access Token não configurado.');","if(invoice.bank_provider==='mercadoPago'){const token=mpAccessToken(m);");
+              line=line.replaceAll('Bearer ${m.accessToken}','Bearer ${token}');
+            }
+            return line;
+          });
+          source=lines.join('\n');
           fs.writeFileSync('/tmp/bank-proxy-source.js',source);
+          const compressed=zlib.gzipSync(Buffer.from(source,'utf8')).toString('base64');
+          if(compressed.length>10500)throw new Error(`Proxy compactado excedeu 3 partes: ${compressed.length}`);
+          for(let i=0;i<3;i++)fs.writeFileSync(files[i],compressed.slice(i*3500,(i+1)*3500)+'\n');
           NODE
-          grep -n -C 4 -E "issueMp|testMp|users/me|processing_mode|payment_method_id|payment_method|X-Idempotency-Key" /tmp/bank-proxy-source.js || true
+          node --check /tmp/bank-proxy-source.js
+          grep -q "function mpAccessToken" /tmp/bank-proxy-source.js
+          grep -q "api.mercadolibre.com/users/me" /tmp/bank-proxy-source.js
+          grep -q "async function issueMp" /tmp/bank-proxy-source.js
+          grep -q "payment_method:{id:'boleto',type:'ticket'}" /tmp/bank-proxy-source.js
+          grep -q "X-Idempotency-Key" /tmp/bank-proxy-source.js
+          grep -q "expiration_time" /tmp/bank-proxy-source.js
+          ! grep -q "api.mercadopago.com/users/me" /tmp/bank-proxy-source.js
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packed/proxygz-01.txt packed/proxygz-02.txt packed/proxygz-03.txt
+          git commit -m "Corrige autenticação e emissão Mercado Pago"
+          git push

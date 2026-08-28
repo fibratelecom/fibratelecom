@@ -50,13 +50,23 @@
 
   function ensureRemoteAccess(panel,section,client){
     if(!panel||!section)return false;
-    const originalButton=[...section.querySelectorAll('button')].find(button=>{const text=normalize(button.textContent);return text.includes('roteador')||text.includes('onu')||text.includes('acessar')||text.includes('abrir')})||null;
     const device=String(client?.device_ip||rowValue(section,'Roteador/ONU do cliente')||'').trim();
     let block=panel.querySelector('.client-remote-access');
-    if(!block){block=document.createElement('div');block.className='client-remote-access';block.innerHTML='<div><strong>Acesso remoto ao equipamento</strong><small data-pp-remote-detail></small></div><button type="button" data-pp-original-router>Acessar roteador / ONU</button>';panel.appendChild(block);const button=block.querySelector('[data-pp-original-router]');button?.addEventListener('click',()=>button._ppOriginalRouter?.click())}
-    const detail=block.querySelector('[data-pp-remote-detail]'),button=block.querySelector('[data-pp-original-router]');
+    if(!block){block=document.createElement('div');block.className='client-remote-access';block.innerHTML='<div><strong>Acesso remoto ao equipamento</strong><small data-pp-remote-detail></small></div>';panel.appendChild(block)}
+    const detail=block.querySelector('[data-pp-remote-detail]');
     const detailText=device?`Roteador / ONU: ${device}`:'Use o acesso original cadastrado para este cliente.';if(detail&&detail.textContent!==detailText)detail.textContent=detailText;
-    if(button){button._ppOriginalRouter=originalButton;button.hidden=!originalButton}
+
+    let originalButton=block.querySelector('button[data-pp-original-router="true"]');
+    if(!originalButton){
+      originalButton=[...section.querySelectorAll('button')].find(button=>{const text=normalize(button.textContent);return text.includes('roteador')||text.includes('onu')||text.includes('acessar')||text.includes('abrir')})||null;
+      if(originalButton){
+        originalButton.dataset.ppOriginalRouter='true';
+        originalButton.hidden=false;
+        originalButton.style.removeProperty('display');
+        originalButton.textContent='Acessar roteador / ONU';
+        block.appendChild(originalButton);
+      }
+    }
     return Boolean(originalButton);
   }
 
@@ -76,7 +86,8 @@
       if(section){
         ensureFact(facts,'Velocidade contratada',rowValue(section,'Velocidade contratada'));ensureFact(facts,'Vencimento',rowValue(section,'Vencimento'));ensureFact(facts,'Status do cadastro',rowValue(section,'Status do cadastro'));ensureFact(facts,'Roteador/ONU do cliente',client?.device_ip||rowValue(section,'Roteador/ONU do cliente'));
         const remotePreserved=ensureRemoteAccess(panel,section,client);
-        if(remotePreserved||!section.querySelector('button')){if(section.style.display!=='none')section.style.display='none';section.dataset.ppContractAccessHidden='true'}
+        if(remotePreserved){if(section.style.display!=='none')section.style.display='none';section.dataset.ppContractAccessHidden='true'}
+        else{section.style.removeProperty('display');delete section.dataset.ppContractAccessHidden}
       }
       hideOnlySafeLegacyConsumption(modal);
     }finally{running=false}

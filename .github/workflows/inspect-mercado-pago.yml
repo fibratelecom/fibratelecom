@@ -21,4 +21,4 @@ jobs:
           const source=zlib.gunzipSync(Buffer.from(chunks,'base64')).toString('utf8');
           fs.writeFileSync('/tmp/bank-proxy-source.js',source);
           NODE
-          grep -n -C 3 -E "function issueMp|function testMp|mercadopago.com/v1/orders|api.mercadolibre.com/users/me|api.mercadopago.com/users/me|X-Idempotency-Key|processing_mode|payment_method" /tmp/bank-proxy-source.js || true
+          grep -n -C 4 -E "issueMp|testMp|users/me|processing_mode|payment_method_id|payment_method|X-Idempotency-Key" /tmp/bank-proxy-source.js || true

@@ -75,8 +75,8 @@
       if(client?.connection_type!=='PPPoE'||!client?.router_id||!client?.pppoe_username)return baseStatus;
       try{
         const router=await routerAuth(client.router_id),live=await cloudRead('client.status',{router,data:clone(client)});
-        const traffic=baseStatus.traffic||null;
-        trafficRecord(id,live).catch(error=>console.error('Provedor Plus: leitura do MikroTik concluída, mas o consumo mensal não pôde ser gravado.',error));
+        let traffic=baseStatus.traffic||null;
+        try{traffic=await trafficRecord(id,live)}catch(error){console.error('Provedor Plus: leitura do MikroTik concluída, mas o consumo mensal não pôde ser gravado.',error)}
         const liveDown=Number(live.downloadBps),liveUp=Number(live.uploadBps),trafficDown=Number(traffic?.downloadBps),trafficUp=Number(traffic?.uploadBps);
         return {...baseStatus,...live,routerId:Number(client.router_id)||0,routerName:client.router_name||router.name,routerHost:router.host,connectionState:live.online?'online':'offline',connectionError:'',trafficError:'',liveRatesAvailable:Boolean(live.liveRatesAvailable)||(Number.isFinite(trafficDown)&&trafficDown>0)||(Number.isFinite(trafficUp)&&trafficUp>0),downloadBps:Number.isFinite(liveDown)?Math.max(0,liveDown):(Number.isFinite(trafficDown)?Math.max(0,trafficDown):0),uploadBps:Number.isFinite(liveUp)?Math.max(0,liveUp):(Number.isFinite(trafficUp)?Math.max(0,trafficUp):0),traffic:traffic||baseStatus.traffic};
       }catch(error){return {...baseStatus,connectionState:'unavailable',connectionError:error instanceof Error?error.message:String(error),liveRatesAvailable:false}}

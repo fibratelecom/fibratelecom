@@ -7,7 +7,7 @@
   const formatCpf=value=>{const raw=String(value||'').trim(),digits=raw.replace(/\D/g,'');return digits.length===11?digits.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/,'$1.$2.$3-$4'):raw};
   const firstValue=(...values)=>{for(const value of values){if(value===0)return '0';if(typeof value==='string'&&value.trim())return value.trim();if(typeof value==='number'&&Number.isFinite(value))return String(value)}return ''};
   const formatDueDay=value=>{const raw=String(value||'').trim();if(!raw)return '';if(/^\d{1,2}$/.test(raw))return `Dia ${Number(raw)}`;const iso=raw.match(/^\d{4}-\d{2}-(\d{2})/);if(iso)return `Dia ${Number(iso[1])}`;return raw};
-  const whatsappDigits=value=>{let digits=String(value||'').replace(/\D/g,'');if(digits.startsWith('00'))digits=digits.slice(2);if((digits.length===10||digits.length===11)&&!digits.startsWith('55'))digits=`55${digits}`;return digits};
+  const whatsappDigits=value=>{let digits=String(value||'').replace(/\D/g,'');if(digits.startsWith('00'))digits=digits.slice(2);if(digits.length===10||digits.length===11)digits=`55${digits}`;return digits};
   const formatPhone=value=>{const raw=String(value||'').trim(),digits=raw.replace(/\D/g,'');const local=digits.startsWith('55')&&digits.length>=12?digits.slice(2):digits;if(local.length===11)return local.replace(/(\d{2})(\d{5})(\d{4})/,'($1) $2-$3');if(local.length===10)return local.replace(/(\d{2})(\d{4})(\d{4})/,'($1) $2-$3');return raw};
 
   if(!document.getElementById('pp-client-status-visibility-safety')){
@@ -33,16 +33,19 @@
   }
 
   function findFact(facts,label){return [...facts.querySelectorAll(':scope > article')].find(el=>normalize(el.querySelector('span')?.textContent)===normalize(label))||null}
+  function removeIntegratedFact(facts,label){const article=facts?findFact(facts,label):null;if(article?.dataset?.ppIntegratedFact)article.remove()}
 
   function ensureFact(facts,label,value){
-    value=String(value||'').trim();if(!facts||!value||['—','nao identificado','não identificado','sem informacao','sem informação'].includes(normalize(value)))return;
+    value=String(value||'').trim();
+    if(!facts||!value||['—','nao identificado','não identificado','sem informacao','sem informação'].includes(normalize(value))){removeIntegratedFact(facts,label);return}
     let article=findFact(facts,label);
     if(!article){article=document.createElement('article');article.dataset.ppIntegratedFact=normalize(label);article.innerHTML='<span></span><strong></strong>';facts.appendChild(article)}
     const labelEl=article.querySelector('span'),valueEl=article.querySelector('strong');if(labelEl&&labelEl.textContent!==label)labelEl.textContent=label;if(valueEl&&valueEl.textContent!==value)valueEl.textContent=value;
   }
 
   function ensureWhatsappFact(facts,value){
-    const digits=whatsappDigits(value);if(!facts||digits.length<12)return;
+    const digits=whatsappDigits(value);
+    if(!facts||digits.length<12||digits.length>15){removeIntegratedFact(facts,'WhatsApp');return}
     let article=findFact(facts,'WhatsApp');
     if(!article){article=document.createElement('article');article.dataset.ppIntegratedFact='whatsapp';article.innerHTML='<span>WhatsApp</span><strong></strong>';facts.appendChild(article)}
     const strong=article.querySelector('strong');if(!strong)return;
@@ -67,7 +70,10 @@
   function clientContact(client){
     const addressObject=client?.address&&typeof client.address==='object'?client.address:(client?.address_data&&typeof client.address_data==='object'?client.address_data:{});
     const dueDay=formatDueDay(firstValue(client?.due_day,client?.billing_day,client?.day_due,client?.vencimento_dia,client?.dueDateDay,client?.due_date));
-    const address=firstValue(typeof client?.address==='string'?client.address:'',client?.street,client?.logradouro,client?.address_line,client?.endereco,addressObject?.street,addressObject?.logradouro,addressObject?.address,addressObject?.endereco);
+    const directAddress=firstValue(typeof client?.address==='string'?client.address:'',addressObject?.address,addressObject?.endereco);
+    const street=firstValue(client?.street,client?.logradouro,client?.address_line,client?.endereco,addressObject?.street,addressObject?.logradouro);
+    const number=firstValue(client?.number,client?.numero,client?.address_number,addressObject?.number,addressObject?.numero);
+    const address=directAddress||[street,number].filter(Boolean).join(', ');
     const neighborhood=firstValue(client?.neighborhood,client?.bairro,client?.district,addressObject?.neighborhood,addressObject?.bairro,addressObject?.district);
     const city=firstValue(client?.city,client?.cidade,client?.municipality,client?.municipio,addressObject?.city,addressObject?.cidade,addressObject?.municipality);
     const state=firstValue(client?.state,client?.estado,client?.uf,addressObject?.state,addressObject?.estado,addressObject?.uf);
@@ -112,9 +118,11 @@
       const section=contractBlock(modal),client=await currentClient(modal,result);
       const cpf=formatCpf(client?.cpf||client?.document||client?.document_number||client?.cpf_cnpj||client?.tax_id||'');
       const contact=clientContact(client||{});
+      const dueFallback=section?formatDueDay(rowValue(section,'Vencimento')):'';
       ensureFact(facts,'Cliente',client?.name||'');
       ensureFact(facts,'CPF',cpf);
-      ensureFact(facts,'Dia do Vencimento',contact.dueDay);
+      ensureFact(facts,'Dia do Vencimento',contact.dueDay||dueFallback);
+      removeIntegratedFact(facts,'Vencimento');
       ensureFact(facts,'Endereço',contact.address);
       ensureFact(facts,'Bairro',contact.neighborhood);
       ensureFact(facts,'Cidade',contact.city);
@@ -124,7 +132,7 @@
       ensureFact(facts,'Plano contratado',planName(client));
       ensureFact(facts,'MikroTik concentrador',routerName(client));
       if(section){
-        ensureFact(facts,'Velocidade contratada',rowValue(section,'Velocidade contratada'));ensureFact(facts,'Vencimento',rowValue(section,'Vencimento'));ensureFact(facts,'Status do cadastro',rowValue(section,'Status do cadastro'));ensureFact(facts,'Roteador/ONU do cliente',client?.device_ip||rowValue(section,'Roteador/ONU do cliente'));
+        ensureFact(facts,'Velocidade contratada',rowValue(section,'Velocidade contratada'));ensureFact(facts,'Status do cadastro',rowValue(section,'Status do cadastro'));ensureFact(facts,'Roteador/ONU do cliente',client?.device_ip||rowValue(section,'Roteador/ONU do cliente'));
         const remotePreserved=ensureRemoteAccess(panel,section,client);
         if(remotePreserved){if(section.style.display!=='none')section.style.display='none';section.dataset.ppContractAccessHidden='true'}
         else{section.style.removeProperty('display');delete section.dataset.ppContractAccessHidden}

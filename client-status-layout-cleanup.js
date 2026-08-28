@@ -55,13 +55,15 @@
 
   function currentState(){return window.ProvedorPlusCloudState?.getState?.()||{}}
   async function currentClient(modal,result){
-    if(result?.client)return result.client;
     const title=normalize(modal.querySelector('.modal-head h2,h2')?.textContent||'');
     const stateClients=Array.isArray(currentState()?.clients)?currentState().clients:[];
-    let client=stateClients.find(row=>{const name=normalize(row?.name||'');return name&&title.includes(name)})||null;
-    if(client)return client;
-    try{const rows=typeof api?.clients?.list==='function'?await api.clients.list():[];client=(Array.isArray(rows)?rows:[]).find(row=>{const name=normalize(row?.name||'');return name&&title.includes(name)})||null}catch{}
-    return client;
+    const resultClient=result?.client||null,resultId=Number(resultClient?.id)||Number(modal.dataset.ppClientStatusId)||0;
+    let stateClient=resultId?stateClients.find(row=>Number(row?.id)===resultId)||null:null;
+    if(!stateClient)stateClient=stateClients.find(row=>{const name=normalize(row?.name||'');return name&&title.includes(name)})||null;
+    if(resultClient)return stateClient?{...resultClient,...stateClient}:resultClient;
+    if(stateClient)return stateClient;
+    try{const rows=typeof api?.clients?.list==='function'?await api.clients.list():[];return (Array.isArray(rows)?rows:[]).find(row=>Number(row?.id)===resultId||(()=>{const name=normalize(row?.name||'');return name&&title.includes(name)})())||null}catch{}
+    return null;
   }
 
   function planName(client){if(!client)return '';const state=currentState(),plans=Array.isArray(state?.plans)?state.plans:[],byId=client?.plan_id?plans.find(plan=>Number(plan?.id)===Number(client.plan_id)):null;return String(client?.plan_name||byId?.name||client?.plan||'').trim()}
@@ -73,7 +75,7 @@
     const directAddress=firstValue(typeof client?.address==='string'?client.address:'',addressObject?.address,addressObject?.endereco);
     const street=firstValue(client?.street,client?.logradouro,client?.address_line,client?.endereco,addressObject?.street,addressObject?.logradouro);
     const number=firstValue(client?.number,client?.numero,client?.address_number,addressObject?.number,addressObject?.numero);
-    const address=directAddress||[street,number].filter(Boolean).join(', ');
+    const baseAddress=directAddress||street,address=number?(baseAddress?(normalize(baseAddress).endsWith(normalize(number))?baseAddress:`${baseAddress}, ${number}`):number):baseAddress;
     const neighborhood=firstValue(client?.neighborhood,client?.bairro,client?.district,addressObject?.neighborhood,addressObject?.bairro,addressObject?.district);
     const city=firstValue(client?.city,client?.cidade,client?.municipality,client?.municipio,addressObject?.city,addressObject?.cidade,addressObject?.municipality);
     const state=firstValue(client?.state,client?.estado,client?.uf,addressObject?.state,addressObject?.estado,addressObject?.uf);

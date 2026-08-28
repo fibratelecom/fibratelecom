@@ -4,11 +4,16 @@
 
   const api=window.provedor;
   const normalize=value=>String(value??'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
+  const formatCpf=value=>{const raw=String(value||'').trim(),digits=raw.replace(/\D/g,'');return digits.length===11?digits.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/,'$1.$2.$3-$4'):raw};
+  const firstValue=(...values)=>{for(const value of values){if(value===0)return '0';if(typeof value==='string'&&value.trim())return value.trim();if(typeof value==='number'&&Number.isFinite(value))return String(value)}return ''};
+  const formatDueDay=value=>{const raw=String(value||'').trim();if(!raw)return '';if(/^\d{1,2}$/.test(raw))return `Dia ${Number(raw)}`;const iso=raw.match(/^\d{4}-\d{2}-(\d{2})/);if(iso)return `Dia ${Number(iso[1])}`;return raw};
+  const whatsappDigits=value=>{let digits=String(value||'').replace(/\D/g,'');if(digits.startsWith('00'))digits=digits.slice(2);if(digits.length===10||digits.length===11)digits=`55${digits}`;return digits};
+  const formatPhone=value=>{const raw=String(value||'').trim(),digits=raw.replace(/\D/g,'');const local=digits.startsWith('55')&&digits.length>=12?digits.slice(2):digits;if(local.length===11)return local.replace(/(\d{2})(\d{5})(\d{4})/,'($1) $2-$3');if(local.length===10)return local.replace(/(\d{2})(\d{4})(\d{4})/,'($1) $2-$3');return raw};
 
   if(!document.getElementById('pp-client-status-visibility-safety')){
     const style=document.createElement('style');
     style.id='pp-client-status-visibility-safety';
-    style.textContent='.client-status-modal{visibility:visible!important}.client-status-modal .client-access-facts{grid-template-columns:repeat(4,minmax(0,1fr))}.client-status-modal .client-remote-access{display:flex!important}@media(max-width:900px){.client-status-modal .client-access-facts{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:600px){.client-status-modal .client-access-facts{grid-template-columns:1fr}}';
+    style.textContent='.client-status-modal{visibility:visible!important}.client-status-modal .client-access-facts{grid-template-columns:repeat(4,minmax(0,1fr))}.client-status-modal .client-remote-access{display:flex!important}.client-status-modal .client-access-facts a[data-pp-whatsapp]{display:inline-flex;align-items:center;gap:6px;color:#087f69;text-decoration:none;font-weight:750}.client-status-modal .client-access-facts a[data-pp-whatsapp]:hover{text-decoration:underline}@media(max-width:900px){.client-status-modal .client-access-facts{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:600px){.client-status-modal .client-access-facts{grid-template-columns:1fr}}';
     document.head.appendChild(style);
   }
 
@@ -27,11 +32,25 @@
     return '';
   }
 
+  function findFact(facts,label){return [...facts.querySelectorAll(':scope > article')].find(el=>normalize(el.querySelector('span')?.textContent)===normalize(label))||null}
+  function removeIntegratedFact(facts,label){const article=facts?findFact(facts,label):null;if(article?.dataset?.ppIntegratedFact)article.remove()}
+
   function ensureFact(facts,label,value){
-    value=String(value||'').trim();if(!facts||!value||['—','nao identificado','não identificado','sem informacao','sem informação'].includes(normalize(value)))return;
-    let article=[...facts.querySelectorAll(':scope > article')].find(el=>normalize(el.querySelector('span')?.textContent)===normalize(label));
+    value=String(value||'').trim();
+    if(!facts||!value||['—','nao identificado','não identificado','sem informacao','sem informação'].includes(normalize(value))){removeIntegratedFact(facts,label);return}
+    let article=findFact(facts,label);
     if(!article){article=document.createElement('article');article.dataset.ppIntegratedFact=normalize(label);article.innerHTML='<span></span><strong></strong>';facts.appendChild(article)}
     const labelEl=article.querySelector('span'),valueEl=article.querySelector('strong');if(labelEl&&labelEl.textContent!==label)labelEl.textContent=label;if(valueEl&&valueEl.textContent!==value)valueEl.textContent=value;
+  }
+
+  function ensureWhatsappFact(facts,value){
+    const digits=whatsappDigits(value);
+    if(!facts||digits.length<12||digits.length>15){removeIntegratedFact(facts,'WhatsApp');return}
+    let article=findFact(facts,'WhatsApp');
+    if(!article){article=document.createElement('article');article.dataset.ppIntegratedFact='whatsapp';article.innerHTML='<span>WhatsApp</span><strong></strong>';facts.appendChild(article)}
+    const strong=article.querySelector('strong');if(!strong)return;
+    let link=strong.querySelector('a[data-pp-whatsapp]');if(!link){strong.textContent='';link=document.createElement('a');link.dataset.ppWhatsapp='true';link.target='_blank';link.rel='noopener noreferrer';link.title='Abrir conversa no WhatsApp';strong.appendChild(link)}
+    const display=formatPhone(value)||digits;link.href=`https://wa.me/${digits}`;link.textContent=`${display} ↗`;
   }
 
   function currentState(){return window.ProvedorPlusCloudState?.getState?.()||{}}
@@ -48,16 +67,35 @@
   function planName(client){if(!client)return '';const state=currentState(),plans=Array.isArray(state?.plans)?state.plans:[],byId=client?.plan_id?plans.find(plan=>Number(plan?.id)===Number(client.plan_id)):null;return String(client?.plan_name||byId?.name||client?.plan||'').trim()}
   function routerName(client){if(!client)return '';if(String(client?.router_name||'').trim())return String(client.router_name).trim();const routers=Array.isArray(currentState()?.routers)?currentState().routers:[],router=routers.find(item=>Number(item?.id)===Number(client?.router_id));return String(router?.name||'').trim()}
 
+  function clientContact(client){
+    const addressObject=client?.address&&typeof client.address==='object'?client.address:(client?.address_data&&typeof client.address_data==='object'?client.address_data:{});
+    const dueDay=formatDueDay(firstValue(client?.due_day,client?.billing_day,client?.day_due,client?.vencimento_dia,client?.dueDateDay,client?.due_date));
+    const directAddress=firstValue(typeof client?.address==='string'?client.address:'',addressObject?.address,addressObject?.endereco);
+    const street=firstValue(client?.street,client?.logradouro,client?.address_line,client?.endereco,addressObject?.street,addressObject?.logradouro);
+    const number=firstValue(client?.number,client?.numero,client?.address_number,addressObject?.number,addressObject?.numero);
+    const address=directAddress||[street,number].filter(Boolean).join(', ');
+    const neighborhood=firstValue(client?.neighborhood,client?.bairro,client?.district,addressObject?.neighborhood,addressObject?.bairro,addressObject?.district);
+    const city=firstValue(client?.city,client?.cidade,client?.municipality,client?.municipio,addressObject?.city,addressObject?.cidade,addressObject?.municipality);
+    const state=firstValue(client?.state,client?.estado,client?.uf,addressObject?.state,addressObject?.estado,addressObject?.uf);
+    const complement=firstValue(client?.complement,client?.complemento,client?.address_complement,addressObject?.complement,addressObject?.complemento);
+    const whatsapp=firstValue(client?.whatsapp,client?.whatsapp_number,client?.whatsapp_phone,client?.mobile,client?.celular,client?.cellphone,client?.phone,client?.telefone);
+    return {dueDay,address,neighborhood,city,state,complement,whatsapp};
+  }
+
   function ensureRemoteAccess(panel,section,client){
     if(!panel||!section)return false;
-    const originalButton=[...section.querySelectorAll('button')].find(button=>{const text=normalize(button.textContent);return text.includes('roteador')||text.includes('onu')||text.includes('acessar')||text.includes('abrir')})||null;
-    const device=String(client?.device_ip||rowValue(section,'Roteador/ONU do cliente')||'').trim();
+    const clientId=String(Number(client?.id)||0),device=String(client?.device_ip||rowValue(section,'Roteador/ONU do cliente')||'').trim();
     let block=panel.querySelector('.client-remote-access');
-    if(!block){block=document.createElement('div');block.className='client-remote-access';block.innerHTML='<div><strong>Acesso remoto ao equipamento</strong><small data-pp-remote-detail></small></div><button type="button" data-pp-original-router>Acessar roteador / ONU</button>';panel.appendChild(block);const button=block.querySelector('[data-pp-original-router]');button?.addEventListener('click',()=>button._ppOriginalRouter?.click())}
-    const detail=block.querySelector('[data-pp-remote-detail]'),button=block.querySelector('[data-pp-original-router]');
+    if(!block){block=document.createElement('div');block.className='client-remote-access';block.innerHTML='<div><strong>Acesso remoto ao equipamento</strong><small data-pp-remote-detail></small></div>';panel.appendChild(block)}
+    const detail=block.querySelector('[data-pp-remote-detail]');
     const detailText=device?`Roteador / ONU: ${device}`:'Use o acesso original cadastrado para este cliente.';if(detail&&detail.textContent!==detailText)detail.textContent=detailText;
-    if(button){button._ppOriginalRouter=originalButton;button.hidden=!originalButton}
-    return Boolean(originalButton);
+
+    let movedButton=block.querySelector('button[data-pp-original-router="true"]');
+    if(movedButton&&clientId!=='0'&&movedButton.dataset.ppClientId&&movedButton.dataset.ppClientId!==clientId){movedButton.remove();movedButton=null}
+    const sourceButton=[...section.querySelectorAll('button')].find(button=>{const text=normalize(button.textContent);return text.includes('roteador')||text.includes('onu')||text.includes('acessar')||text.includes('abrir')})||null;
+    if(sourceButton&&sourceButton!==movedButton){if(movedButton)movedButton.remove();movedButton=sourceButton;movedButton.dataset.ppOriginalRouter='true';movedButton.dataset.ppClientId=clientId;movedButton.hidden=false;movedButton.style.removeProperty('display');movedButton.textContent='Acessar roteador / ONU';block.appendChild(movedButton)}
+    else if(movedButton&&clientId!=='0')movedButton.dataset.ppClientId=clientId;
+    return Boolean(movedButton);
   }
 
   function hideOnlySafeLegacyConsumption(modal){
@@ -65,21 +103,40 @@
     for(const child of [...columns.children]){if(child.closest('.client-live-consumption-panel,.client-extra-summary,.client-access-history-panel'))continue;const text=normalize(child.textContent),hasOldTraffic=text.includes('download agora')&&text.includes('upload agora')&&(text.includes('consumo do mes')||text.includes('consumo do mês'));if(hasOldTraffic&&child.style.display!=='none'){child.style.display='none';child.dataset.ppLegacyConsumptionHidden='true'}}
   }
 
-  let running=false;
+  let running=false,pendingPatch=null;
   async function patch(modal,result){
-    if(running||!modal?.isConnected)return;
+    if(!modal?.isConnected)return;
+    if(running){pendingPatch={modal,result};return}
     const panel=modal.querySelector('.client-live-consumption-panel'),facts=panel?.querySelector('.client-access-facts');if(!panel||!facts)return;
     running=true;
     try{
       const section=contractBlock(modal),client=await currentClient(modal,result);
-      ensureFact(facts,'Cliente',client?.name||'');ensureFact(facts,'Plano contratado',planName(client));ensureFact(facts,'MikroTik concentrador',routerName(client));
+      const cpf=formatCpf(client?.cpf||client?.document||client?.document_number||client?.cpf_cnpj||client?.tax_id||'');
+      const contact=clientContact(client||{});
+      const dueFallback=section?formatDueDay(rowValue(section,'Vencimento')):'';
+      ensureFact(facts,'Cliente',client?.name||'');
+      ensureFact(facts,'CPF',cpf);
+      ensureFact(facts,'Dia do Vencimento',contact.dueDay||dueFallback);
+      removeIntegratedFact(facts,'Vencimento');
+      ensureFact(facts,'Endereço',contact.address);
+      ensureFact(facts,'Bairro',contact.neighborhood);
+      ensureFact(facts,'Cidade',contact.city);
+      ensureFact(facts,'Estado',contact.state);
+      ensureFact(facts,'Complemento',contact.complement);
+      ensureWhatsappFact(facts,contact.whatsapp);
+      ensureFact(facts,'Plano contratado',planName(client));
+      ensureFact(facts,'MikroTik concentrador',routerName(client));
       if(section){
-        ensureFact(facts,'Velocidade contratada',rowValue(section,'Velocidade contratada'));ensureFact(facts,'Vencimento',rowValue(section,'Vencimento'));ensureFact(facts,'Status do cadastro',rowValue(section,'Status do cadastro'));ensureFact(facts,'Roteador/ONU do cliente',client?.device_ip||rowValue(section,'Roteador/ONU do cliente'));
+        ensureFact(facts,'Velocidade contratada',rowValue(section,'Velocidade contratada'));ensureFact(facts,'Status do cadastro',rowValue(section,'Status do cadastro'));ensureFact(facts,'Roteador/ONU do cliente',client?.device_ip||rowValue(section,'Roteador/ONU do cliente'));
         const remotePreserved=ensureRemoteAccess(panel,section,client);
-        if(remotePreserved||!section.querySelector('button')){if(section.style.display!=='none')section.style.display='none';section.dataset.ppContractAccessHidden='true'}
+        if(remotePreserved){if(section.style.display!=='none')section.style.display='none';section.dataset.ppContractAccessHidden='true'}
+        else{section.style.removeProperty('display');delete section.dataset.ppContractAccessHidden}
       }
       hideOnlySafeLegacyConsumption(modal);
-    }finally{running=false}
+    }finally{
+      running=false;
+      if(pendingPatch){const next=pendingPatch;pendingPatch=null;queueMicrotask(()=>patch(next.modal,next.result).catch(error=>console.error('Provedor Plus: falha ao atualizar o Status pendente.',error)))}
+    }
   }
 
   if(typeof api?.clients?.status==='function'&&!api.clients.__ppStatusEntryGuardInstalled){

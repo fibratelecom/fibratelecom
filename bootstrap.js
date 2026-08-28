@@ -48,10 +48,10 @@
 
   await loadScript('/cloud-router-store-v2.js?v=1017-cloud17');
   await loadScript('/cloud-client-store-v2.js?v=1017-cloud17-audit1');
-  await loadScript('/cloud-adapter.js?v=1017-cloud17-stable1');
+  await loadScript('/cloud-adapter.js?v=1017-cloud17-stable2');
   if(typeof window.ProvedorPlusInstallCloudAdapter!=='function')throw new Error('A ponte HTTPS do MikroTik não foi carregada.');
   await window.ProvedorPlusInstallCloudAdapter();
-  await loadScript('/cloud-client-status-fix.js?v=1017-cloud17-audit1');
+  await loadScript('/cloud-client-status-fix.js?v=1017-cloud17-audit2');
   if(typeof window.provedor?.invoices?.sync==='function')await window.provedor.invoices.sync().catch(error=>console.error('Provedor Plus: falha na conciliação inicial de cobranças.',error));
 
   await loadScript('/cloud-backup-store.js?v=1017-cloud17');
@@ -67,7 +67,7 @@
   ]);
 
   await loadScript('/client-status-enhancements.js?v=1017-status7-stable').catch(error=>console.error('Provedor Plus: os indicadores avançados do cliente não foram carregados.',error));
-  await loadScript('/client-status-layout-cleanup.js?v=1017-statuslayout3-stable').catch(error=>console.error('Provedor Plus: a organização visual do status do cliente não foi carregada.',error));
+  await loadScript('/client-status-layout-cleanup.js?v=1017-statuslayout4-stable').catch(error=>console.error('Provedor Plus: a organização visual do status do cliente não foi carregada.',error));
 
   const root=document.getElementById('root');
   if(root)root.style.visibility='hidden';
@@ -75,7 +75,7 @@
   const app=await gunzipB64(appB64),appUrl=URL.createObjectURL(new Blob([app],{type:'text/javascript'}));
   try{await import(appUrl)}finally{setTimeout(()=>URL.revokeObjectURL(appUrl),1500)}
 
-  await loadScript('/ui-runtime-fixes.js?v=1017-fix10-stable');
+  await loadScript('/ui-runtime-fixes.js?v=1017-fix11-stable');
   await loadScriptStable('/dashboard-enhancements.js?v=1017-dashboard1',{dropCharacterData:true,ignoreWithin:['.pp-dashboard-v2','.pp-pppoe-modal-layer']}).catch(error=>console.error('Provedor Plus: o Dashboard gerencial não foi carregado.',error));
   await loadScriptStable('/billing-bank-selector.js?v=1017-billingbank3',{ignoreWithin:['.pp-dashboard-v2','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-pppoe-modal-layer']}).catch(error=>console.error('Provedor Plus: a seleção do banco emissor não foi carregada.',error));
   await loadScriptStable('/staff-access.js?v=1017-staff1',{ignoreWithin:['.pp-dashboard-v2','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-pppoe-modal-layer']}).catch(error=>console.error('Provedor Plus: a gestão de funcionários não foi carregada.',error));

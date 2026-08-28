@@ -37,18 +37,20 @@
   }
 
   api.clients.status=async id=>{
-    let listedClient=null;
-    try{
-      const rows=await api.clients.list();
-      listedClient=(Array.isArray(rows)?rows:[]).find(x=>Number(x?.id)===Number(id))||null;
-    }catch{}
-
     try{
       const result=await originalStatus(id);
-      return normalizeStatus(result,result?.client||listedClient);
+      return normalizeStatus(result,result?.client||null);
     }catch(error){
       const message=String(error?.message||error||'');
-      if(!/Cliente não encontrado/i.test(message)||!listedClient)throw error;
+      if(!/Cliente não encontrado/i.test(message))throw error;
+
+      let listedClient=null;
+      try{
+        const rows=await api.clients.list();
+        listedClient=(Array.isArray(rows)?rows:[]).find(x=>Number(x?.id)===Number(id))||null;
+      }catch{}
+      if(!listedClient)throw error;
+
       return normalizeStatus({
         client:listedClient,
         connectionState:listedClient.connection_type==='PPPoE'?'unavailable':'not_applicable',

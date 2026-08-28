@@ -1,0 +1,8 @@
+/* Mantém o cabeçalho do cliente visível e cobre todo o conteúdo do Status, inclusive Conexão PPPoE e Controle do acesso, até o visual novo ficar pronto. */
+.client-status-modal:not(.pp-client-status-ready)::after{
+  top:88px!important;
+  bottom:18px!important;
+  min-height:0!important;
+  z-index:40!important;
+  background:#fff!important;
+}

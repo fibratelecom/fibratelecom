@@ -41,7 +41,13 @@
     const api=window.provedor;if(!api||api.__cloudAdapterInstalled)return;
     const base={routers:{...api.routers},mikrotik:{...api.mikrotik},clients:{...api.clients},vpn:{...api.vpn}};
     async function routerRecord(id){const list=await base.routers.list(),r=(list||[]).find(x=>Number(x.id)===Number(id));if(!r)throw Error('MikroTik cadastrado não encontrado.');return r}
-    async function routerAuth(id,password=''){const r=await routerRecord(id),pass=String(password||'').trim()||await secretGet(id);if(!pass)throw Error('A credencial deste MikroTik não está disponível na nuvem. Edite o MikroTik, informe a senha e clique em Salvar e conectar.');return normalizeRouter(r,pass)}
+    async function routerAuth(id,password=''){
+      const entered=String(password||'').trim();
+      const [r,stored]=await Promise.all([routerRecord(id),entered?Promise.resolve(''):secretGet(id)]);
+      const pass=entered||stored;
+      if(!pass)throw Error('A credencial deste MikroTik não está disponível na nuvem. Edite o MikroTik, informe a senha e clique em Salvar e conectar.');
+      return normalizeRouter(r,pass);
+    }
     async function clientRecord(id){const list=await base.clients.list(),c=(list||[]).find(x=>Number(x.id)===Number(id));if(!c)throw Error('Cliente não encontrado.');return c}
 
     api.routers.list=async()=>{const list=await base.routers.list();return Promise.all((list||[]).map(async r=>({...r,connection_method:'rest',port:Number(r.port)===8728?443:(Number(r.port)||443),has_password:Boolean(await secretGet(r.id))||Boolean(r.has_password)})))};
@@ -69,10 +75,10 @@
       if(client?.connection_type!=='PPPoE'||!client?.router_id||!client?.pppoe_username)return baseStatus;
       try{
         const router=await routerAuth(client.router_id),live=await cloudRead('client.status',{router,data:clone(client)});
-        let traffic=baseStatus.traffic||null,trafficError='';
-        try{traffic=await trafficRecord(id,live)||traffic}catch(error){trafficError=error instanceof Error?error.message:String(error);console.error('Provedor Plus: leitura do MikroTik concluída, mas o consumo mensal não pôde ser gravado.',error)}
+        const traffic=baseStatus.traffic||null;
+        trafficRecord(id,live).catch(error=>console.error('Provedor Plus: leitura do MikroTik concluída, mas o consumo mensal não pôde ser gravado.',error));
         const liveDown=Number(live.downloadBps),liveUp=Number(live.uploadBps),trafficDown=Number(traffic?.downloadBps),trafficUp=Number(traffic?.uploadBps);
-        return {...baseStatus,...live,routerId:Number(client.router_id)||0,routerName:client.router_name||router.name,routerHost:router.host,connectionState:live.online?'online':'offline',connectionError:'',trafficError,liveRatesAvailable:Boolean(live.liveRatesAvailable)||(Number.isFinite(trafficDown)&&trafficDown>0)||(Number.isFinite(trafficUp)&&trafficUp>0),downloadBps:Number.isFinite(liveDown)?Math.max(0,liveDown):(Number.isFinite(trafficDown)?Math.max(0,trafficDown):0),uploadBps:Number.isFinite(liveUp)?Math.max(0,liveUp):(Number.isFinite(trafficUp)?Math.max(0,trafficUp):0),traffic:traffic||baseStatus.traffic};
+        return {...baseStatus,...live,routerId:Number(client.router_id)||0,routerName:client.router_name||router.name,routerHost:router.host,connectionState:live.online?'online':'offline',connectionError:'',trafficError:'',liveRatesAvailable:Boolean(live.liveRatesAvailable)||(Number.isFinite(trafficDown)&&trafficDown>0)||(Number.isFinite(trafficUp)&&trafficUp>0),downloadBps:Number.isFinite(liveDown)?Math.max(0,liveDown):(Number.isFinite(trafficDown)?Math.max(0,trafficDown):0),uploadBps:Number.isFinite(liveUp)?Math.max(0,liveUp):(Number.isFinite(trafficUp)?Math.max(0,trafficUp):0),traffic:traffic||baseStatus.traffic};
       }catch(error){return {...baseStatus,connectionState:'unavailable',connectionError:error instanceof Error?error.message:String(error),liveRatesAvailable:false}}
     };
     api.clients.block=async id=>{

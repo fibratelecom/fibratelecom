@@ -1,0 +1,34 @@
+name: Validate Efi Auth
+
+on:
+  push:
+    branches:
+      - fix/efi-authorization-diagnostics
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Rebuild packed bank proxy
+        run: |
+          node - <<'NODE'
+          const fs=require('fs'),zlib=require('zlib');
+          const chunks=['01','02','03'].map(n=>fs.readFileSync(`packed/proxygz-${n}.txt`,'utf8').trim()).join('');
+          const source=zlib.gunzipSync(Buffer.from(chunks,'base64')).toString('utf8');
+          fs.writeFileSync('/tmp/bank-proxy-source.js',source);
+          NODE
+      - name: Validate JavaScript syntax
+        run: node --check /tmp/bank-proxy-source.js
+      - name: Validate Efi authentication fixes
+        run: |
+          grep -q "function efiCredentials" /tmp/bank-proxy-source.js
+          grep -q "function efiEnvironment" /tmp/bank-proxy-source.js
+          grep -q "diagnoseEnvironment:true" /tmp/bank-proxy-source.js
+          grep -q "credenciais são válidas para" /tmp/bank-proxy-source.js
+          grep -q "autenticação recusada" /tmp/bank-proxy-source.js
+          grep -q "cobrancas.api.efipay.com.br" /tmp/bank-proxy-source.js
+          grep -q "/v1/authorize" /tmp/bank-proxy-source.js

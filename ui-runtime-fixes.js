@@ -87,8 +87,12 @@
       .pp-dashboard-system-online{display:inline-flex!important;align-items:center!important;gap:7px!important;min-height:29px!important;padding:5px 10px!important;color:#55716b!important;background:#eef8f5!important;border:1px solid #d7ebe5!important;border-radius:20px!important;font-size:11px!important;font-weight:700!important;line-height:1.2!important;white-space:nowrap!important}
       .pp-dashboard-system-online i{display:block!important;width:7px!important;height:7px!important;background:#24b888!important;border-radius:50%!important;box-shadow:0 0 0 4px #dff5ed!important}
       .pp-dashboard-host{padding-top:20px!important}
-      .pp-client-view-eye{display:inline-flex!important;align-items:center!important;justify-content:center!important;min-width:36px!important;width:36px!important;height:36px!important;padding:0!important;color:#0b8f7c!important}
-      .pp-client-view-eye svg{width:21px!important;height:21px!important;pointer-events:none!important}
+      .pp-client-action-icon{display:inline-flex!important;align-items:center!important;justify-content:center!important;box-sizing:border-box!important;flex:0 0 36px!important;min-width:36px!important;width:36px!important;height:36px!important;padding:0!important;border-radius:8px!important;line-height:1!important}
+      .pp-client-action-icon svg{display:block!important;width:18px!important;height:18px!important;pointer-events:none!important}
+      .pp-client-action-icon[data-pp-client-action="view"]{color:#0b8f7c!important}
+      .pp-client-action-icon[data-pp-client-action="boleto"]{color:#426477!important}
+      .pp-client-action-icon[data-pp-client-action="edit"]{color:#5b6770!important}
+      .pp-client-action-icon[data-pp-client-action="delete"]{color:#c54a46!important}
       @media(min-width:901px){.topbar{display:none!important;height:0!important;min-height:0!important;border:0!important;padding:0!important;overflow:hidden!important}.content{padding-top:0!important}}
       @media(max-width:900px){.brand{height:76px!important;min-height:76px!important;padding-top:5px!important}.topbar{display:flex!important}.pp-dashboard-host{padding-top:16px!important}.pp-dashboard-title-row{gap:8px!important}}
     `;
@@ -109,21 +113,59 @@
     return heading.closest('.content,[role="main"],main')||heading.parentElement?.parentElement||null;
   }
 
-  const eyeMarkup=()=>'<svg data-pp-eye-icon="true" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="2.7"></circle></svg>';
+  const actionDefs={
+    view:{texts:['status','visualizar'],title:'Visualizar cliente',icon:'<path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="2.7"></circle>'},
+    boleto:{texts:['boleto'],title:'Boleto do cliente',icon:'<path d="M6 3.5h9l3 3V20a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z"></path><path d="M14.5 3.5V7H18"></path><path d="M8 11h7M8 14h7M8 17h5"></path>'},
+    edit:{texts:['editar'],title:'Editar cliente',icon:'<path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3Z"></path><path d="m14 8 3 3"></path>'},
+    delete:{texts:['excluir'],title:'Excluir cliente',icon:'<path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="m7 7 1 13h8l1-13"></path><path d="M10 11v5M14 11v5"></path>'}
+  };
+  const actionTexts=new Map(Object.entries(actionDefs).flatMap(([key,def])=>def.texts.map(text=>[text,key])));
+  const actionMarkup=(key,def)=>`<svg data-pp-action-icon="${key}" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${def.icon}</svg>`;
 
-  function patchClientViewButtons(){
+  function buttonActionKey(button){
+    const saved=String(button?.dataset?.ppClientAction||'').trim();if(saved&&actionDefs[saved])return saved;
+    if(button?.classList?.contains('pp-client-view-eye'))return 'view';
+    return actionTexts.get(String(button?.textContent||'').trim().toLowerCase())||'';
+  }
+
+  function isClientActionGroup(button,area){
+    let node=button?.parentElement,depth=0;
+    while(node&&node!==area&&depth<5){
+      const matched=[...node.querySelectorAll('button')].filter(candidate=>buttonActionKey(candidate));
+      if(matched.length>=2)return true;
+      node=node.parentElement;depth++;
+    }
+    return Boolean(button?.dataset?.ppClientAction||button?.classList?.contains('pp-client-view-eye'));
+  }
+
+  function patchClientActionButtons(){
     const area=clientContentRoot();if(!area)return;
     area.querySelectorAll('button').forEach(button=>{
       if(button.closest('.client-status-modal'))return;
-      const isEye=button.classList.contains('pp-client-view-eye'),text=String(button.textContent||'').trim().toLowerCase();
-      if(!isEye&&text!=='status')return;
-      if(!isEye)button.classList.add('pp-client-view-eye');
-      button.title='Visualizar cliente';
-      button.setAttribute('aria-label','Visualizar cliente');
-      if(!button.querySelector('svg[data-pp-eye-icon]'))button.innerHTML=eyeMarkup();
+      const key=buttonActionKey(button);if(!key||!isClientActionGroup(button,area))return;
+      const def=actionDefs[key];
+      button.dataset.ppClientAction=key;
+      button.classList.remove('pp-client-view-eye');
+      button.classList.add('pp-client-action-icon');
+      button.title=def.title;
+      button.setAttribute('aria-label',def.title);
+      if(!button.querySelector(`svg[data-pp-action-icon="${key}"]`))button.innerHTML=actionMarkup(key,def);
     });
+    ensureClientActionObserver(area);
   }
-  window.ProvedorPlusPatchClientViewButtons=patchClientViewButtons;
+
+  let clientActionObserver=null,clientActionRoot=null;
+  function ensureClientActionObserver(area=clientContentRoot()){
+    if(!area)return;
+    if(clientActionObserver&&clientActionRoot===area)return;
+    if(clientActionObserver)clientActionObserver.disconnect();
+    clientActionRoot=area;
+    clientActionObserver=new MutationObserver(()=>patchClientActionButtons());
+    clientActionObserver.observe(area,{childList:true,subtree:true,characterData:true});
+  }
+
+  window.ProvedorPlusPatchClientViewButtons=patchClientActionButtons;
+  window.ProvedorPlusPatchClientActionButtons=patchClientActionButtons;
 
   function patchLogout(){
     const card=document.querySelector('.user-card');if(!card||card.querySelector('.pp-shell-logout'))return;
@@ -147,12 +189,12 @@
 
   function patchStatic(){
     if(document.title!=='Provedor Plus')document.title='Provedor Plus';
-    installShellStyles();patchDashboardStatus();patchLogout();patchMikrotikNote();patchRouterForm();patchClientViewButtons();
+    installShellStyles();patchDashboardStatus();patchLogout();patchMikrotikNote();patchRouterForm();patchClientActionButtons();
   }
 
   function patchAddedNode(node){
     replaceText(node);
-    patchClientViewButtons();
+    patchClientActionButtons();
     if(!(node instanceof Element))return;
     if(node.matches('.user-card,.router-config,.router-form,.pp-dashboard-heading')||node.querySelector('.user-card,.router-config,.router-form,.pp-dashboard-heading'))patchStatic();
   }

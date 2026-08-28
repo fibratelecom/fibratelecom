@@ -82,6 +82,24 @@
     }finally{running=false}
   }
 
-  document.addEventListener('pp:client-status-rendered',event=>{const modal=event.detail?.modal||document.querySelector('.client-status-modal');patch(modal,event.detail?.result).catch(error=>console.error('Provedor Plus: falha ao organizar o status do cliente.',error))});
+  if(typeof api?.clients?.status==='function'&&!api.clients.__ppStatusEntryGuardInstalled){
+    const currentStatus=api.clients.status.bind(api.clients);
+    api.clients.status=async id=>{
+      const numericId=Number(id)||0,modal=document.querySelector('.client-status-modal');
+      if(modal){
+        const renderedId=Number(modal.dataset.ppClientStatusId)||0;
+        const hasNewView=Boolean(modal.querySelector('.client-extra-summary')&&modal.querySelector('.client-live-consumption-panel'));
+        if(!hasNewView||!renderedId||renderedId!==numericId)modal.classList.remove('pp-client-status-ready');
+      }
+      return currentStatus(id);
+    };
+    Object.defineProperty(api.clients,'__ppStatusEntryGuardInstalled',{value:true,enumerable:false});
+  }
+
+  document.addEventListener('pp:client-status-rendered',event=>{
+    const modal=event.detail?.modal||document.querySelector('.client-status-modal');
+    if(modal)modal.dataset.ppClientStatusId=String(Number(event.detail?.id)||0);
+    patch(modal,event.detail?.result).catch(error=>console.error('Provedor Plus: falha ao organizar o status do cliente.',error));
+  });
   setTimeout(()=>{const modal=document.querySelector('.client-status-modal');if(modal)patch(modal,null).catch(()=>{})},120);
 })();

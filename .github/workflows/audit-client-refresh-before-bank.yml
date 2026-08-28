@@ -1,0 +1,29 @@
+name: Audit Client Refresh Before Bank
+
+on:
+  push:
+    branches:
+      - fix/global-navigation-duplication
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect client data used before bank emission
+        run: |
+          set -euo pipefail
+          cat packed/bridgegz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/bridge.js
+          node --check /tmp/bridge.js
+          python - <<'PY'
+          from pathlib import Path
+          text=Path('/tmp/bridge.js').read_text()
+          for term in ['function saveInvoiceWeb','function generateInstallmentsWeb','async function generateInstallmentsWeb','function m(','const m=','function clientRecord','client_id','bankCall({action:\'issue\'']:
+              idx=text.find(term)
+              print('\n===== TERM',term,'INDEX',idx,'=====')
+              if idx>=0:
+                  print(text[max(0,idx-1400):min(len(text),idx+4200)])
+          PY

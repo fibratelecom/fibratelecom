@@ -84,24 +84,18 @@
 
   function ensureRemoteAccess(panel,section,client){
     if(!panel||!section)return false;
-    const device=String(client?.device_ip||rowValue(section,'Roteador/ONU do cliente')||'').trim();
+    const clientId=String(Number(client?.id)||0),device=String(client?.device_ip||rowValue(section,'Roteador/ONU do cliente')||'').trim();
     let block=panel.querySelector('.client-remote-access');
     if(!block){block=document.createElement('div');block.className='client-remote-access';block.innerHTML='<div><strong>Acesso remoto ao equipamento</strong><small data-pp-remote-detail></small></div>';panel.appendChild(block)}
     const detail=block.querySelector('[data-pp-remote-detail]');
     const detailText=device?`Roteador / ONU: ${device}`:'Use o acesso original cadastrado para este cliente.';if(detail&&detail.textContent!==detailText)detail.textContent=detailText;
 
-    let originalButton=block.querySelector('button[data-pp-original-router="true"]');
-    if(!originalButton){
-      originalButton=[...section.querySelectorAll('button')].find(button=>{const text=normalize(button.textContent);return text.includes('roteador')||text.includes('onu')||text.includes('acessar')||text.includes('abrir')})||null;
-      if(originalButton){
-        originalButton.dataset.ppOriginalRouter='true';
-        originalButton.hidden=false;
-        originalButton.style.removeProperty('display');
-        originalButton.textContent='Acessar roteador / ONU';
-        block.appendChild(originalButton);
-      }
-    }
-    return Boolean(originalButton);
+    let movedButton=block.querySelector('button[data-pp-original-router="true"]');
+    if(movedButton&&clientId!=='0'&&movedButton.dataset.ppClientId&&movedButton.dataset.ppClientId!==clientId){movedButton.remove();movedButton=null}
+    const sourceButton=[...section.querySelectorAll('button')].find(button=>{const text=normalize(button.textContent);return text.includes('roteador')||text.includes('onu')||text.includes('acessar')||text.includes('abrir')})||null;
+    if(sourceButton&&sourceButton!==movedButton){if(movedButton)movedButton.remove();movedButton=sourceButton;movedButton.dataset.ppOriginalRouter='true';movedButton.dataset.ppClientId=clientId;movedButton.hidden=false;movedButton.style.removeProperty('display');movedButton.textContent='Acessar roteador / ONU';block.appendChild(movedButton)}
+    else if(movedButton&&clientId!=='0')movedButton.dataset.ppClientId=clientId;
+    return Boolean(movedButton);
   }
 
   function hideOnlySafeLegacyConsumption(modal){
@@ -109,9 +103,10 @@
     for(const child of [...columns.children]){if(child.closest('.client-live-consumption-panel,.client-extra-summary,.client-access-history-panel'))continue;const text=normalize(child.textContent),hasOldTraffic=text.includes('download agora')&&text.includes('upload agora')&&(text.includes('consumo do mes')||text.includes('consumo do mês'));if(hasOldTraffic&&child.style.display!=='none'){child.style.display='none';child.dataset.ppLegacyConsumptionHidden='true'}}
   }
 
-  let running=false;
+  let running=false,pendingPatch=null;
   async function patch(modal,result){
-    if(running||!modal?.isConnected)return;
+    if(!modal?.isConnected)return;
+    if(running){pendingPatch={modal,result};return}
     const panel=modal.querySelector('.client-live-consumption-panel'),facts=panel?.querySelector('.client-access-facts');if(!panel||!facts)return;
     running=true;
     try{
@@ -138,7 +133,10 @@
         else{section.style.removeProperty('display');delete section.dataset.ppContractAccessHidden}
       }
       hideOnlySafeLegacyConsumption(modal);
-    }finally{running=false}
+    }finally{
+      running=false;
+      if(pendingPatch){const next=pendingPatch;pendingPatch=null;queueMicrotask(()=>patch(next.modal,next.result).catch(error=>console.error('Provedor Plus: falha ao atualizar o Status pendente.',error)))}
+    }
   }
 
   if(typeof api?.clients?.status==='function'&&!api.clients.__ppStatusEntryGuardInstalled){

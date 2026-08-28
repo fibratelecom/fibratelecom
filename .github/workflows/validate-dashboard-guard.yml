@@ -1,0 +1,31 @@
+name: Validate Dashboard Guard
+
+on:
+  push:
+    branches:
+      - fix/client-actions-icons
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Validate JavaScript syntax
+        run: |
+          node --check bootstrap.js
+          node --check ui-runtime-fixes.js
+          node --check dashboard-transition-guard.js
+      - name: Validate Dashboard transition guard
+        run: |
+          grep -q 'pp-dashboard-host' dashboard-transition-guard.js
+          grep -q "addEventListener('pointerdown'" dashboard-transition-guard.js
+          grep -q "addEventListener('click'" dashboard-transition-guard.js
+          grep -q 'childList:true,subtree:true' dashboard-transition-guard.js
+          grep -q 'dashboard-transition-guard.js?v=1017-dashboard-guard1' bootstrap.js
+      - name: Validate final cache references
+        run: |
+          grep -q 'ui-runtime-fixes.js?v=1017-fix13-client-actions' bootstrap.js
+          grep -q 'bootstrap.js?v=1017-cloud17-prod7' index.html

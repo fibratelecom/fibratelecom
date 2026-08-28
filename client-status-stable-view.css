@@ -1,0 +1,40 @@
+/* Provedor Plus — mantém somente o visual novo do Status do cliente.
+   O componente legado continua no DOM apenas como fonte de dados/ações,
+   mas não volta a aparecer durante as atualizações automáticas. */
+.client-status-modal .client-live-metrics,
+.client-status-modal .client-speed-panel,
+.client-status-modal .client-status-columns{
+  display:none!important;
+}
+
+/* O cabeçalho e o controle de acesso pertencem ao fluxo atual e permanecem visíveis. */
+.client-status-modal .client-live-head,
+.client-status-modal .client-access-actions{
+  display:flex;
+}
+
+/* Os blocos do visual novo não podem ser ocultados por estilos legados. */
+.client-status-modal .client-extra-summary{
+  display:grid!important;
+}
+.client-status-modal .client-live-consumption-panel,
+.client-status-modal .client-access-history-panel{
+  display:block!important;
+}
+
+/* O estado Online/Offline fica somente no cabeçalho PPPoE.
+   Os cartões continuam mostrando seus dados, sem repetir o mesmo selo de estado. */
+.client-status-modal .client-live-consumption-head>span,
+.client-status-modal .client-extra-summary .client-extra-card:first-child .client-extra-title>b,
+.client-status-modal .client-uptime-card .client-extra-title>b{
+  display:none!important;
+}
+
+/* Evita mudança brusca de altura quando o componente-base atualiza o status. */
+.client-status-modal .client-status-view{
+  min-height:430px;
+}
+
+@media(max-width:800px){
+  .client-status-modal .client-status-view{min-height:360px}
+}

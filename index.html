@@ -9,8 +9,31 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https://viacep.com.br; font-src 'self' data:; frame-src 'self' https:;" />
 <title>Provedor Plus</title>
 <!-- Provedor Plus cloud17: clientes, status, credenciais e tráfego centralizados na nuvem -->
+<style>
+html,body{margin:0;min-height:100%;background:#f5f8f7}
+#pp-startup-shell{position:fixed;inset:0;z-index:2147483000;display:grid;place-items:center;background:linear-gradient(145deg,#f7faf9 0%,#eef5f3 100%);font-family:Segoe UI,Arial,sans-serif;color:#243b35;transition:opacity .18s ease,visibility .18s ease}
+#pp-startup-shell.is-done{opacity:0;visibility:hidden;pointer-events:none}
+#pp-startup-card{display:grid;justify-items:center;gap:12px;padding:26px 32px;text-align:center}
+#pp-startup-mark{width:54px;height:54px;border-radius:17px;display:grid;place-items:center;background:#0d8b78;color:#fff;font-size:25px;font-weight:850;box-shadow:0 12px 30px rgba(13,139,120,.22)}
+#pp-startup-title{font-size:25px;line-height:1.1;font-weight:850;letter-spacing:-.4px}
+#pp-startup-subtitle{font-size:11px;color:#758781}
+#pp-startup-spinner{width:28px;height:28px;margin-top:3px;border:3px solid #d8e6e2;border-top-color:#0d8b78;border-radius:50%;animation:ppStartupSpin .72s linear infinite}
+@keyframes ppStartupSpin{to{transform:rotate(360deg)}}
+body:has(#pp-auth-form) #pp-startup-shell{display:none}
+@media(prefers-reduced-motion:reduce){#pp-startup-spinner{animation-duration:1.6s}#pp-startup-shell{transition:none}}
+</style>
 <link rel="stylesheet" href="/client-status-loader-cover.css?v=1017-status-loader3" />
-<script defer src="/bootstrap.js?v=1017-cloud17-prod8"></script>
+<script defer src="/bootstrap.js?v=1017-cloud17-prod9-startup"></script>
 </head>
-<body><div id="root"></div></body>
+<body>
+<div id="pp-startup-shell" role="status" aria-live="polite" aria-label="Carregando Provedor Plus">
+  <div id="pp-startup-card">
+    <div id="pp-startup-mark" aria-hidden="true">P+</div>
+    <div id="pp-startup-title">Provedor Plus</div>
+    <div id="pp-startup-subtitle">Carregando seu painel...</div>
+    <div id="pp-startup-spinner" aria-hidden="true"></div>
+  </div>
+</div>
+<div id="root"></div>
+</body>
 </html>

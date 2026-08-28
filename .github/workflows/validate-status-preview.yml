@@ -1,0 +1,38 @@
+name: Validate Status Preview
+
+on:
+  push:
+    branches:
+      - fix/status-loader-2s
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Validate JavaScript syntax
+        run: |
+          node --check bootstrap.js
+          node --check client-status-layout-cleanup.js
+          node --check cloud-adapter.js
+          node --check cloud-client-status-fix.js
+          node --check ui-runtime-fixes.js
+      - name: Validate required files
+        run: |
+          test -f client-status-loader-cover.css
+          test -f client-status-enhancements.css
+          test -f client-status-enhancements.js
+          test -f cloud-client-store-v2.js
+          test -f index.html
+      - name: Validate final cache references
+        run: |
+          grep -q 'client-status-loader-cover.css?v=1017-status-loader3' index.html
+          grep -q 'bootstrap.js?v=1017-cloud17-prod3' index.html
+          grep -q 'cloud-adapter.js?v=1017-cloud17-stable2' bootstrap.js
+          grep -q 'cloud-client-status-fix.js?v=1017-cloud17-audit2' bootstrap.js
+          grep -q 'client-status-layout-cleanup.js?v=1017-statuslayout4-stable' bootstrap.js
+          grep -q 'ui-runtime-fixes.js?v=1017-fix11-stable' bootstrap.js

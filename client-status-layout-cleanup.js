@@ -4,6 +4,7 @@
 
   const api=window.provedor;
   const normalize=value=>String(value??'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
+  const formatCpf=value=>{const raw=String(value||'').trim(),digits=raw.replace(/\D/g,'');return digits.length===11?digits.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/,'$1.$2.$3-$4'):raw};
 
   if(!document.getElementById('pp-client-status-visibility-safety')){
     const style=document.createElement('style');
@@ -82,7 +83,8 @@
     running=true;
     try{
       const section=contractBlock(modal),client=await currentClient(modal,result);
-      ensureFact(facts,'Cliente',client?.name||'');ensureFact(facts,'Plano contratado',planName(client));ensureFact(facts,'MikroTik concentrador',routerName(client));
+      const cpf=formatCpf(client?.cpf||client?.document||client?.document_number||client?.cpf_cnpj||client?.tax_id||'');
+      ensureFact(facts,'Cliente',client?.name||'');ensureFact(facts,'CPF',cpf);ensureFact(facts,'Plano contratado',planName(client));ensureFact(facts,'MikroTik concentrador',routerName(client));
       if(section){
         ensureFact(facts,'Velocidade contratada',rowValue(section,'Velocidade contratada'));ensureFact(facts,'Vencimento',rowValue(section,'Vencimento'));ensureFact(facts,'Status do cadastro',rowValue(section,'Status do cadastro'));ensureFact(facts,'Roteador/ONU do cliente',client?.device_ip||rowValue(section,'Roteador/ONU do cliente'));
         const remotePreserved=ensureRemoteAccess(panel,section,client);

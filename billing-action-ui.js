@@ -6,7 +6,7 @@
 
   const style=document.createElement('style');
   style.textContent=`
-    .client-bills-modal .bill-create-actions{
+    .pp-client-bills-actions-ready .bill-create-actions{
       display:grid!important;
       grid-template-columns:repeat(4,minmax(118px,1fr))!important;
       gap:8px!important;
@@ -14,7 +14,7 @@
       width:min(100%,590px)!important;
       margin:0!important;
     }
-    .client-bills-modal .bill-create-actions>button.pp-bill-action-button{
+    .pp-client-bills-actions-ready .bill-create-actions>button.pp-bill-action-button{
       display:inline-flex!important;
       align-items:center!important;
       justify-content:center!important;
@@ -30,15 +30,15 @@
       white-space:nowrap!important;
       text-align:center!important;
     }
-    .client-bills-modal .bill-create-actions>button.pp-bank-provider-disabled{
+    .pp-client-bills-actions-ready .bill-create-actions>button.pp-bank-provider-disabled{
       opacity:.48!important;
       cursor:not-allowed!important;
     }
     @media(max-width:920px){
-      .client-bills-modal .bill-create-actions{grid-template-columns:repeat(2,minmax(132px,1fr))!important;width:100%!important}
+      .pp-client-bills-actions-ready .bill-create-actions{grid-template-columns:repeat(2,minmax(132px,1fr))!important;width:100%!important}
     }
     @media(max-width:560px){
-      .client-bills-modal .bill-create-actions{grid-template-columns:1fr!important}
+      .pp-client-bills-actions-ready .bill-create-actions{grid-template-columns:1fr!important}
     }
   `;
   document.head.appendChild(style);
@@ -76,6 +76,7 @@
 
   function patch(){
     const modal=billsModal();if(!modal)return;
+    modal.classList.add('pp-client-bills-actions-ready');
     const actions=modal.querySelector('.bill-create-actions');if(!actions)return;
     const select=bankSelect(modal),efiReady=hasProvider(select,'efi');
 
@@ -105,10 +106,11 @@
   }
 
   document.addEventListener('pointerdown',event=>{
-    const button=event.target?.closest?.('.client-bills-modal .bill-create-actions button');
+    const button=event.target?.closest?.('.bill-create-actions button');
     if(!button||button.disabled)return;
+    const modal=billsModal();if(!modal||!modal.contains(button))return;
     const kind=actionKind(button);if(!['carne','pix_due','pix_auto'].includes(kind))return;
-    const modal=billsModal(),select=bankSelect(modal);
+    const select=bankSelect(modal);
     if(hasProvider(select,'efi'))setProvider(select,'efi');
   },true);
 

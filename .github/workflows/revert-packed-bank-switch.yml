@@ -20,7 +20,7 @@ jobs:
           set -euo pipefail
           git fetch origin main
           git checkout origin/main -- packed/appgz-*.txt
-          if git diff --quiet -- packed/appgz-*.txt; then
+          if git diff --cached --quiet -- packed/appgz-*.txt; then
             echo 'Packed application already matches main.'
             exit 0
           fi
@@ -28,6 +28,5 @@ jobs:
           node --check /tmp/app-main.js
           git config user.name fibratelecom
           git config user.email lanconta2015@gmail.com
-          git add packed/appgz-*.txt
-          git commit -m 'Restaura pacote do aplicativo sem alteração bancária'
+          git commit -m 'Restaura pacote do aplicativo sem alteração bancária' -- packed/appgz-*.txt
           git push origin HEAD:fix/global-navigation-duplication

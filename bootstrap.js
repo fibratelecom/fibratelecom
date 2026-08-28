@@ -78,6 +78,7 @@
   try{await import(appUrl)}finally{setTimeout(()=>URL.revokeObjectURL(appUrl),1500)}
 
   await loadScript('/ui-runtime-fixes.js?v=1017-fix13-client-actions');
+  await loadScript('/bank-enabled-persistence.js?v=1017-bank-enabled1').catch(error=>console.error('Provedor Plus: a persistência da ativação bancária não foi carregada.',error));
   await loadScriptStable('/dashboard-enhancements.js?v=1017-dashboard1',{dropCharacterData:true,ignoreWithin:['.pp-dashboard-v2','.pp-pppoe-modal-layer']}).catch(error=>console.error('Provedor Plus: o Dashboard gerencial não foi carregado.',error));
   await loadScriptStable('/billing-bank-selector.js?v=1017-billingbank3',{ignoreWithin:['.pp-dashboard-v2','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-pppoe-modal-layer']}).catch(error=>console.error('Provedor Plus: a seleção do banco emissor não foi carregada.',error));
   await loadScriptStable('/staff-access.js?v=1017-staff1',{ignoreWithin:['.pp-dashboard-v2','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-pppoe-modal-layer']}).catch(error=>console.error('Provedor Plus: a gestão de funcionários não foi carregada.',error));

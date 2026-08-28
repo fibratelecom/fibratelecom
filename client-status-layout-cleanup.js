@@ -88,14 +88,27 @@
     let block=panel.querySelector('.client-remote-access');
     if(!block){block=document.createElement('div');block.className='client-remote-access';block.innerHTML='<div><strong>Acesso remoto ao equipamento</strong><small data-pp-remote-detail></small></div>';panel.appendChild(block)}
     const detail=block.querySelector('[data-pp-remote-detail]');
-    const detailText=device?`Roteador / ONU: ${device}`:'Use o acesso original cadastrado para este cliente.';if(detail&&detail.textContent!==detailText)detail.textContent=detailText;
+    const detailText=device?`Roteador / ONU: ${device}`:'Cadastre o IP do roteador ou ONU deste cliente para liberar o acesso.';if(detail&&detail.textContent!==detailText)detail.textContent=detailText;
 
-    let movedButton=block.querySelector('button[data-pp-original-router="true"]');
-    if(movedButton&&clientId!=='0'&&movedButton.dataset.ppClientId&&movedButton.dataset.ppClientId!==clientId){movedButton.remove();movedButton=null}
-    const sourceButton=[...section.querySelectorAll('button')].find(button=>{const text=normalize(button.textContent);return text.includes('roteador')||text.includes('onu')||text.includes('acessar')||text.includes('abrir')})||null;
-    if(sourceButton&&sourceButton!==movedButton){if(movedButton)movedButton.remove();movedButton=sourceButton;movedButton.dataset.ppOriginalRouter='true';movedButton.dataset.ppClientId=clientId;movedButton.hidden=false;movedButton.style.removeProperty('display');movedButton.textContent='Acessar roteador / ONU';block.appendChild(movedButton)}
-    else if(movedButton&&clientId!=='0')movedButton.dataset.ppClientId=clientId;
-    return Boolean(movedButton);
+    let button=block.querySelector('button[data-pp-router-access="true"]');
+    if(!button){
+      button=document.createElement('button');button.type='button';button.dataset.ppRouterAccess='true';button.textContent='Acessar roteador / ONU';block.appendChild(button);
+      button.addEventListener('click',async()=>{
+        const id=Number(button.dataset.ppClientId)||0;if(!id||button.disabled)return;
+        button.disabled=true;
+        try{
+          if(typeof api?.clients?.openRouter!=='function')throw new Error('A função de acesso ao roteador/ONU não está disponível.');
+          await api.clients.openRouter(id);
+        }catch(error){
+          console.error('Provedor Plus: falha ao abrir o roteador/ONU do cliente.',error);
+          window.alert(error instanceof Error?error.message:String(error||'Não foi possível abrir o roteador/ONU deste cliente.'));
+        }finally{button.disabled=false}
+      });
+    }
+    button.dataset.ppClientId=clientId;
+    button.disabled=!Number(clientId)||!device;
+    button.title=device?'Abrir o roteador ou ONU deste cliente':'Cadastre o IP do roteador ou ONU deste cliente';
+    return true;
   }
 
   function hideOnlySafeLegacyConsumption(modal){

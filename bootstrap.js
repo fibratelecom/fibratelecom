@@ -81,6 +81,7 @@
   await loadScript('/bank-enabled-persistence.js?v=1017-bank-enabled1').catch(error=>console.error('Provedor Plus: a persistência da ativação bancária não foi carregada.',error));
   await loadScriptStable('/dashboard-enhancements.js?v=1017-dashboard1',{dropCharacterData:true,ignoreWithin:['.pp-dashboard-v2','.pp-pppoe-modal-layer']}).catch(error=>console.error('Provedor Plus: o Dashboard gerencial não foi carregado.',error));
   await loadScriptStable('/billing-bank-selector.js?v=1017-billingbank3',{ignoreWithin:['.pp-dashboard-v2','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-pppoe-modal-layer']}).catch(error=>console.error('Provedor Plus: a seleção do banco emissor não foi carregada.',error));
+  await loadScript('/billing-action-ui.js?v=1017-billingactions1').catch(error=>console.error('Provedor Plus: os botões de cobrança não foram ajustados.',error));
   await loadScriptStable('/staff-access.js?v=1017-staff1',{ignoreWithin:['.pp-dashboard-v2','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-pppoe-modal-layer']}).catch(error=>console.error('Provedor Plus: a gestão de funcionários não foi carregada.',error));
   await loadScriptStable('/ticket-enhancements.js?v=1017-ticket1',{ignoreWithin:['.pp-dashboard-v2','.client-status-modal','.pp-staff-layer','.pp-ticket-layer','.pp-pppoe-modal-layer']}).catch(error=>console.error('Provedor Plus: a gestão avançada de chamados não foi carregada.',error));
   await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));

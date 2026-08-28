@@ -1,0 +1,36 @@
+name: Inspect Bank Persistence
+
+on:
+  push:
+    branches:
+      - fix/global-navigation-duplication
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct application bundle
+        run: |
+          cat packed/appgz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/app.js
+          node --check /tmp/app.js
+      - name: Inspect bank settings code
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('/tmp/app.js').read_text(errors='replace')
+          needles=['Ativar Efí Bank','Ativar Efi Bank','Salvar Efí Bank','Salvar Efi Bank','Ativar Mercado Pago','Salvar Mercado Pago','clientIdConfigured','accessTokenConfigured','defaultProvider','banks.get','banks.save','banks.set']
+          for needle in needles:
+              print('\n###',needle)
+              start=0; found=0
+              while True:
+                  i=s.find(needle,start)
+                  if i<0: break
+                  found+=1
+                  print('POS',i)
+                  print(s[max(0,i-1800):min(len(s),i+2600)])
+                  print('\n---END CONTEXT---')
+                  start=i+len(needle)
+                  if found>=3: break
+              if not found: print('NOT FOUND')
+          PY

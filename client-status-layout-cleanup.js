@@ -55,13 +55,15 @@
 
   function currentState(){return window.ProvedorPlusCloudState?.getState?.()||{}}
   async function currentClient(modal,result){
-    if(result?.client)return result.client;
     const title=normalize(modal.querySelector('.modal-head h2,h2')?.textContent||'');
     const stateClients=Array.isArray(currentState()?.clients)?currentState().clients:[];
-    let client=stateClients.find(row=>{const name=normalize(row?.name||'');return name&&title.includes(name)})||null;
-    if(client)return client;
-    try{const rows=typeof api?.clients?.list==='function'?await api.clients.list():[];client=(Array.isArray(rows)?rows:[]).find(row=>{const name=normalize(row?.name||'');return name&&title.includes(name)})||null}catch{}
-    return client;
+    const resultClient=result?.client||null,resultId=Number(resultClient?.id)||Number(modal.dataset.ppClientStatusId)||0;
+    let stateClient=resultId?stateClients.find(row=>Number(row?.id)===resultId)||null:null;
+    if(!stateClient)stateClient=stateClients.find(row=>{const name=normalize(row?.name||'');return name&&title.includes(name)})||null;
+    if(resultClient)return stateClient?{...resultClient,...stateClient}:resultClient;
+    if(stateClient)return stateClient;
+    try{const rows=typeof api?.clients?.list==='function'?await api.clients.list():[];return (Array.isArray(rows)?rows:[]).find(row=>Number(row?.id)===resultId||(()=>{const name=normalize(row?.name||'');return name&&title.includes(name)})())||null}catch{}
+    return null;
   }
 
   function planName(client){if(!client)return '';const state=currentState(),plans=Array.isArray(state?.plans)?state.plans:[],byId=client?.plan_id?plans.find(plan=>Number(plan?.id)===Number(client.plan_id)):null;return String(client?.plan_name||byId?.name||client?.plan||'').trim()}
@@ -73,7 +75,7 @@
     const directAddress=firstValue(typeof client?.address==='string'?client.address:'',addressObject?.address,addressObject?.endereco);
     const street=firstValue(client?.street,client?.logradouro,client?.address_line,client?.endereco,addressObject?.street,addressObject?.logradouro);
     const number=firstValue(client?.number,client?.numero,client?.address_number,addressObject?.number,addressObject?.numero);
-    const address=directAddress||[street,number].filter(Boolean).join(', ');
+    const baseAddress=directAddress||street,address=number?(baseAddress?(normalize(baseAddress).endsWith(normalize(number))?baseAddress:`${baseAddress}, ${number}`):number):baseAddress;
     const neighborhood=firstValue(client?.neighborhood,client?.bairro,client?.district,addressObject?.neighborhood,addressObject?.bairro,addressObject?.district);
     const city=firstValue(client?.city,client?.cidade,client?.municipality,client?.municipio,addressObject?.city,addressObject?.cidade,addressObject?.municipality);
     const state=firstValue(client?.state,client?.estado,client?.uf,addressObject?.state,addressObject?.estado,addressObject?.uf);
@@ -88,14 +90,27 @@
     let block=panel.querySelector('.client-remote-access');
     if(!block){block=document.createElement('div');block.className='client-remote-access';block.innerHTML='<div><strong>Acesso remoto ao equipamento</strong><small data-pp-remote-detail></small></div>';panel.appendChild(block)}
     const detail=block.querySelector('[data-pp-remote-detail]');
-    const detailText=device?`Roteador / ONU: ${device}`:'Use o acesso original cadastrado para este cliente.';if(detail&&detail.textContent!==detailText)detail.textContent=detailText;
+    const detailText=device?`Roteador / ONU: ${device}`:'Cadastre o IP do roteador ou ONU deste cliente para liberar o acesso.';if(detail&&detail.textContent!==detailText)detail.textContent=detailText;
 
-    let movedButton=block.querySelector('button[data-pp-original-router="true"]');
-    if(movedButton&&clientId!=='0'&&movedButton.dataset.ppClientId&&movedButton.dataset.ppClientId!==clientId){movedButton.remove();movedButton=null}
-    const sourceButton=[...section.querySelectorAll('button')].find(button=>{const text=normalize(button.textContent);return text.includes('roteador')||text.includes('onu')||text.includes('acessar')||text.includes('abrir')})||null;
-    if(sourceButton&&sourceButton!==movedButton){if(movedButton)movedButton.remove();movedButton=sourceButton;movedButton.dataset.ppOriginalRouter='true';movedButton.dataset.ppClientId=clientId;movedButton.hidden=false;movedButton.style.removeProperty('display');movedButton.textContent='Acessar roteador / ONU';block.appendChild(movedButton)}
-    else if(movedButton&&clientId!=='0')movedButton.dataset.ppClientId=clientId;
-    return Boolean(movedButton);
+    let button=block.querySelector('button[data-pp-router-access="true"]');
+    if(!button){
+      button=document.createElement('button');button.type='button';button.dataset.ppRouterAccess='true';button.textContent='Acessar roteador / ONU';block.appendChild(button);
+      button.addEventListener('click',async()=>{
+        const id=Number(button.dataset.ppClientId)||0;if(!id||button.disabled)return;
+        button.disabled=true;
+        try{
+          if(typeof api?.clients?.openRouter!=='function')throw new Error('A função de acesso ao roteador/ONU não está disponível.');
+          await api.clients.openRouter(id);
+        }catch(error){
+          console.error('Provedor Plus: falha ao abrir o roteador/ONU do cliente.',error);
+          window.alert(error instanceof Error?error.message:String(error||'Não foi possível abrir o roteador/ONU deste cliente.'));
+        }finally{button.disabled=false}
+      });
+    }
+    button.dataset.ppClientId=clientId;
+    button.disabled=!Number(clientId)||!device;
+    button.title=device?'Abrir o roteador ou ONU deste cliente':'Cadastre o IP do roteador ou ONU deste cliente';
+    return true;
   }
 
   function hideOnlySafeLegacyConsumption(modal){

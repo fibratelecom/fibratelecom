@@ -22,7 +22,15 @@
   display:block!important;
 }
 
-/* Evita mudança brusca de altura quando o React atualiza o status base. */
+/* O estado Online/Offline fica somente no cabeçalho PPPoE.
+   Os cartões continuam mostrando seus dados, sem repetir o mesmo selo de estado. */
+.client-status-modal .client-live-consumption-head>span,
+.client-status-modal .client-extra-summary .client-extra-card:first-child .client-extra-title>b,
+.client-status-modal .client-uptime-card .client-extra-title>b{
+  display:none!important;
+}
+
+/* Evita mudança brusca de altura quando o componente-base atualiza o status. */
 .client-status-modal .client-status-view{
   min-height:430px;
 }

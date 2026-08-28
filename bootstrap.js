@@ -67,7 +67,7 @@
   ]);
 
   await loadScript('/client-status-enhancements.js?v=1017-status7-stable').catch(error=>console.error('Provedor Plus: os indicadores avançados do cliente não foram carregados.',error));
-  await loadScript('/client-status-layout-cleanup.js?v=1017-statuslayout5-router').catch(error=>console.error('Provedor Plus: a organização visual do status do cliente não foi carregada.',error));
+  await loadScript('/client-status-layout-cleanup.js?v=1017-statuslayout6-freshdata').catch(error=>console.error('Provedor Plus: a organização visual do status do cliente não foi carregada.',error));
 
   const root=document.getElementById('root');
   if(root)root.style.visibility='hidden';

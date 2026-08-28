@@ -1,0 +1,24 @@
+name: Validate Startup Screen
+
+on:
+  push:
+    branches:
+      - fix/global-navigation-duplication
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate JavaScript syntax
+        run: |
+          node --check bootstrap.js
+          node --check dashboard-transition-guard.js
+      - name: Validate startup shell
+        run: |
+          grep -q 'id="pp-startup-shell"' index.html
+          grep -q 'Provedor Plus' index.html
+          grep -q 'Carregando seu painel' index.html
+          grep -q 'body:has(#pp-auth-form) #pp-startup-shell' index.html
+          grep -q 'finishStartup' bootstrap.js
+          grep -q 'bootstrap.js?v=1017-cloud17-prod9-startup' index.html

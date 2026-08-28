@@ -103,9 +103,16 @@
     if(!row.querySelector('.pp-dashboard-system-online')){const status=document.createElement('span');status.className='pp-dashboard-system-online';status.innerHTML='<i></i><span>Sistema online</span>';row.appendChild(status)}
   }
 
-  function patchClientViewButtons(root=document){
-    const scope=root instanceof Element||root===document?root:document;
-    scope.querySelectorAll?.('button').forEach(button=>{
+  function clientContentRoot(){
+    const heading=[...document.querySelectorAll('h1,h2')].find(el=>String(el.textContent||'').trim().toLowerCase()==='clientes'&&el.getClientRects().length>0);
+    if(!heading)return null;
+    return heading.closest('.content,[role="main"],main')||heading.parentElement?.parentElement||null;
+  }
+
+  function patchClientViewButtons(){
+    const area=clientContentRoot();if(!area)return;
+    area.querySelectorAll('button').forEach(button=>{
+      if(button.closest('.client-status-modal'))return;
       if(button.classList.contains('pp-client-view-eye'))return;
       if(String(button.textContent||'').trim().toLowerCase()!=='status')return;
       button.classList.add('pp-client-view-eye');
@@ -137,13 +144,13 @@
 
   function patchStatic(){
     if(document.title!=='Provedor Plus')document.title='Provedor Plus';
-    installShellStyles();patchDashboardStatus();patchLogout();patchMikrotikNote();patchRouterForm();patchClientViewButtons(document);
+    installShellStyles();patchDashboardStatus();patchLogout();patchMikrotikNote();patchRouterForm();patchClientViewButtons();
   }
 
   function patchAddedNode(node){
     replaceText(node);
     if(!(node instanceof Element))return;
-    patchClientViewButtons(node);
+    patchClientViewButtons();
     if(node.matches('.user-card,.router-config,.router-form,.pp-dashboard-heading')||node.querySelector('.user-card,.router-config,.router-form,.pp-dashboard-heading'))patchStatic();
   }
 

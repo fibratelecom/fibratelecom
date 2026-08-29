@@ -17,7 +17,7 @@ replacement="""async function bankVault(req){
   return vault;
 }
 async function routerPasswordMap"""
-text,count=re.subn(pattern,replacement,text,count=1,flags=re.S)
+text,count=re.subn(pattern,lambda _:replacement,text,count=1,flags=re.S)
 assert count==1
 p.write_text(text)
 

@@ -16,6 +16,8 @@
   const inputDate=v=>{if(!v)return'';const d=new Date(v);if(Number.isNaN(d.getTime()))return'';return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`};
   const nowIso=()=>new Date().toISOString();
   let auth=null,clients=[],staff=[],layer=null,editor=null,filter={q:'',status:'',priority:'',assigned:''},observerTimer=null;
+  function mainNav(){return document.querySelector('aside.sidebar nav[aria-label="Menu principal"],aside.sidebar nav')}
+  function mainNavButtons(){const nav=mainNav();return nav?[...nav.querySelectorAll('button')]:[]}
 
   function state(){return window.ProvedorPlusCloudState?.getState?.()||{}}
   function rawTickets(){const s=state();return Array.isArray(s?.tickets)?s.tickets:[]}
@@ -54,13 +56,13 @@
   }
   function toast(message,tone='ok'){let n=document.getElementById('pp-ticket-toast');if(!n){n=document.createElement('div');n.id='pp-ticket-toast';n.className='pp-ticket-toast';document.body.appendChild(n)}n.className=`pp-ticket-toast ${tone}`;n.textContent=message;n.hidden=false;clearTimeout(n._t);n._t=setTimeout(()=>n.hidden=true,3000)}
 
-  function activeTicketsNav(){const active=document.querySelector('.sidebar nav button.active,nav button.active');return active&&norm(active.textContent).includes('chamado')}
+  function activeTicketsNav(){const active=mainNavButtons().find(b=>b.classList.contains('active'));return Boolean(active&&norm(active.textContent).includes('chamado'))}
   function permissionAllowed(){return auth?.user?.role==='admin'||safeArray(auth?.user?.permissions).includes('tickets')}
   function canNetwork(){return auth?.user?.role==='admin'||safeArray(auth?.user?.permissions).includes('network')}
   function closeLayer(){layer?.remove();layer=null}
   function closeEditor(){editor?.remove();editor=null}
   function leaveTickets(){closeEditor();closeLayer()}
-  function navigate(label){leaveTickets();const target=norm(label);const b=[...document.querySelectorAll('.sidebar nav button,nav button')].find(x=>norm(x.textContent).includes(target));b?.click()}
+  function navigate(label){leaveTickets();const target=norm(label);const b=mainNavButtons().find(x=>norm(x.textContent).includes(target));b?.click()}
 
   async function loadReferences(){try{clients=typeof window.provedor?.clients?.list==='function'?await window.provedor.clients.list():safeArray(state()?.clients)}catch{clients=safeArray(state()?.clients)}try{staff=await authApi('employees.available')}catch{staff=[]}}
   function filteredTickets(){const q=norm(filter.q),s=norm(filter.status),p=norm(filter.priority),a=Number(filter.assigned)||0;return rawTickets().filter(t=>{const c=clientById(ticketClientId(t));const hay=norm(`${ticketNo(t)} ${titleOf(t)} ${c?.name||t?.client_name||''} ${ticketCategory(t)} ${personName(ticketAssignedId(t))}`);return(!q||hay.includes(q))&&(!s||norm(ticketStatus(t))===s)&&(!p||norm(ticketPriority(t))===p)&&(!a||ticketAssignedId(t)===a)}).sort((a,b)=>new Date(createdAt(b)||0)-new Date(createdAt(a)||0))}
@@ -124,9 +126,9 @@
   async function start(){
     try{auth=await window.ProvedorPlusAuth?.status?.()}catch{return}
     if(!auth?.authenticated||!auth.user)return;
-    const observer=new MutationObserver(()=>{clearTimeout(observerTimer);observerTimer=setTimeout(()=>{if(activeTicketsNav()&&permissionAllowed()){if(!layer)openPage()}else leaveTickets()},80)});
-    observer.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});
-    document.addEventListener('click',e=>{const b=e.target.closest('.sidebar nav button,nav button');if(!b)return;setTimeout(()=>{if(norm(b.textContent).includes('chamado')&&permissionAllowed()){if(!layer)openPage()}else leaveTickets()},30)},true);
+    const nav=mainNav();
+    if(nav){const observer=new MutationObserver(()=>{clearTimeout(observerTimer);observerTimer=setTimeout(()=>{if(activeTicketsNav()&&permissionAllowed()){if(!layer)openPage()}else leaveTickets()},80)});observer.observe(nav,{childList:true,subtree:true,attributes:true,attributeFilter:['class']})}
+    document.addEventListener('click',e=>{const currentNav=mainNav(),b=e.target.closest('button');if(!currentNav||!b||!currentNav.contains(b))return;setTimeout(()=>{if(norm(b.textContent).includes('chamado')&&permissionAllowed()){if(!layer)openPage()}else leaveTickets()},30)},true);
     setTimeout(()=>{if(activeTicketsNav()&&permissionAllowed()&&!layer)openPage()},120)
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(start,100),{once:true});else setTimeout(start,100);

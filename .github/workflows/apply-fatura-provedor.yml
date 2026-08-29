@@ -1,0 +1,46 @@
+name: Apply Provedor Plus Fatura
+on:
+  push:
+    branches: [fix/global-navigation-duplication]
+    paths: [.github/workflows/apply-fatura-provedor.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/global-navigation-duplication
+          fetch-depth: 0
+      - name: Aplicar fatura no renderizador existente
+        run: |
+          set -euo pipefail
+          python .github/scripts/apply-fatura-provedor.py
+          cat packed/bridgegz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/bridge.js
+          node --check /tmp/bridge.js
+          grep -q 'Código do cliente / Contrato' /tmp/bridge.js
+          grep -q '/assets/fibra-plus-logo.webp' /tmp/bridge.js
+          grep -q 'bank_digitable_line' /tmp/bridge.js
+          grep -q 'bank_barcode' /tmp/bridge.js
+          grep -q 'bank_pix_code' /tmp/bridge.js
+          grep -q '(92) 98486-7428' /tmp/bridge.js
+          test "$(grep -o 'function invoiceHtml(i)' /tmp/bridge.js | wc -l)" -eq 1
+          test "$(grep -o 'async function previewInvoiceWeb(i)' /tmp/bridge.js | wc -l)" -eq 1
+          test "$(grep -o 'async function downloadInvoiceWeb(i)' /tmp/bridge.js | wc -l)" -eq 1
+      - name: Garantir escopo sem alterar app e proxy
+        run: |
+          set -euo pipefail
+          git diff --name-only > /tmp/changed.txt
+          grep -q '^packed/bridgegz-01.txt$' /tmp/changed.txt
+          ! grep -Eq '^packed/appgz-' /tmp/changed.txt
+          ! grep -Eq '^packed/proxygz-' /tmp/changed.txt
+      - name: Commit da implementação
+        run: |
+          set -euo pipefail
+          git config user.name fibratelecom
+          git config user.email lanconta2015@gmail.com
+          git add packed/bridgegz-01.txt packed/bridgegz-02.txt packed/bridgegz-03.txt packed/bridgegz-04.txt
+          git diff --cached --quiet && exit 0
+          git commit -m 'Implementa fatura detalhada no fluxo existente de boletos'
+          git push origin HEAD:fix/global-navigation-duplication

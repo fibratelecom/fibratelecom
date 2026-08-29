@@ -1,0 +1,54 @@
+name: Fix Pix Auto Fresh Client
+
+on:
+  push:
+    branches:
+      - fix/global-navigation-duplication
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Protect Pix Automatic creation with fresh client
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('billing-bank-selector.js')
+          s=p.read_text()
+          block="""  if(typeof api?.banks?.createEfiPixAutomatic==='function'){
+    const createEfiPixAutomatic=api.banks.createEfiPixAutomatic.bind(api.banks);
+    api.banks.createEfiPixAutomatic=async values=>{
+      await refreshBillingClient(values?.clientId);
+      try{return await createEfiPixAutomatic(values)}catch(error){throw explainBankError(error)}
+    };
+  }
+
+"""
+          marker="  const invoiceSave=api.invoices.save.bind(api.invoices);"
+          if "api.banks.createEfiPixAutomatic=async" not in s:
+              if marker not in s: raise SystemExit('Invoice wrapper marker not found')
+              s=s.replace(marker,block+marker,1)
+              p.write_text(s)
+          PY
+          node --check billing-bank-selector.js
+          grep -Fq "api.banks.createEfiPixAutomatic=async" billing-bank-selector.js
+          grep -Fq "await refreshBillingClient(values?.clientId)" billing-bank-selector.js
+          grep -Fq "throw explainBankError(error)" billing-bank-selector.js
+          git fetch origin main
+          git diff --quiet origin/main -- packed/appgz-*.txt packed/bridgegz-*.txt packed/proxygz-*.txt
+          if git diff --quiet -- billing-bank-selector.js; then
+            echo 'Patch already present.'
+            exit 0
+          fi
+          git config user.name fibratelecom
+          git config user.email lanconta2015@gmail.com
+          git add billing-bank-selector.js
+          git commit -m 'Atualiza cliente antes de criar Pix Automático'
+          git push origin HEAD:fix/global-navigation-duplication

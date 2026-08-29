@@ -16,6 +16,15 @@ jobs:
       - name: Aplicar fatura no renderizador existente
         run: |
           set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('.github/scripts/apply-fatura-provedor.py')
+          s=p.read_text()
+          old='new_bridge,n=re.subn(pattern,block+"  const SECURE_DB=",bridge,count=1,flags=re.S)'
+          new='new_bridge,n=re.subn(pattern,lambda _m:block+"  const SECURE_DB=",bridge,count=1,flags=re.S)'
+          assert old in s
+          p.write_text(s.replace(old,new,1))
+          PY
           python .github/scripts/apply-fatura-provedor.py
           cat packed/bridgegz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/bridge.js
           node --check /tmp/bridge.js

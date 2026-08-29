@@ -4,7 +4,7 @@ on:
     branches: [fix/global-navigation-duplication]
     paths: [.github/workflows/final-scale-audit.yml]
 permissions:
-  contents: read
+  contents: write
 jobs:
   audit:
     runs-on: ubuntu-latest
@@ -13,6 +13,41 @@ jobs:
         with:
           ref: fix/global-navigation-duplication
           fetch-depth: 0
+      - name: Restrict ticket navigation hooks to main menu
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('ticket-enhancements.js')
+          s=p.read_text()
+          if 'function mainNavButtons()' not in s:
+              marker="  let auth=null,clients=[],staff=[],layer=null,editor=null,filter={q:'',status:'',priority:'',assigned:''},observerTimer=null;\n"
+              assert marker in s
+              helper=marker+"  function mainNav(){return document.querySelector('aside.sidebar nav[aria-label=\"Menu principal\"],aside.sidebar nav')}\n  function mainNavButtons(){const nav=mainNav();return nav?[...nav.querySelectorAll('button')]:[]}\n"
+              s=s.replace(marker,helper,1)
+              old="  function activeTicketsNav(){const active=document.querySelector('.sidebar nav button.active,nav button.active');return active&&norm(active.textContent).includes('chamado')}"
+              new="  function activeTicketsNav(){const active=mainNavButtons().find(b=>b.classList.contains('active'));return Boolean(active&&norm(active.textContent).includes('chamado'))}"
+              assert old in s
+              s=s.replace(old,new,1)
+              old="  function navigate(label){leaveTickets();const target=norm(label);const b=[...document.querySelectorAll('.sidebar nav button,nav button')].find(x=>norm(x.textContent).includes(target));b?.click()}"
+              new="  function navigate(label){leaveTickets();const target=norm(label);const b=mainNavButtons().find(x=>norm(x.textContent).includes(target));b?.click()}"
+              assert old in s
+              s=s.replace(old,new,1)
+              old="""    const observer=new MutationObserver(()=>{clearTimeout(observerTimer);observerTimer=setTimeout(()=>{if(activeTicketsNav()&&permissionAllowed()){if(!layer)openPage()}else leaveTickets()},80)});
+    observer.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});
+    document.addEventListener('click',e=>{const b=e.target.closest('.sidebar nav button,nav button');if(!b)return;setTimeout(()=>{if(norm(b.textContent).includes('chamado')&&permissionAllowed()){if(!layer)openPage()}else leaveTickets()},30)},true);
+"""
+              new="""    const nav=mainNav();
+    if(nav){const observer=new MutationObserver(()=>{clearTimeout(observerTimer);observerTimer=setTimeout(()=>{if(activeTicketsNav()&&permissionAllowed()){if(!layer)openPage()}else leaveTickets()},80)});observer.observe(nav,{childList:true,subtree:true,attributes:true,attributeFilter:['class']})}
+    document.addEventListener('click',e=>{const currentNav=mainNav(),b=e.target.closest('button');if(!currentNav||!b||!currentNav.contains(b))return;setTimeout(()=>{if(norm(b.textContent).includes('chamado')&&permissionAllowed()){if(!layer)openPage()}else leaveTickets()},30)},true);
+"""
+              assert old in s
+              s=s.replace(old,new,1)
+              p.write_text(s)
+          PY
+          node --check ticket-enhancements.js
+          if grep -q '.sidebar nav button,nav button' ticket-enhancements.js; then exit 1; fi
+          grep -q 'observer.observe(nav' ticket-enhancements.js
       - name: Validate JavaScript and configuration
         run: |
           set -euo pipefail
@@ -20,6 +55,8 @@ jobs:
           node --check api/automation.js
           node --check api/cloud-state.js
           node --check cloud-client-store-v2.js
+          node --check staff-access.js
+          node --check ticket-enhancements.js
           node -e "const v=JSON.parse(require('fs').readFileSync('vercel.json','utf8')); if(v.crons)process.exit(1); if(v.functions?.['api/automation.js']?.maxDuration!==60)process.exit(1)"
       - name: Test persistent bank cursor
         run: |
@@ -51,7 +88,7 @@ jobs:
         run: |
           set -euo pipefail
           grep -q "text(autoRecord.automation_reason)==='overdue_7d'" lib/automation-handler.js
-          if grep -q 'paidClientIds' lib/automation-handler.js; then echo 'Manual block may still be auto-restored'; exit 1; fi
+          if grep -q 'paidClientIds' lib/automation-handler.js; then exit 1; fi
           grep -q "try{await mikrotikAction('client.block',router,client)}catch{}throw error" lib/automation-handler.js
           grep -q "try{await mikrotikAction('client.unblock',router,client)}catch{}throw error" lib/automation-handler.js
           grep -q 'BANK_BATCH_SIZE=8' lib/automation-handler.js
@@ -70,7 +107,7 @@ jobs:
           grep -q 'MORE_ACCESS' .github/workflows/provedor-plus-automation.yml
           awk '/        run: \|/{flag=1;next} flag{sub(/^          /,""); print}' .github/workflows/provedor-plus-automation.yml > /tmp/scheduler.sh
           bash -n /tmp/scheduler.sh
-      - name: Recheck regression scope
+      - name: Recheck navigation and regression scope
         run: |
           set -euo pipefail
           cat packed/appgz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/app.js
@@ -78,6 +115,10 @@ jobs:
           node --check /tmp/app.js
           node --check /tmp/bridge.js
           grep -q 'aside.sidebar nav\[aria-label="Menu principal"\]' dashboard-transition-guard.js
+          grep -q 'function mainNavButtons()' staff-access.js
+          grep -q 'function mainNavButtons()' ticket-enhancements.js
+          ! grep -q '.sidebar nav button,nav button' staff-access.js
+          ! grep -q '.sidebar nav button,nav button' ticket-enhancements.js
           ! grep -q 'characterData' dashboard-transition-guard.js
           grep -q 'automation_ack_clients' api/cloud-state.js
           grep -q 'writeState(state,\[Number(remote.id)\])' cloud-client-store-v2.js
@@ -85,3 +126,12 @@ jobs:
           ! grep -Eq '^packed/appgz-' /tmp/changed.txt
           ! grep -Eq '^packed/proxygz-' /tmp/changed.txt
           echo FINAL_SCALE_AUDIT_OK
+      - name: Commit ticket scope fix
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- ticket-enhancements.js; then exit 0; fi
+          git config user.name fibratelecom
+          git config user.email lanconta2015@gmail.com
+          git add ticket-enhancements.js
+          git commit -m "Restringe Chamados ao menu principal"
+          git push origin HEAD:fix/global-navigation-duplication

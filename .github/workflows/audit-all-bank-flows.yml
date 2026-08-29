@@ -31,7 +31,7 @@ jobs:
             };
           }
 
-"""
+          """
           if "api.banks.createEfiPixAutomatic=async" not in s:
               if marker not in s: raise SystemExit('Invoice wrapper marker not found')
               s=s.replace(marker,block+marker,1)

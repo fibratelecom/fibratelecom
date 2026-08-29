@@ -71,8 +71,9 @@
     try{const raw=JSON.stringify(state||{});if(localStorage.getItem(STATE_KEY)!==raw)localStorage.setItem(STATE_KEY,raw)}catch{}
   }
 
-  async function writeState(state){
-    const saved=await cloudState('state.save',{state});
+  async function writeState(state,automationAckClients=[]){
+    const ids=[...new Set((Array.isArray(automationAckClients)?automationAckClients:[]).map(id=>Number(id)||0).filter(Boolean))];
+    const saved=await cloudState('state.save',{state,...(ids.length?{automation_ack_clients:ids}:{})});
     const next=saved?.state&&typeof saved.state==='object'?saved.state:state;
     mirrorState(next);
     return next;
@@ -148,7 +149,7 @@
     state.clients=state.clients.map(row=>{if(sameIdentity(row,existing||data)){replaced=true;return finalRecord}return row});
     if(!replaced)state.clients.push(finalRecord);
     state.clients=dedupeClients(state.clients);
-    state=await writeState(state);
+    state=await writeState(state,[Number(remote.id)]);
     const saved=(Array.isArray(state.clients)?state.clients:[]).find(c=>Number(c?.id)===Number(remote.id))||finalRecord;
     return decorate(saved,state);
   }
@@ -159,7 +160,7 @@
     let state=await readState();
     state.clients=(Array.isArray(state.clients)?state.clients:[]).filter(c=>Number(c?.id)!==id);
     state.invoices=(Array.isArray(state.invoices)?state.invoices:[]).map(row=>Number(row?.client_id)===id?{...row,client_id:null}:row);
-    await writeState(state);
+    await writeState(state,[id]);
     return {deleted:true,id};
   }
 

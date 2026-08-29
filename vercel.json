@@ -10,8 +10,7 @@
   "git": {
     "deploymentEnabled": {
       "*": false,
-      "main": true,
-      "fix/global-navigation-duplication": true
+      "main": true
     }
   }
 }

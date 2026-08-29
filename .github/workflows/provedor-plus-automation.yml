@@ -27,10 +27,29 @@ jobs:
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=provedor-plus-automation")"
           OIDC_TOKEN="$(python -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<< "${OIDC_RESPONSE}")"
           test -n "${OIDC_TOKEN}"
-          curl --fail --silent --show-error \
-            --max-time 220 \
-            --retry 2 \
-            --retry-delay 5 \
-            --retry-connrefused \
-            -H "Authorization: Bearer ${OIDC_TOKEN}" \
-            https://fibratelecom.vercel.app/api/automation
+
+          STARTED="$(date +%s)"
+          SKIP_BANK=0
+          ITERATION=0
+          while true; do
+            NOW="$(date +%s)"
+            if [ $((NOW-STARTED)) -ge 190 ] || [ "${ITERATION}" -ge 20 ]; then
+              echo "Janela desta execução concluída; a próxima rodada continuará do cursor salvo."
+              break
+            fi
+
+            URL="https://fibratelecom.vercel.app/api/automation"
+            if [ "${SKIP_BANK}" = "1" ]; then URL="${URL}?skipBank=1"; fi
+            RESPONSE="$(curl --fail --silent --show-error \
+              --max-time 58 \
+              -H "Authorization: Bearer ${OIDC_TOKEN}" \
+              "${URL}")"
+
+            python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print(f"lote banco={d.get(\"bankBatch\",0)} verificado={d.get(\"checked\",0)} pagos={d.get(\"paid\",0)} bloqueados={d.get(\"blocked\",0)} liberados={d.get(\"unblocked\",0)}")' <<< "${RESPONSE}"
+            MORE_PENDING="$(python -c 'import json,sys; print("1" if json.load(sys.stdin).get("data",{}).get("morePending") else "0")' <<< "${RESPONSE}")"
+            MORE_ACCESS="$(python -c 'import json,sys; print("1" if json.load(sys.stdin).get("data",{}).get("moreAccess") else "0")' <<< "${RESPONSE}")"
+
+            if [ "${MORE_PENDING}" = "0" ] && [ "${MORE_ACCESS}" = "0" ]; then break; fi
+            if [ "${MORE_PENDING}" = "0" ]; then SKIP_BANK=1; fi
+            ITERATION=$((ITERATION+1))
+          done

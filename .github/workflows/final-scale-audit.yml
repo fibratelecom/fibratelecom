@@ -1,0 +1,87 @@
+name: Final Scale Audit
+on:
+  push:
+    branches: [fix/global-navigation-duplication]
+    paths: [.github/workflows/final-scale-audit.yml]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/global-navigation-duplication
+          fetch-depth: 0
+      - name: Validate JavaScript and configuration
+        run: |
+          set -euo pipefail
+          node --check lib/automation-handler.js
+          node --check api/automation.js
+          node --check api/cloud-state.js
+          node --check cloud-client-store-v2.js
+          node -e "const v=JSON.parse(require('fs').readFileSync('vercel.json','utf8')); if(v.crons)process.exit(1); if(v.functions?.['api/automation.js']?.maxDuration!==60)process.exit(1)"
+      - name: Test persistent bank cursor
+        run: |
+          set -euo pipefail
+          cp lib/automation-handler.js lib/.automation-test.js
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('lib/.automation-test.js')
+          s=p.read_text()
+          old='module.exports={runAutomation,applyAutomationOverlay,OVERLAY_KEY,STATE_KEY};'
+          assert old in s
+          p.write_text(s.replace(old,'module.exports={runAutomation,applyAutomationOverlay,OVERLAY_KEY,STATE_KEY,selectBankBatch,invoiceKey};'))
+          PY
+          node - <<'NODE'
+          const {selectBankBatch}=require('./lib/.automation-test');
+          const rows=Array.from({length:20},(_,i)=>({id:i+1}));
+          const a=selectBankBatch(rows,{});
+          if(a.batch.length!==8||a.batch[0].id!==1||a.batch[7].id!==8||!a.more||!a.lastKey)process.exit(1);
+          const b=selectBankBatch(rows,{last_key:a.lastKey});
+          if(b.batch.length!==8||b.batch[0].id!==9||b.batch[7].id!==16||!b.more||!b.lastKey)process.exit(1);
+          const c=selectBankBatch(rows,{last_key:b.lastKey});
+          if(c.batch.length!==4||c.batch[0].id!==17||c.batch[3].id!==20||c.more||c.lastKey!=='')process.exit(1);
+          const d=selectBankBatch(rows,{last_key:'n:99999999999999999999'});
+          if(d.batch[0].id!==1)process.exit(1);
+          console.log('CURSOR_OK');
+          NODE
+          rm lib/.automation-test.js
+      - name: Validate manual block safety and rollback
+        run: |
+          set -euo pipefail
+          grep -q "text(autoRecord.automation_reason)==='overdue_7d'" lib/automation-handler.js
+          if grep -q 'paidClientIds' lib/automation-handler.js; then echo 'Manual block may still be auto-restored'; exit 1; fi
+          grep -q "try{await mikrotikAction('client.block',router,client)}catch{}throw error" lib/automation-handler.js
+          grep -q "try{await mikrotikAction('client.unblock',router,client)}catch{}throw error" lib/automation-handler.js
+          grep -q 'BANK_BATCH_SIZE=8' lib/automation-handler.js
+          grep -q 'ACCESS_BATCH_SIZE=4' lib/automation-handler.js
+          grep -q 'BANK_CURSOR_KEY' lib/automation-handler.js
+          grep -q 'morePending' lib/automation-handler.js
+          grep -q 'moreAccess' lib/automation-handler.js
+          grep -q 'skipBank' lib/automation-handler.js
+      - name: Validate scheduler shell
+        run: |
+          set -euo pipefail
+          grep -q "cron: '2-59/5 \* \* \* \*'" .github/workflows/provedor-plus-automation.yml
+          grep -q 'id-token: write' .github/workflows/provedor-plus-automation.yml
+          grep -q 'SKIP_BANK=0' .github/workflows/provedor-plus-automation.yml
+          grep -q 'MORE_PENDING' .github/workflows/provedor-plus-automation.yml
+          grep -q 'MORE_ACCESS' .github/workflows/provedor-plus-automation.yml
+          awk '/        run: \|/{flag=1;next} flag{sub(/^          /,""); print}' .github/workflows/provedor-plus-automation.yml > /tmp/scheduler.sh
+          bash -n /tmp/scheduler.sh
+      - name: Recheck regression scope
+        run: |
+          set -euo pipefail
+          cat packed/appgz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/app.js
+          cat packed/bridgegz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/bridge.js
+          node --check /tmp/app.js
+          node --check /tmp/bridge.js
+          grep -q 'aside.sidebar nav\[aria-label="Menu principal"\]' dashboard-transition-guard.js
+          ! grep -q 'characterData' dashboard-transition-guard.js
+          grep -q 'automation_ack_clients' api/cloud-state.js
+          grep -q 'writeState(state,\[Number(remote.id)\])' cloud-client-store-v2.js
+          git diff --name-only origin/main...HEAD > /tmp/changed.txt
+          ! grep -Eq '^packed/appgz-' /tmp/changed.txt
+          ! grep -Eq '^packed/proxygz-' /tmp/changed.txt
+          echo FINAL_SCALE_AUDIT_OK

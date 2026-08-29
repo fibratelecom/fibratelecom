@@ -3,95 +3,40 @@ import base64
 import gzip
 import re
 
-# Keep the automation handler lightweight on state reads.
+# Merge bank vaults provider-by-provider so credentials saved by different authorized users remain usable.
 p=Path('lib/automation-handler.js')
 text=p.read_text()
-old="const mikrotikHandler=require('./mikrotik-proxy');\n\nconst DATA_API="
-new="const mikrotikHandler=require('./mikrotik-proxy');\nconst {STATE_KEY,OVERLAY_KEY,applyAutomationOverlay}=require('./automation-overlay');\n\nconst DATA_API="
-assert old in text
-text=text.replace(old,new,1)
-text=text.replace("const STATE_KEY='web_state_v1017';\nconst OVERLAY_KEY='automation_state_v1';\n",'',1)
-pattern=r"\nfunction applyAutomationOverlay\(state,overlay\)\{.*?\n\}\n\nfunction saoPauloDateParts"
-text,count=re.subn(pattern,"\nfunction saoPauloDateParts",text,count=1,flags=re.S)
+pattern=r"async function bankVault\(req\)\{.*?\n\}\nasync function routerPasswordMap"
+replacement="""async function bankVault(req){
+  const [settings,users]=await Promise.all([db(req,`/pp_settings?key=like.${encodeURIComponent(BANK_SECRET_PREFIX+'*')}&select=key,value,updated_at&order=updated_at.desc`),usersById(req)]),vault={};
+  for(const row of Array.isArray(settings)?settings:[]){
+    const m=text(row.key).match(/^automation_bank_secret_v1_(\\d+)$/);if(!m)continue;const userId=Number(m[1]),hash=users.get(userId);if(!hash)continue;
+    const key=crypto.createHash('sha256').update(`provedor-plus-bank-automation-v1|${userId}|${hash}`).digest(),plain=decryptSecret(row.value,key);if(!plain)continue;
+    try{const value=JSON.parse(plain);if(!vault.efi&&value?.efi)vault.efi=value.efi;if(!vault.mercadoPago&&value?.mercadoPago)vault.mercadoPago=value.mercadoPago;if(vault.efi&&vault.mercadoPago)break}catch{}
+  }
+  return vault;
+}
+async function routerPasswordMap"""
+text,count=re.subn(pattern,replacement,text,count=1,flags=re.S)
 assert count==1
 p.write_text(text)
 
-# Server cron is authoritative; remove the automatic bank sync done at every panel startup.
-p=Path('bootstrap.js')
-text=p.read_text()
-old="  if(typeof window.provedor?.invoices?.sync==='function')await window.provedor.invoices.sync().catch(error=>console.error('Provedor Plus: falha na conciliação inicial de cobranças.',error));\n\n"
-assert old in text
-p.write_text(text.replace(old,'',1))
-
-# Decode the packed browser bridge.
+# Decode the already-patched browser bridge and make vault migration safe/non-blocking for normal bank operations.
 parts=sorted(Path('packed').glob('bridgegz-*.txt'))
 assert len(parts)==4
 raw=''.join(x.read_text().strip() for x in parts)
 bridge=gzip.decompress(base64.b64decode(raw)).decode()
 
+old="if(window.__PROVEDOR_PLUS_CLOUD__)await syncAutomationBankVault(efiSec,mpSec);return {efi:"
+assert old in bridge
+bridge=bridge.replace(old,"if(window.__PROVEDOR_PLUS_CLOUD__)await syncAutomationBankVault(efiSec,mpSec).catch(error=>console.error('Provedor Plus: não foi possível atualizar o cofre bancário da automação.',error));return {efi:",1)
+
 marker="  async function bankCall(payload){"
 assert marker in bridge
-helper="""  let automationBankVaultFingerprint='';
-  async function automationBankSave(provider,credentials){
-    if(!window.__PROVEDOR_PLUS_CLOUD__)return {configured:false,skipped:true};
-    const response=await fetch('/api/cloud-data',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'automation.bank.save',data:{provider,credentials}})});let result={};try{result=await response.json()}catch{}if(!response.ok||!result.ok)throw Error(result.error||`Falha ao proteger a credencial bancária da automação (HTTP ${response.status}).`);return result.data
-  }
-  async function syncAutomationBankVault(efiSec,mpSec){
-    if(!window.__PROVEDOR_PLUS_CLOUD__)return;
-    const fingerprint=JSON.stringify({efi:{clientId:efiSec.clientId||'',clientSecret:efiSec.clientSecret||'',certificatePassword:efiSec.certificatePassword||'',certificateBase64:efiSec.certificateBase64||'',certificateName:efiSec.certificateName||''},mercadoPago:{accessToken:mpSec.accessToken||''}});if(fingerprint===automationBankVaultFingerprint)return;
-    if(efiSec.clientId||efiSec.clientSecret||efiSec.certificateBase64)await automationBankSave('efi',efiSec);
-    if(mpSec.accessToken)await automationBankSave('mercadoPago',mpSec);
-    automationBankVaultFingerprint=fingerprint
-  }
+expose="""  window.ProvedorPlusSyncAutomationBankVault=async()=>{const efiSec=await secureGet('efi'),mpSec=await secureGet('mercadoPago');await syncAutomationBankVault(efiSec,mpSec);return {efi:Boolean(efiSec.clientId&&efiSec.clientSecret),mercadoPago:Boolean(mpSec.accessToken)}};
 """
-bridge=bridge.replace(marker,helper+marker,1)
-
-pattern=r"  async function bankSecrets\(\)\{.*?\}\n  function attachRemote"
-replacement="""  async function bankSecrets(){const s=load(),efiSec=await secureGet('efi'),mpSec=await secureGet('mercadoPago');if(window.__PROVEDOR_PLUS_CLOUD__)await syncAutomationBankVault(efiSec,mpSec);return {efi:{environment:s.banks.efi.environment||'sandbox',clientId:efiSec.clientId||'',clientSecret:efiSec.clientSecret||'',certificatePassword:efiSec.certificatePassword||'',certificateBase64:efiSec.certificateBase64||'',pixKey:s.banks.efi.pixKey||'',pixAutoReceiverAgency:s.banks.efi.pixAutoReceiverAgency||'',pixAutoReceiverAccount:s.banks.efi.pixAutoReceiverAccount||'',webhookUrl:s.banks.efi.webhookUrl||''},mercadoPago:{environment:s.banks.mercadoPago.environment||'sandbox',publicKey:s.banks.mercadoPago.publicKey||'',accessToken:mpSec.accessToken||''}}}
-  function attachRemote"""
-bridge,count=re.subn(pattern,replacement,bridge,count=1,flags=re.S)
-assert count==1
-
-old="await secureSet('efi',sec);s.banks.efi={"
-assert old in bridge
-bridge=bridge.replace(old,"await secureSet('efi',sec);if(window.__PROVEDOR_PLUS_CLOUD__)await automationBankSave('efi',sec);automationBankVaultFingerprint='';s.banks.efi={",1)
-
-old="await secureSet('efi',sec);const s=load();s.banks.efi.certificateConfigured=true"
-assert old in bridge
-bridge=bridge.replace(old,"await secureSet('efi',sec);if(window.__PROVEDOR_PLUS_CLOUD__)await automationBankSave('efi',sec);automationBankVaultFingerprint='';const s=load();s.banks.efi.certificateConfigured=true",1)
-
-old="await secureSet('efi',sec);const s=load();s.banks.efi.certificateConfigured=false"
-assert old in bridge
-bridge=bridge.replace(old,"await secureSet('efi',sec);if(window.__PROVEDOR_PLUS_CLOUD__)await automationBankSave('efi',sec);automationBankVaultFingerprint='';const s=load();s.banks.efi.certificateConfigured=false",1)
-
-old="await secureSet('mercadoPago',sec);s.banks.mercadoPago={"
-assert old in bridge
-bridge=bridge.replace(old,"await secureSet('mercadoPago',sec);if(window.__PROVEDOR_PLUS_CLOUD__)await automationBankSave('mercadoPago',sec);automationBankVaultFingerprint='';s.banks.mercadoPago={",1)
-
-old=".filter(i=>i.status==='Pendente'&&i.bank_provider).slice(0,100)"
-assert old in bridge
-bridge=bridge.replace(old,".filter(i=>i.status==='Pendente'&&i.bank_provider)",1)
-
-old="""  if(!window.__PROVEDOR_PLUS_CLOUD__){
-    void runExpiredTrustWeb().catch(()=>{});
-    void runAutoBlockWeb().catch(()=>{});
-    void syncInvoicesWeb().catch(()=>{});
-  }
-  setInterval(()=>void runExpiredTrustWeb().catch(()=>{}),60*1000);
-  setInterval(()=>void runAutoBlockWeb().catch(()=>{}),15*60*1000);
-  setInterval(()=>void syncInvoicesWeb().catch(()=>{}),5*60*1000);
-"""
-assert old in bridge
-new="""  if(!window.__PROVEDOR_PLUS_CLOUD__){
-    void runExpiredTrustWeb().catch(()=>{});
-    void runAutoBlockWeb().catch(()=>{});
-    void syncInvoicesWeb().catch(()=>{});
-    setInterval(()=>void runExpiredTrustWeb().catch(()=>{}),60*1000);
-    setInterval(()=>void runAutoBlockWeb().catch(()=>{}),15*60*1000);
-    setInterval(()=>void syncInvoicesWeb().catch(()=>{}),5*60*1000);
-  }
-"""
-bridge=bridge.replace(old,new,1)
+assert 'window.ProvedorPlusSyncAutomationBankVault' not in bridge
+bridge=bridge.replace(marker,expose+marker,1)
 
 Path('/tmp/bridge.js').write_text(bridge)
 packed=base64.b64encode(gzip.compress(bridge.encode(),compresslevel=9,mtime=0)).decode()
@@ -100,3 +45,13 @@ chunks=[packed[i*size:(i+1)*size] for i in range(4)]
 assert ''.join(chunks)==packed and all(chunks)
 for path,chunk in zip(parts,chunks):
     path.write_text(chunk+'\n')
+
+# On the first panel load after this update, migrate existing local bank secrets to the encrypted server vault without querying either bank.
+p=Path('bootstrap.js')
+text=p.read_text()
+marker="  if(window.provedor?.app?.info){\n"
+assert marker in text
+assert 'ProvedorPlusSyncAutomationBankVault' not in text
+insert="  if(typeof window.ProvedorPlusSyncAutomationBankVault==='function')await window.ProvedorPlusSyncAutomationBankVault().catch(error=>console.error('Provedor Plus: o cofre bancário da automação será sincronizado na próxima tentativa.',error));\n\n"
+text=text.replace(marker,insert+marker,1)
+p.write_text(text)

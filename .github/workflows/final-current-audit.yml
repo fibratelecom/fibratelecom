@@ -1,0 +1,110 @@
+name: Final Current Audit
+
+on:
+  push:
+    branches:
+      - fix/global-navigation-duplication
+    paths:
+      - .github/workflows/final-current-audit.yml
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/global-navigation-duplication
+          fetch-depth: 0
+      - name: Rebuild packed sources
+        run: |
+          set -euo pipefail
+          cat packed/appgz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/app.js
+          cat packed/bridgegz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/bridge.js
+          test -s /tmp/app.js
+          test -s /tmp/bridge.js
+      - name: Validate syntax
+        run: |
+          set -euo pipefail
+          for f in api/automation.js api/cloud-state.js bank-enabled-persistence.js billing-action-ui.js billing-bank-selector.js bootstrap.js cloud-client-store-v2.js dashboard-transition-guard.js lib/automation-handler.js lib/automation-overlay.js lib/cloud-data-handler.js lib/github-actions-oidc.js staff-access.js ticket-enhancements.js; do node --check "$f"; done
+          node --check /tmp/app.js
+          node --check /tmp/bridge.js
+          node -e "JSON.parse(require('fs').readFileSync('vercel.json','utf8'))"
+      - name: Validate duplicate-screen protections
+        run: |
+          set -euo pipefail
+          grep -q 'aside.sidebar nav\[aria-label="Menu principal"\]' dashboard-transition-guard.js
+          if grep -q '.sidebar nav button,nav button' dashboard-transition-guard.js; then exit 1; fi
+          if grep -q 'characterData' dashboard-transition-guard.js; then exit 1; fi
+          grep -q 'function mainNavButtons()' staff-access.js
+          grep -q 'function mainNavButtons()' ticket-enhancements.js
+          if grep -q '.sidebar nav button,nav button' staff-access.js; then exit 1; fi
+          if grep -q '.sidebar nav button,nav button' ticket-enhancements.js; then exit 1; fi
+          grep -q 'sidebarChanged(records)' staff-access.js
+          grep -q 'observer.observe(nav' ticket-enhancements.js
+          grep -q 'visao geral' staff-access.js
+          grep -q '.pp-ticket-layer{position:absolute;inset:0' ticket-enhancements.css
+          grep -q '.pp-staff-layer{position:absolute;inset:0' staff-access.css
+          grep -q '.pp-dashboard-host>:not(.pp-dashboard-v2){display:none!important}' dashboard-enhancements.css
+          test ! -e client-status-stable-view.css
+          test ! -e client-status-transition-fix.js
+      - name: Validate startup and billing
+        run: |
+          set -euo pipefail
+          grep -q 'id="pp-startup-shell"' index.html
+          grep -q 'Carregando seu painel' index.html
+          grep -q 'finishStartup' bootstrap.js
+          grep -q "input.name!=='enabled'" bank-enabled-persistence.js
+          grep -q 'form.requestSubmit' bank-enabled-persistence.js
+          grep -q 'readyBanks' billing-bank-selector.js
+          grep -q 'api?.clients?.list' billing-bank-selector.js
+          grep -q 'pp-bill-action-button' billing-action-ui.js
+          grep -q 'automation.bank.save' /tmp/bridge.js
+          grep -q 'ProvedorPlusSyncAutomationBankVault' /tmp/bridge.js
+          if grep -q 'slice(0,100)' /tmp/bridge.js; then exit 1; fi
+      - name: Validate automation state safety
+        run: |
+          set -euo pipefail
+          grep -q 'AUTO_BLOCK_DAYS=7' lib/automation-handler.js
+          grep -q 'BANK_BATCH_SIZE=8' lib/automation-handler.js
+          grep -q 'ACCESS_BATCH_SIZE=4' lib/automation-handler.js
+          grep -q 'BANK_CURSOR_KEY' lib/automation-handler.js
+          grep -q "text(autoRecord.automation_reason)==='overdue_7d'" lib/automation-handler.js
+          if grep -q 'paidClientIds' lib/automation-handler.js; then exit 1; fi
+          grep -q "try{await mikrotikAction('client.block',router,client)}catch{}throw error" lib/automation-handler.js
+          grep -q "try{await mikrotikAction('client.unblock',router,client)}catch{}throw error" lib/automation-handler.js
+          grep -q 'automation_ack_clients' api/cloud-state.js
+          grep -q 'clientAcks.has(String(id))' api/cloud-state.js
+          grep -q 'writeState(state,\[Number(remote.id)\])' cloud-client-store-v2.js
+          grep -q "cloudCall('client.block'" cloud-adapter.js
+          grep -q "cloudCall('client.unblock'" cloud-adapter.js
+          grep -q 'base.clients.trustRelease(id,hours)' cloud-adapter.js
+      - name: Test automation cursor
+        run: |
+          set -euo pipefail
+          cp lib/automation-handler.js lib/.automation-test.js
+          sed -i 's/module.exports={runAutomation,applyAutomationOverlay,OVERLAY_KEY,STATE_KEY};/module.exports={runAutomation,applyAutomationOverlay,OVERLAY_KEY,STATE_KEY,selectBankBatch,invoiceKey};/' lib/.automation-test.js
+          node -e "const {selectBankBatch}=require('./lib/.automation-test');const rows=Array.from({length:20},(_,i)=>({id:i+1}));const a=selectBankBatch(rows,{});if(a.batch.length!==8||a.batch[0].id!==1||a.batch[7].id!==8||!a.more)process.exit(1);const b=selectBankBatch(rows,{last_key:a.lastKey});if(b.batch.length!==8||b.batch[0].id!==9||b.batch[7].id!==16||!b.more)process.exit(1);const c=selectBankBatch(rows,{last_key:b.lastKey});if(c.batch.length!==4||c.batch[0].id!==17||c.batch[3].id!==20||c.more)process.exit(1);console.log('CURSOR_OK')"
+          rm lib/.automation-test.js
+      - name: Validate scheduler and hosting
+        run: |
+          set -euo pipefail
+          node -e "const v=JSON.parse(require('fs').readFileSync('vercel.json','utf8'));if(v.crons)process.exit(1);if(v.functions?.['api/automation.js']?.maxDuration!==60)process.exit(1)"
+          grep -q "cron: '2-59/5 \* \* \* \*'" .github/workflows/provedor-plus-automation.yml
+          grep -q 'id-token: write' .github/workflows/provedor-plus-automation.yml
+          grep -q 'SKIP_BANK=0' .github/workflows/provedor-plus-automation.yml
+          grep -q 'MORE_PENDING' .github/workflows/provedor-plus-automation.yml
+          grep -q 'MORE_ACCESS' .github/workflows/provedor-plus-automation.yml
+          grep -q 'provedor-plus-automation.yml@refs/heads/main' lib/github-actions-oidc.js
+          awk '/        run: \|/{flag=1;next} flag{sub(/^          /,""); print}' .github/workflows/provedor-plus-automation.yml > /tmp/scheduler.sh
+          bash -n /tmp/scheduler.sh
+      - name: Validate scope
+        run: |
+          set -euo pipefail
+          git diff --name-only origin/main...HEAD > /tmp/changed.txt
+          if grep -Eq '^packed/appgz-' /tmp/changed.txt; then cat /tmp/changed.txt; exit 1; fi
+          if grep -Eq '^packed/proxygz-' /tmp/changed.txt; then cat /tmp/changed.txt; exit 1; fi
+          if grep -Eq '^client-status-(enhancements|layout-cleanup|loader-cover)' /tmp/changed.txt; then cat /tmp/changed.txt; exit 1; fi
+          echo FINAL_CURRENT_AUDIT_OK

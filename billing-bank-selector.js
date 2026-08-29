@@ -207,22 +207,36 @@
     }
     return '';
   }
-  async function clientPreferredBank(clientId){
-    if(!Number(clientId))return '';
-    try{const clients=await api?.clients?.list?.();return String((clients||[]).find(c=>Number(c?.id)===Number(clientId))?.billing_bank_provider||'')}catch{return ''}
+  async function refreshBillingClient(clientId){
+    const id=Number(clientId)||0;if(!id)return null;
+    const clients=await api?.clients?.list?.();
+    const fresh=(Array.isArray(clients)?clients:[]).find(c=>Number(c?.id)===id)||null;
+    if(!fresh)throw new Error('Cliente não encontrado na nuvem antes de emitir a cobrança. Atualize o cadastro e tente novamente.');
+    return fresh;
+  }
+  function explainBankError(error){
+    const message=String(error?.message||error||'Falha na emissão bancária.');
+    if(normalize(message).includes('recebedor e cliente nao podem ser a mesma pessoa')){
+      return new Error('Efí: o CPF/CNPJ do cliente desta cobrança é o mesmo do titular da conta Efí. O Provedor Plus já atualizou o cadastro antes da emissão; use um cliente com CPF/CNPJ diferente do recebedor da conta Efí. Alterar apenas os dados da empresa, agência ou conta recebedora não muda o cliente enviado no carnê.');
+    }
+    return error instanceof Error?error:new Error(message);
   }
 
   const invoiceSave=api.invoices.save.bind(api.invoices);
   api.invoices.save=async data=>{
     let next={...(data||{})};
-    const bank=selectedBank()||await clientPreferredBank(next.client_id??next.clientId);if(bank&&!next.id)next.bank_provider=bank;
+    const freshClient=await refreshBillingClient(next.client_id??next.clientId);
+    const bank=selectedBank()||String(freshClient?.billing_bank_provider||'');if(bank&&!next.id)next.bank_provider=bank;
     const discountField=visibleDiscountField();if(discountField)next=applyDiscount(next);
-    const saved=await invoiceSave(next);resetDiscountField(discountField);return saved;
+    try{const saved=await invoiceSave(next);resetDiscountField(discountField);return saved}catch(error){throw explainBankError(error)}
   };
   if(typeof api.invoices.generateInstallments==='function'){
     const generate=api.invoices.generateInstallments.bind(api.invoices);
     api.invoices.generateInstallments=async data=>{
-      let next={...(data||{})},bank=selectedBank()||await clientPreferredBank(next.client_id??next.clientId);if(bank)next.bank_provider=bank;const discountField=visibleDiscountField();if(discountField)next=applyDiscount(next);const saved=await generate(next);resetDiscountField(discountField);return saved
+      let next={...(data||{})};
+      const freshClient=await refreshBillingClient(next.client_id??next.clientId),bank=selectedBank()||String(freshClient?.billing_bank_provider||'');if(bank)next.bank_provider=bank;
+      const discountField=visibleDiscountField();if(discountField)next=applyDiscount(next);
+      try{const saved=await generate(next);resetDiscountField(discountField);return saved}catch(error){throw explainBankError(error)}
     };
   }
 

@@ -22,9 +22,14 @@
     return text;
   }
 
+  function mainNav(){
+    return document.querySelector('aside.sidebar nav[aria-label="Menu principal"],aside.sidebar nav');
+  }
+
   function navButton(target){
-    const button=target?.closest?.('.sidebar nav button,nav button');
-    if(!button||button.hidden||button.disabled)return null;
+    const nav=mainNav();if(!nav)return null;
+    const button=target?.closest?.('button');
+    if(!button||!nav.contains(button)||button.hidden||button.disabled)return null;
     return {button,key:routeKey(button.textContent)};
   }
 
@@ -69,7 +74,7 @@
   }
 
   function activeRouteKey(){
-    const active=document.querySelector('.sidebar nav button.active,nav button.active');
+    const active=mainNav()?.querySelector('button.active');
     return active?routeKey(active.textContent):'';
   }
 

@@ -1,4 +1,4 @@
-name: Review Server Automation Bridge
+name: Review Server Automation Bridge Final
 
 on:
   push:

@@ -2,6 +2,11 @@
   "rewrites": [
     { "source": "/api/mikrotik-proxy", "destination": "/api/mikrotik-proxy-v2" }
   ],
+  "functions": {
+    "api/automation.js": {
+      "maxDuration": 60
+    }
+  },
   "git": {
     "deploymentEnabled": {
       "*": false,

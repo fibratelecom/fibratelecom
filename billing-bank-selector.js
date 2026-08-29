@@ -222,6 +222,14 @@
     return error instanceof Error?error:new Error(message);
   }
 
+  if(typeof api?.banks?.createEfiPixAutomatic==='function'){
+  const createEfiPixAutomatic=api.banks.createEfiPixAutomatic.bind(api.banks);
+  api.banks.createEfiPixAutomatic=async values=>{
+    await refreshBillingClient(values?.clientId);
+    try{return await createEfiPixAutomatic(values)}catch(error){throw explainBankError(error)}
+  };
+}
+
   const invoiceSave=api.invoices.save.bind(api.invoices);
   api.invoices.save=async data=>{
     let next={...(data||{})};

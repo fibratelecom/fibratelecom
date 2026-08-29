@@ -42,12 +42,13 @@ async function upsertSetting(req,key,value){
 }
 function sameValue(a,b){return JSON.stringify(a)===JSON.stringify(b)}
 function patchAcknowledged(row,patch){return Boolean(row&&patch&&typeof patch==='object'&&Object.entries(patch).every(([key,value])=>sameValue(row[key],value)))}
-function pruneAcknowledged(state,overlay){
-  const next=clone(overlay&&typeof overlay==='object'?overlay:{version:1,invoices:{},clients:{}}),invoices=Array.isArray(state?.invoices)?state.invoices:[],clients=Array.isArray(state?.clients)?state.clients:[];
+function ackIds(value){return new Set((Array.isArray(value)?value:[]).map(id=>String(Number(id)||'')).filter(id=>id&&id!=='0'))}
+function pruneAcknowledged(state,overlay,acknowledgedClients=[]){
+  const next=clone(overlay&&typeof overlay==='object'?overlay:{version:1,invoices:{},clients:{}}),invoices=Array.isArray(state?.invoices)?state.invoices:[],clients=Array.isArray(state?.clients)?state.clients:[],clientAcks=ackIds(acknowledgedClients);
   next.invoices=next.invoices&&typeof next.invoices==='object'?next.invoices:{};
   next.clients=next.clients&&typeof next.clients==='object'?next.clients:{};
   for(const [id,patch] of Object.entries(next.invoices)){const row=invoices.find(item=>String(item?.id)===String(id));if(patchAcknowledged(row,patch))delete next.invoices[id]}
-  for(const [id,patch] of Object.entries(next.clients)){const row=clients.find(item=>String(item?.id)===String(id));if(patchAcknowledged(row,patch))delete next.clients[id]}
+  for(const [id,patch] of Object.entries(next.clients)){const row=clients.find(item=>String(item?.id)===String(id));if(clientAcks.has(String(id))||patchAcknowledged(row,patch))delete next.clients[id]}
   return next;
 }
 
@@ -57,10 +58,10 @@ async function getState(req){
   return {state:applyAutomationOverlay(row.value||{},overlayRow?.value||{}),updated_at:row.updated_at||null};
 }
 
-async function saveState(req,state){
+async function saveState(req,state,automationAckClients=[]){
   if(!state||typeof state!=='object'||Array.isArray(state))throw Object.assign(new Error('Estado do gerenciador inválido.'),{statusCode:400});
   const cleanIncoming=sanitize(state),overlayRow=await settingRow(req,OVERLAY_KEY),currentOverlay=overlayRow?.value&&typeof overlayRow.value==='object'?overlayRow.value:{};
-  const nextOverlay=pruneAcknowledged(cleanIncoming,currentOverlay),clean=applyAutomationOverlay(cleanIncoming,nextOverlay);
+  const nextOverlay=pruneAcknowledged(cleanIncoming,currentOverlay,automationAckClients),clean=applyAutomationOverlay(cleanIncoming,nextOverlay);
   const payload={key:STATE_KEY,value:clean,updated_at:new Date().toISOString()};
   const patched=await db(req,`/pp_settings?key=eq.${encodeURIComponent(STATE_KEY)}`,{method:'PATCH',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(payload)});
   let row=Array.isArray(patched)?patched[0]:null;
@@ -80,7 +81,7 @@ module.exports=async function handler(req,res){
     const action=text(req.body?.action),data=req.body?.data||{};
     let result;
     if(action==='state.get')result=await getState(req);
-    else if(action==='state.save')result=await saveState(req,data.state);
+    else if(action==='state.save')result=await saveState(req,data.state,data.automation_ack_clients);
     else if(action==='health'){const current=await getState(req);result={online:true,hasState:Boolean(current.state),updated_at:current.updated_at}}
     else throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});
     return res.status(200).json({ok:true,data:result});

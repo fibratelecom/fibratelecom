@@ -1,0 +1,36 @@
+name: Provedor Plus Automation
+
+on:
+  schedule:
+    - cron: '2-59/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: provedor-plus-automation
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Executar automação financeira e PPPoE
+        shell: bash
+        run: |
+          set -euo pipefail
+          OIDC_RESPONSE="$(curl --fail --silent --show-error \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=provedor-plus-automation")"
+          OIDC_TOKEN="$(python -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<< "${OIDC_RESPONSE}")"
+          test -n "${OIDC_TOKEN}"
+          curl --fail --silent --show-error \
+            --max-time 220 \
+            --retry 2 \
+            --retry-delay 5 \
+            --retry-connrefused \
+            -H "Authorization: Bearer ${OIDC_TOKEN}" \
+            https://fibratelecom.vercel.app/api/automation

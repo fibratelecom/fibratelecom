@@ -2,6 +2,9 @@
   "rewrites": [
     { "source": "/api/mikrotik-proxy", "destination": "/api/mikrotik-proxy-v2" }
   ],
+  "crons": [
+    { "path": "/api/automation", "schedule": "*/5 * * * *" }
+  ],
   "git": {
     "deploymentEnabled": {
       "*": false,

@@ -18,67 +18,8 @@ jobs:
       - name: Refresh client before bank emission
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          p=Path('billing-bank-selector.js')
-          s=p.read_text()
-          old="""  async function clientPreferredBank(clientId){
-    if(!Number(clientId))return '';
-    try{const clients=await api?.clients?.list?.();return String((clients||[]).find(c=>Number(c?.id)===Number(clientId))?.billing_bank_provider||'')}catch{return ''}
-  }
-
-  const invoiceSave=api.invoices.save.bind(api.invoices);
-  api.invoices.save=async data=>{
-    let next={...(data||{})};
-    const bank=selectedBank()||await clientPreferredBank(next.client_id??next.clientId);if(bank&&!next.id)next.bank_provider=bank;
-    const discountField=visibleDiscountField();if(discountField)next=applyDiscount(next);
-    const saved=await invoiceSave(next);resetDiscountField(discountField);return saved;
-  };
-  if(typeof api.invoices.generateInstallments==='function'){
-    const generate=api.invoices.generateInstallments.bind(api.invoices);
-    api.invoices.generateInstallments=async data=>{
-      let next={...(data||{})},bank=selectedBank()||await clientPreferredBank(next.client_id??next.clientId);if(bank)next.bank_provider=bank;const discountField=visibleDiscountField();if(discountField)next=applyDiscount(next);const saved=await generate(next);resetDiscountField(discountField);return saved
-    };
-  }
-"""
-          new="""  async function refreshBillingClient(clientId){
-    const id=Number(clientId)||0;if(!id)return null;
-    const clients=await api?.clients?.list?.();
-    const fresh=(Array.isArray(clients)?clients:[]).find(c=>Number(c?.id)===id)||null;
-    if(!fresh)throw new Error('Cliente não encontrado na nuvem antes de emitir a cobrança. Atualize o cadastro e tente novamente.');
-    return fresh;
-  }
-  function explainBankError(error){
-    const message=String(error?.message||error||'Falha na emissão bancária.');
-    if(normalize(message).includes('recebedor e cliente nao podem ser a mesma pessoa')){
-      return new Error('Efí: o CPF/CNPJ do cliente desta cobrança é o mesmo do titular da conta Efí. O Provedor Plus já atualizou o cadastro antes da emissão; use um cliente com CPF/CNPJ diferente do recebedor da conta Efí. Alterar apenas os dados da empresa, agência ou conta recebedora não muda o cliente enviado no carnê.');
-    }
-    return error instanceof Error?error:new Error(message);
-  }
-
-  const invoiceSave=api.invoices.save.bind(api.invoices);
-  api.invoices.save=async data=>{
-    let next={...(data||{})};
-    const freshClient=await refreshBillingClient(next.client_id??next.clientId);
-    const bank=selectedBank()||String(freshClient?.billing_bank_provider||'');if(bank&&!next.id)next.bank_provider=bank;
-    const discountField=visibleDiscountField();if(discountField)next=applyDiscount(next);
-    try{const saved=await invoiceSave(next);resetDiscountField(discountField);return saved}catch(error){throw explainBankError(error)}
-  };
-  if(typeof api.invoices.generateInstallments==='function'){
-    const generate=api.invoices.generateInstallments.bind(api.invoices);
-    api.invoices.generateInstallments=async data=>{
-      let next={...(data||{})};
-      const freshClient=await refreshBillingClient(next.client_id??next.clientId),bank=selectedBank()||String(freshClient?.billing_bank_provider||'');if(bank)next.bank_provider=bank;
-      const discountField=visibleDiscountField();if(discountField)next=applyDiscount(next);
-      try{const saved=await generate(next);resetDiscountField(discountField);return saved}catch(error){throw explainBankError(error)}
-    };
-  }
-"""
-          if 'async function refreshBillingClient(clientId)' not in s:
-              if old not in s: raise SystemExit('Target billing wrapper block not found')
-              s=s.replace(old,new,1)
-              p.write_text(s)
-          PY
+          echo 'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCnA9UGF0aCgiYmlsbGluZy1iYW5rLXNlbGVjdG9yLmpzIikKcz1wLnJlYWRfdGV4dCgpCm9sZD0iIiIgIGFzeW5jIGZ1bmN0aW9uIGNsaWVudFByZWZlcnJlZEJhbmsgY2xpZW50SWQpewogICAgaWYoIU51bWJlcihjbGllbnRJZCkpcmV0dXJuICcnOwogICAgdHJ5e2NvbnN0IGNsaWVudHM9YXdhaXQgYXBpPy5jbGllbnRzPy5saXN0Py4oKTtyZXR1cm4gU3RyaW5nKChjbGllbnRzfHxbXSkuZmluZChjPT5OdW1iZXIoYz8uaWQpPT09TnVtYmVyKGNsaWVudElkKSk/LmJpbGxpbmdfYmFua19wcm92aWRlcnx8JycpfWNhdGNoe3JldHVybiAnJ30KICB9CgogIGNvbnN0IGludm9pY2VTYXZlPWFwaS5pbnZvaWNlcy5zYXZlLmJpbmQoYXBpLmludm9pY2VzKTsKICBhcGkuaW52b2ljZXMuc2F2ZT1hc3luYyBkYXRhPT57CiAgICBsZXQgbmV4dD17Li4uKGRhdGF8fHt9KX07CiAgICBjb25zdCBiYW5rPXNlbGVjdGVkQmFuaygpfHxhd2FpdCBjbGllbnRQcmVmZXJyZWRCYW5rKG5leHQuY2xpZW50X2lkPz9uZXh0LmNsaWVudElkKTtpZihiYW5rJiYhbmV4dC5pZCluZXh0LmJhbmtfcHJvdmlkZXI9YmFuazsKICAgIGNvbnN0IGRpc2NvdW50RmllbGQ9dmlzaWJsZURpc2NvdW50RmllbGQoKTtpZihkaXNjb3VudEZpZWxkKW5leHQ9YXBwbHlEaXNjb3VudChuZXh0KTsKICAgIGNvbnN0IHNhdmVkPWF3YWl0IGludm9pY2VTYXZlKG5leHQpO3Jlc2V0RGlzY291bnRGaWVsZChkaXNjb3VudEZpZWxkKTtyZXR1cm4gc2F2ZWQ7CiAgfTsKICBpZih0eXBlb2YgYXBpLmludm9pY2VzLmdlbmVyYXRlSW5zdGFsbG1lbnRzPT09J2Z1bmN0aW9uJyl7CiAgICBjb25zdCBnZW5lcmF0ZT1hcGkuaW52b2ljZXMuZ2VuZXJhdGVJbnN0YWxsbWVudHMuYmluZChhcGkuaW52b2ljZXMpOwogICAgYXBpLmludm9pY2VzLmdlbmVyYXRlSW5zdGFsbG1lbnRzPWFzeW5jIGRhdGE9PnsKICAgICAgbGV0IG5leHQ9ey4uLihkYXRhfHx7fSl9LGJhbms9c2VsZWN0ZWRCYW5rKCl8fGF3YWl0IGNsaWVudFByZWZlcnJlZEJhbmsobmV4dC5jbGllbnRfaWQ/P25leHQuY2xpZW50SWQpO2lmKGJhbmspbmV4dC5iYW5rX3Byb3ZpZGVyPWJhbms7Y29uc3QgZGlzY291bnRGaWVsZD12aXNpYmxlRGlzY291bnRGaWVsZCgpO2lmKGRpc2NvdW50RmllbGQpbmV4dD1hcHBseURpc2NvdW50KG5leHQpO2NvbnN0IHNhdmVkPWF3YWl0IGdlbmVyYXRlKG5leHQpO3Jlc2V0RGlzY291bnRGaWVsZChkaXNjb3VudEZpZWxkKTtyZXR1cm4gc2F2ZWQKICAgIH07CiAgfQoiIiIKbmV3PSIiIiAgYXN5bmMgZnVuY3Rpb24gcmVmcmVzaEJpbGxpbmdDbGllbnQoY2xpZW50SWQpewogICAgY29uc3QgaWQ9TnVtYmVyKGNsaWVudElkKXx8MDtpZighaWQpcmV0dXJuIG51bGw7CiAgICBjb25zdCBjbGllbnRzPWF3YWl0IGFwaT8uY2xpZW50cz8ubGlzdD8uKCk7CiAgICBjb25zdCBmcmVzaD0oQXJyYXkuaXNBcnJheShjbGllbnRzKT9jbGllbnRzOltdKS5maW5kKGM9Pk51bWJlcihjPy5pZCk9PT1pZCl8fG51bGw7CiAgICBpZighZnJlc2gpdGhyb3cgbmV3IEVycm9yKCdDbGllbnRlIG7Do28gZW5jb250cmFkbyBuYSBudXZlbSBhbnRlcyBkZSBlbWl0aXIgYSBjb2JyYW7Dp2EuIEF0dWFsaXplIG8gY2FkYXN0cm8gZSB0ZW50ZSBub3ZhbWVudGUuJyk7CiAgICByZXR1cm4gZnJlc2g7CiAgfQogIGZ1bmN0aW9uIGV4cGxhaW5CYW5rRXJyb3IoZXJyb3IpewogICAgY29uc3QgbWVzc2FnZT1TdHJpbmcoZXJyb3I/Lm1lc3NhZ2V8fGVycm9yfHwnRmFsaGEgbmEgZW1pc3PDo28gYmFuY8OhcmlhLicpOwogICAgaWYobm9ybWFsaXplKG1lc3NhZ2UpLmluY2x1ZGVzKCdyZWNlYmVkb3IgZSBjbGllbnRlIG5hbyBwb2RlbSBzZXIgYSBtZXNtYSBwZXNzb2EnKSl7CiAgICAgIHJldHVybiBuZXcgRXJyb3IoJ0Vmw606IG8gQ1BGL0NOUEogZG8gY2xpZW50ZSBkZXN0YSBjb2JyYW7Dp2Eg w6kgbyBtZXNtbyBkbyB0aXR1bGFyIGRhIGNvbnRhIEVmw60uIE8gUHJvdmVkb3IgUGx1cyBqw6EgYXR1YWxpem91IG8gY2FkYXN0cm8gYW50ZXMgZGEgZW1pc3PDo287IHVzZSB1bSBjbGllbnRlIGNvbSBDUEYvQ05QSiBkaWZlcmVudGUgZG8gcmVjZWJlZG9yIGRhIGNvbnRhIEVmw60uIEFsdGVyYXIgYXBlbmFzIG9zIGRhZG9zIGRhIGVtcHJlc2EsIGFnw6puY2lhIG91IGNvbnRhIHJlY2ViZWRvcmEgbmFvIG11ZGEgbyBjbGllbnRlIGVudmlhZG8gbm8gY2FybsOqLicpOwogICAgfQogICAgcmV0dXJuIGVycm9yIGluc3RhbmNlb2YgRXJyb3I/ZXJyb3I6bmV3IEVycm9yKG1lc3NhZ2UpOwogIH0KCiAgY29uc3QgaW52b2ljZVNhdmU9YXBpLmludm9pY2VzLnNhdmUuYmluZChhcGkuaW52b2ljZXMpOwogIGFwaS5pbnZvaWNlcy5zYXZlPWFzeW5jIGRhdGE9PnsKICAgIGxldCBuZXh0PXsuLi4oZGF0YXx8e30pfTsKICAgIGNvbnN0IGZyZXNoQ2xpZW50PWF3YWl0IHJlZnJlc2hCaWxsaW5nQ2xpZW50KG5leHQuY2xpZW50X2lkPz9uZXh0LmNsaWVudElkKTsKICAgIGNvbnN0IGJhbms9c2VsZWN0ZWRCYW5rKCl8fFN0cmluZyhmcmVzaENsaWVudD8uYmlsbGluZ19iYW5rX3Byb3ZpZGVyfHwnJyk7aWYoYmFuayYmIW5leHQuaWQpbmV4dC5iYW5rX3Byb3ZpZGVyPWJhbms7CiAgICBjb25zdCBkaXNjb3VudEZpZWxkPXZpc2libGVEaXNjb3VudEZpZWxkKCk7aWYoZGlzY291bnRGaWVsZCluZXh0PWFwcGx5RGlzY291bnQobmV4dCk7CiAgICB0cnl7Y29uc3Qgc2F2ZWQ9YXdhaXQgaW52b2ljZVNhdmUobmV4dCk7cmVzZXREaXNjb3VudEZpZWxkKGRpc2NvdW50RmllbGQpO3JldHVybiBzYXZlZH1jYXRjaChlcnJvcil7dGhyb3cgZXhwbGFpbkJhbmtFcnJvcihlcnJvcil9CiAgfTsKICBpZih0eXBlb2YgYXBpLmludm9pY2VzLmdlbmVyYXRlSW5zdGFsbG1lbnRzPT09J2Z1bmN0aW9uJyl7CiAgICBjb25zdCBnZW5lcmF0ZT1hcGkuaW52b2ljZXMuZ2VuZXJhdGVJbnN0YWxsbWVudHMuYmluZChhcGkuaW52b2ljZXMpOwogICAgYXBpLmludm9pY2VzLmdlbmVyYXRlSW5zdGFsbG1lbnRzPWFzeW5jIGRhdGE9PnsKICAgICAgbGV0IG5leHQ9ey4uLihkYXRhfHx7fSl9OwogICAgICBjb25zdCBmcmVzaENsaWVudD1hd2FpdCByZWZyZXNoQmlsbGluZ0NsaWVudChuZXh0LmNsaWVudF9pZD8/bmV4dC5jbGllbnRJZCksYmFuaz1zZWxlY3RlZEJhbms oKXx8U3RyaW5nKGZyZXNoQ2xpZW50Py5iaWxsaW5nX2JhbmtfcHJvdmlkZXJ8fCcnKTtpZihiYW5rKW5leHQuYmFua19wcm92aWRlcj1iYW5rOwogICAgICBjb25zdCBkaXNjb3VudEZpZWxkPXZpc2libGVEaXNjb3VudEZpZWxkKCk7aWYoZGlzY291bnRGaWVsZCluZXh0PWFwcGx5RGlzY291bnQobmV4dCk7CiAgICAgIHRyeXtjb25zdCBzYXZlZD1hd2FpdCBnZW5lcmF0ZShuZXh0KTtyZXNldERpc2NvdW50RmllbGQoZGlzY291bnRGaWVsZCk7cmV0dXJuIHNhdmVkfWNhdGNoKGVycm9yKXt0aHJvdyBleHBsYWluQmFua0Vycm9yKGVycm9yKX0KICAgIH07CiAgfQoiIiIKaWYgImFzeW5jIGZ1bmN0aW9uIHJlZnJlc2hCaWxsaW5nQ2xpZW50KGNsaWVudElkKSIgbm90IGluIHM6CiAgICBpZiBvbGQgbm90IGluIHM6CiAgICAgICAgcmFpc2UgU3lzdGVtRXhpdCgiVGFyZ2V0IGJpbGxpbmcgd3JhcHBlciBibG9jayBub3QgZm91bmQiKQogICAgcC53cml0ZV90ZXh0KHMucmVwbGFjZShvbGQsbmV3LDEpKQo=' | base64 -d > /tmp/patch.py
+          python /tmp/patch.py
           node --check billing-bank-selector.js
           grep -Fq "async function refreshBillingClient(clientId)" billing-bank-selector.js
           grep -Fq "recebedor e cliente nao podem ser a mesma pessoa" billing-bank-selector.js

@@ -1,0 +1,64 @@
+name: Fatura Final Safety
+on:
+  push:
+    branches: [fix/global-navigation-duplication]
+    paths: [.github/workflows/fatura-final-safety.yml]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/global-navigation-duplication
+          fetch-depth: 0
+      - name: Ajustar comportamento final sem criar fluxo paralelo
+        run: |
+          set -euo pipefail
+          cat packed/bridgegz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/bridge.js
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('/tmp/bridge.js');s=p.read_text()
+          old="const cashbackCents=Math.max(0,Number(x.cashback_discount_cents||x.punctuality_discount_cents)||0),totalCents=Math.max(0,Number(x.amount_cents)||0),baseCents=totalCents+cashbackCents;"
+          new="const cashbackCents=Math.max(0,Number(x.cashback_discount_cents||x.punctuality_discount_cents)||0),totalCents=Math.max(0,Number(x.amount_cents)||0),baseCents=totalCents+cashbackCents,cashbackEnabled=cashbackCents>0||['true','1','sim','on'].includes(String(settings.cashback_enabled||'').trim().toLowerCase());"
+          assert s.count(old)==1
+          s=s.replace(old,new,1)
+          old='<div class="cashback-banner">Pague via Pix até o vencimento e ganhe <em>cashback</em> na próxima fatura.</div>'
+          new='${cashbackEnabled?`<div class="cashback-banner">Pague via Pix até o vencimento e ganhe <em>cashback</em> na próxima fatura.</div>`:``}'
+          assert s.count(old)==1
+          s=s.replace(old,new,1)
+          old='<div><h3>Pague com Pix e ganhe cashback</h3>${pixBox}</div>'
+          new='<div><h3>${cashbackEnabled?`Pague com Pix e ganhe cashback`:`Pague com Pix`}</h3>${pixBox}</div>'
+          assert s.count(old)==1
+          s=s.replace(old,new,1)
+          old="  async function downloadInvoiceWeb(i){const x=byId(load().invoices,i);if(!x)throw Error('Boleto não encontrado.');const enriched=inv(x),name=String(enriched.client_contract_number||i).replace(/[^a-zA-Z0-9_-]+/g,'-');download(`fatura-${name}.html`,invoiceHtml(x),'text/html;charset=utf-8');return {downloaded:true,remote:Boolean(x.bank_pdf_url||x.bank_ticket_url||x.bank_url)}}"
+          new="  async function downloadInvoiceWeb(i){const x=byId(load().invoices,i);if(!x)throw Error('Boleto não encontrado.');const url=String(x.bank_pdf_url||x.bank_ticket_url||x.bank_url||'');if(url){const a=document.createElement('a');a.href=url;a.target='_blank';a.rel='noopener';a.click();return {downloaded:true,remote:true}}const enriched=inv(x),name=String(enriched.client_contract_number||i).replace(/[^a-zA-Z0-9_-]+/g,'-');download(`fatura-${name}.html`,invoiceHtml(x),'text/html;charset=utf-8');return {downloaded:true,remote:false}}"
+          assert s.count(old)==1
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          PY
+          node --check /tmp/bridge.js
+          grep -q 'cashbackEnabled' /tmp/bridge.js
+          grep -q "if(url){const a=document.createElement('a')" /tmp/bridge.js
+          python - <<'PY'
+          from pathlib import Path
+          import gzip,base64
+          s=Path('/tmp/bridge.js').read_text()
+          enc=base64.b64encode(gzip.compress(s.encode(),compresslevel=9,mtime=0)).decode()
+          chunks=sorted(Path('packed').glob('bridgegz-*.txt'));assert len(chunks)==4
+          size=(len(enc)+3)//4
+          parts=[enc[i*size:(i+1)*size] for i in range(4)];assert ''.join(parts)==enc
+          for p,d in zip(chunks,parts):p.write_text(d+'\n')
+          PY
+      - name: Validar escopo e commit
+        run: |
+          set -euo pipefail
+          git diff --name-only > /tmp/changed
+          ! grep -Eq '^packed/appgz-|^packed/proxygz-' /tmp/changed
+          test "$(grep -c '^packed/bridgegz-' /tmp/changed)" -eq 4
+          git config user.name fibratelecom
+          git config user.email lanconta2015@gmail.com
+          git add packed/bridgegz-*.txt
+          git commit -m 'Preserva download bancário e condiciona cashback na fatura'
+          git push origin HEAD:fix/global-navigation-duplication

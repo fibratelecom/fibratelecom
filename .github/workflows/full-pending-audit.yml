@@ -1,0 +1,134 @@
+name: Full Pending Audit
+
+on:
+  push:
+    branches:
+      - fix/global-navigation-duplication
+    paths:
+      - .github/workflows/full-pending-audit.yml
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/global-navigation-duplication
+          fetch-depth: 0
+
+      - name: Rebuild packed sources
+        run: |
+          set -euo pipefail
+          cat packed/appgz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/app.js
+          cat packed/bridgegz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/bridge.js
+          test -s /tmp/app.js
+          test -s /tmp/bridge.js
+
+      - name: Syntax and package integrity
+        run: |
+          set -euo pipefail
+          for f in \
+            api/automation.js api/cloud-state.js \
+            bank-enabled-persistence.js billing-action-ui.js billing-bank-selector.js \
+            bootstrap.js dashboard-transition-guard.js \
+            lib/automation-handler.js lib/automation-overlay.js lib/cloud-data-handler.js lib/github-actions-oidc.js; do
+            node --check "$f"
+          done
+          node --check /tmp/app.js
+          node --check /tmp/bridge.js
+          node -e "JSON.parse(require('fs').readFileSync('vercel.json','utf8'))"
+
+      - name: Navigation duplication guard audit
+        run: |
+          set -euo pipefail
+          grep -q "__ProvedorPlusNavigationTransitionGuardInstalled" dashboard-transition-guard.js
+          grep -q "clients:\['clientes','cliente'\]" dashboard-transition-guard.js
+          grep -q "finance:\['financeiro','finance'\]" dashboard-transition-guard.js
+          grep -q "integration:\['integracao','integra'\]" dashboard-transition-guard.js
+          grep -q "tickets:\['chamados','chamado'\]" dashboard-transition-guard.js
+          grep -q "plans:\['planos','plano'\]" dashboard-transition-guard.js
+          grep -q "stock:\['estoque'\]" dashboard-transition-guard.js
+          grep -q "reports:\['relatorios','relatorio'\]" dashboard-transition-guard.js
+          grep -q "staff:\['funcionarios','funcionario','usuarios','usuario'\]" dashboard-transition-guard.js
+          grep -q "specialReady" dashboard-transition-guard.js
+          grep -q "pp-ticket-layer" dashboard-transition-guard.js
+          grep -q "pp-staff-layer" dashboard-transition-guard.js
+          grep -q "pp-dashboard-v2" dashboard-transition-guard.js
+          if grep -q "characterData" dashboard-transition-guard.js; then echo 'characterData observer reintroduced'; exit 1; fi
+          grep -q "setTimeout(()=>finishTransition(),6000)" dashboard-transition-guard.js
+          test ! -e client-status-stable-view.css
+          test ! -e client-status-transition-fix.js
+          for term in Dashboard Clientes Financeiro Chamados Planos Estoque; do grep -qi "$term" /tmp/app.js; done
+          grep -Eqi "Integração|Integracao" /tmp/app.js
+          grep -Eqi "Relatórios|Relatorios" /tmp/app.js
+
+      - name: Startup F5 audit
+        run: |
+          set -euo pipefail
+          grep -q 'id="pp-startup-shell"' index.html
+          grep -q 'Carregando seu painel' index.html
+          grep -q "finishStartup" bootstrap.js
+          grep -q "root.style.visibility='hidden'" bootstrap.js
+          grep -q "root.style.visibility=''" bootstrap.js
+          python - <<'PY'
+          from pathlib import Path
+          b=Path('bootstrap.js').read_text()
+          assert b.index("dashboard-transition-guard.js") < b.index("const appB64=")
+          assert b.index("bank-enabled-persistence.js") > b.index("await import(appUrl)")
+          assert b.index("billing-bank-selector.js") > b.index("await import(appUrl)")
+          assert b.index("billing-action-ui.js") > b.index("await import(appUrl)")
+          assert b.index("root.style.visibility=''" ) < b.index('finishStartup()')
+          PY
+
+      - name: Bank persistence and billing audit
+        run: |
+          set -euo pipefail
+          grep -q "input.name!=='enabled'" bank-enabled-persistence.js
+          grep -q "form.requestSubmit" bank-enabled-persistence.js
+          grep -q "readyBanks" billing-bank-selector.js
+          grep -q "efi.enabled&&efi.clientIdConfigured&&efi.clientSecretConfigured" billing-bank-selector.js
+          grep -q "mp.enabled&&mp.accessTokenConfigured" billing-bank-selector.js
+          grep -q "api?.clients?.list" billing-bank-selector.js
+          grep -q "pp-bill-action-button" billing-action-ui.js
+          grep -q "kind==='pix_due'||kind==='pix_auto'||kind==='carne'" billing-action-ui.js
+          grep -q "setProvider(select,'efi')" billing-action-ui.js
+          grep -q "automation.bank.save" /tmp/bridge.js
+          grep -q "ProvedorPlusSyncAutomationBankVault" /tmp/bridge.js
+          grep -q "saveEfiWeb" /tmp/bridge.js
+          grep -q "saveMpWeb" /tmp/bridge.js
+          if grep -q "slice(0,100)" /tmp/bridge.js; then echo '100 invoice limit still present'; exit 1; fi
+
+      - name: Automation 24h and overwrite protection audit
+        run: |
+          set -euo pipefail
+          if grep -q '"crons"' vercel.json; then echo 'Vercel Hobby incompatible cron found'; exit 1; fi
+          grep -q "cron: '2-59/5 \* \* \* \*'" .github/workflows/provedor-plus-automation.yml
+          grep -q "id-token: write" .github/workflows/provedor-plus-automation.yml
+          grep -q "audience=provedor-plus-automation" .github/workflows/provedor-plus-automation.yml
+          grep -q "refs/heads/main" lib/github-actions-oidc.js
+          grep -q "provedor-plus-automation.yml@refs/heads/main" lib/github-actions-oidc.js
+          grep -q "AUTO_BLOCK_DAYS=7" lib/automation-handler.js
+          grep -q "client.block" lib/automation-handler.js
+          grep -q "client.unblock" lib/automation-handler.js
+          grep -q "paidClientIds" lib/automation-handler.js
+          grep -q "applyAutomationOverlay" api/cloud-state.js
+          grep -q "pruneAcknowledged" api/cloud-state.js
+          node - <<'NODE'
+          const {applyAutomationOverlay}=require('./lib/automation-overlay');
+          const state={invoices:[{id:1,status:'Pendente'}],clients:[{id:7,status:'Ativo'}]};
+          const overlay={invoices:{'1':{status:'Pago'}},clients:{'7':{status:'Bloqueado'}}};
+          const result=applyAutomationOverlay(state,overlay);
+          if(result.invoices[0].status!=='Pago'||result.clients[0].status!=='Bloqueado')process.exit(1);
+          NODE
+
+      - name: Scope regression audit
+        run: |
+          set -euo pipefail
+          git diff --name-only origin/main...HEAD > /tmp/changed.txt
+          if grep -Eq '^packed/appgz-' /tmp/changed.txt; then echo 'App package changed unexpectedly'; cat /tmp/changed.txt; exit 1; fi
+          if grep -Eq '^packed/proxygz-' /tmp/changed.txt; then echo 'Bank proxy package changed unexpectedly'; cat /tmp/changed.txt; exit 1; fi
+          if grep -Eq '^client-status-(enhancements|layout-cleanup|loader-cover)' /tmp/changed.txt; then echo 'Client Status changed outside scope'; cat /tmp/changed.txt; exit 1; fi
+          echo 'AUDIT_OK'

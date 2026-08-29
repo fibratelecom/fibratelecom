@@ -32,17 +32,21 @@ jobs:
             'SELECTOR':Path('billing-bank-selector.js').read_text(),
           }
           terms={
-            'BRIDGE':['saveInvoiceWeb','installmentsWeb','syncInvoicesWeb','markPaidWeb','cancelInvoiceWeb',"bankCall({action:'issue'","bankCall({action:'issue-carnet'","bankCall({action:'sync'","bankCall({action:'cancel'"],
-            'APP':['generateInstallments','Pix com vencimento','Pix Automático','Boleto avulso','Gerar carnê','invoices.save'],
-            'PROXY':['issueEfi','issueEfiCarnet','issueMp','syncEfi','syncMp','cancelEfi','cancelMp','pix'],
+            'BRIDGE':['saveInvoiceWeb','installmentsWeb','syncInvoicesWeb','markPaidWeb','deleteInvoiceWeb','deleteClientInvoicesWeb','pixAutomatic','pixAuto','recurrence','recorrencia','bankCall'],
+            'APP':['generateInstallments','Pix com vencimento','Pix Automático','Boleto avulso','Gerar carnê','invoices.save','pixAutomatic','recorrência','recorrencia'],
+            'PROXY':['issueEfi','issueEfiCarnet','issueEfiPixDue','issueEfiPixAuto','issueMp','syncInvoice','cancelInvoice','pixAuto','recurrence','recorrencia'],
             'SELECTOR':['refreshBillingClient','api.invoices.save=async','api.invoices.generateInstallments=async','explainBankError']
           }
           for label,text in files.items():
             print('\n###',label)
             for term in terms[label]:
-              idx=text.find(term)
-              print('\nTERM',term,'INDEX',idx)
-              if idx>=0: print(text[max(0,idx-900):min(len(text),idx+2600)])
+              start=0;hits=0
+              while True:
+                idx=text.find(term,start)
+                if idx<0 or hits>=6: break
+                print('\nTERM',term,'INDEX',idx)
+                print(text[max(0,idx-1000):min(len(text),idx+3200)])
+                hits+=1;start=idx+len(term)
           PY
           grep -Fq "const freshClient=await refreshBillingClient" billing-bank-selector.js
           grep -Fq "api.invoices.save=async" billing-bank-selector.js

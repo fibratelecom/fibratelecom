@@ -1,0 +1,49 @@
+name: Audit All Bank Flows
+
+on:
+  push:
+    branches:
+      - fix/global-navigation-duplication
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Audit every billing flow
+        run: |
+          set -euo pipefail
+          cat packed/bridgegz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/bridge.js
+          cat packed/appgz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/app.js
+          cat packed/proxygz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/proxy.js
+          node --check /tmp/bridge.js
+          node --check /tmp/app.js
+          node --check /tmp/proxy.js
+          node --check billing-bank-selector.js
+          python - <<'PY'
+          from pathlib import Path
+          files={
+            'BRIDGE':Path('/tmp/bridge.js').read_text(),
+            'APP':Path('/tmp/app.js').read_text(),
+            'PROXY':Path('/tmp/proxy.js').read_text(),
+            'SELECTOR':Path('billing-bank-selector.js').read_text(),
+          }
+          terms={
+            'BRIDGE':['saveInvoiceWeb','installmentsWeb','syncInvoicesWeb','markPaidWeb','cancelInvoiceWeb',"bankCall({action:'issue'","bankCall({action:'issue-carnet'","bankCall({action:'sync'","bankCall({action:'cancel'"],
+            'APP':['generateInstallments','Pix com vencimento','Pix Automático','Boleto avulso','Gerar carnê','invoices.save'],
+            'PROXY':['issueEfi','issueEfiCarnet','issueMp','syncEfi','syncMp','cancelEfi','cancelMp','pix'],
+            'SELECTOR':['refreshBillingClient','api.invoices.save=async','api.invoices.generateInstallments=async','explainBankError']
+          }
+          for label,text in files.items():
+            print('\n###',label)
+            for term in terms[label]:
+              idx=text.find(term)
+              print('\nTERM',term,'INDEX',idx)
+              if idx>=0: print(text[max(0,idx-900):min(len(text),idx+2600)])
+          PY
+          grep -Fq "const freshClient=await refreshBillingClient" billing-bank-selector.js
+          grep -Fq "api.invoices.save=async" billing-bank-selector.js
+          grep -Fq "api.invoices.generateInstallments=async" billing-bank-selector.js

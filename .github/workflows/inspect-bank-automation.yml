@@ -1,0 +1,43 @@
+name: Inspect Bank Automation
+
+on:
+  push:
+    branches:
+      - fix/global-navigation-duplication
+    paths:
+      - .github/workflows/inspect-bank-automation.yml
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/global-navigation-duplication
+      - name: Extract bridge functions
+        run: |
+          set -euo pipefail
+          cat packed/bridgegz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/bridge.js
+          node --check /tmp/bridge.js
+          python - <<'PY'
+          from pathlib import Path
+          text=Path('/tmp/bridge.js').read_text(errors='replace')
+          terms=['async function secureSet','async function secureGet','async function bankSecrets','async function saveEfiWeb','async function saveMpWeb','async function bankCall','function bankGet']
+          out=[]
+          for term in terms:
+              idx=text.find(term)
+              out.append('\n===== '+term+' =====\n')
+              if idx<0:
+                  out.append('NOT FOUND\n')
+              else:
+                  out.append(text[max(0,idx-400):min(len(text),idx+5000)]+'\n')
+          Path('.automation-inspect.txt').write_text(''.join(out))
+          PY
+          git config user.name fibratelecom
+          git config user.email lanconta2015@gmail.com
+          git add .automation-inspect.txt
+          git commit -m "Registra inspeção temporária da automação bancária"
+          git push origin HEAD:fix/global-navigation-duplication

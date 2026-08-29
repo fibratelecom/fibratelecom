@@ -1,4 +1,4 @@
-name: Inspect Bank Automation
+name: Apply Server Automation Bridge
 
 on:
   push:
@@ -11,33 +11,130 @@ permissions:
   contents: write
 
 jobs:
-  inspect:
+  apply:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: fix/global-navigation-duplication
-      - name: Extract bridge functions
+          fetch-depth: 0
+      - name: Apply bridge and server automation integration
         run: |
           set -euo pipefail
-          cat packed/bridgegz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/bridge.js
-          node --check /tmp/bridge.js
           python - <<'PY'
           from pathlib import Path
-          text=Path('/tmp/bridge.js').read_text(errors='replace')
-          terms=['async function secureSet','async function secureGet','async function bankSecrets','async function saveEfiWeb','async function saveMpWeb','async function bankCall','function bankGet']
-          out=[]
-          for term in terms:
-              idx=text.find(term)
-              out.append('\n===== '+term+' =====\n')
-              if idx<0:
-                  out.append('NOT FOUND\n')
-              else:
-                  out.append(text[max(0,idx-400):min(len(text),idx+5000)]+'\n')
-          Path('.automation-inspect.txt').write_text(''.join(out))
+          import base64,gzip,re
+
+          # Keep the automation handler lightweight on state reads.
+          p=Path('lib/automation-handler.js')
+          text=p.read_text()
+          old="const mikrotikHandler=require('./mikrotik-proxy');\n\nconst DATA_API="
+          new="const mikrotikHandler=require('./mikrotik-proxy');\nconst {STATE_KEY,OVERLAY_KEY,applyAutomationOverlay}=require('./automation-overlay');\n\nconst DATA_API="
+          assert old in text
+          text=text.replace(old,new,1)
+          text=text.replace("const STATE_KEY='web_state_v1017';\nconst OVERLAY_KEY='automation_state_v1';\n",'',1)
+          pattern=r"\nfunction applyAutomationOverlay\(state,overlay\)\{.*?\n\}\n\nfunction saoPauloDateParts"
+          text,count=re.subn(pattern,"\nfunction saoPauloDateParts",text,count=1,flags=re.S)
+          assert count==1
+          p.write_text(text)
+
+          # The server cron is authoritative; avoid the old automatic startup bank request.
+          p=Path('bootstrap.js')
+          text=p.read_text()
+          old="  if(typeof window.provedor?.invoices?.sync==='function')await window.provedor.invoices.sync().catch(error=>console.error('Provedor Plus: falha na conciliação inicial de cobranças.',error));\n\n"
+          assert old in text
+          p.write_text(text.replace(old,'',1))
+
+          # Decode the packed browser bridge.
+          parts=sorted(Path('packed').glob('bridgegz-*.txt'))
+          assert len(parts)==4
+          raw=''.join(x.read_text().strip() for x in parts)
+          bridge=gzip.decompress(base64.b64decode(raw)).decode()
+
+          marker="  async function bankCall(payload){"
+          assert marker in bridge
+          helper="""  let automationBankVaultFingerprint='';
+          async function automationBankSave(provider,credentials){
+            if(!window.__PROVEDOR_PLUS_CLOUD__)return {configured:false,skipped:true};
+            const response=await fetch('/api/cloud-data',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'automation.bank.save',data:{provider,credentials}})});let result={};try{result=await response.json()}catch{}if(!response.ok||!result.ok)throw Error(result.error||`Falha ao proteger a credencial bancária da automação (HTTP ${response.status}).`);return result.data
+          }
+          async function syncAutomationBankVault(efiSec,mpSec){
+            if(!window.__PROVEDOR_PLUS_CLOUD__)return;
+            const fingerprint=JSON.stringify({efi:{clientId:efiSec.clientId||'',clientSecret:efiSec.clientSecret||'',certificatePassword:efiSec.certificatePassword||'',certificateBase64:efiSec.certificateBase64||'',certificateName:efiSec.certificateName||''},mercadoPago:{accessToken:mpSec.accessToken||''}});if(fingerprint===automationBankVaultFingerprint)return;
+            if(efiSec.clientId||efiSec.clientSecret||efiSec.certificateBase64)await automationBankSave('efi',efiSec);
+            if(mpSec.accessToken)await automationBankSave('mercadoPago',mpSec);
+            automationBankVaultFingerprint=fingerprint
+          }
+"""
+          bridge=bridge.replace(marker,helper+marker,1)
+
+          pattern=r"  async function bankSecrets\(\)\{.*?\}\n  function attachRemote"
+          replacement="""  async function bankSecrets(){const s=load(),efiSec=await secureGet('efi'),mpSec=await secureGet('mercadoPago');if(window.__PROVEDOR_PLUS_CLOUD__)await syncAutomationBankVault(efiSec,mpSec);return {efi:{environment:s.banks.efi.environment||'sandbox',clientId:efiSec.clientId||'',clientSecret:efiSec.clientSecret||'',certificatePassword:efiSec.certificatePassword||'',certificateBase64:efiSec.certificateBase64||'',pixKey:s.banks.efi.pixKey||'',pixAutoReceiverAgency:s.banks.efi.pixAutoReceiverAgency||'',pixAutoReceiverAccount:s.banks.efi.pixAutoReceiverAccount||'',webhookUrl:s.banks.efi.webhookUrl||''},mercadoPago:{environment:s.banks.mercadoPago.environment||'sandbox',publicKey:s.banks.mercadoPago.publicKey||'',accessToken:mpSec.accessToken||''}}}
+          function attachRemote"""
+          bridge,count=re.subn(pattern,replacement,bridge,count=1,flags=re.S)
+          assert count==1
+
+          old="await secureSet('efi',sec);s.banks.efi={"
+          assert old in bridge
+          bridge=bridge.replace(old,"await secureSet('efi',sec);if(window.__PROVEDOR_PLUS_CLOUD__)await automationBankSave('efi',sec);automationBankVaultFingerprint='';s.banks.efi={",1)
+
+          old="await secureSet('efi',sec);const s=load();s.banks.efi.certificateConfigured=true"
+          assert old in bridge
+          bridge=bridge.replace(old,"await secureSet('efi',sec);if(window.__PROVEDOR_PLUS_CLOUD__)await automationBankSave('efi',sec);automationBankVaultFingerprint='';const s=load();s.banks.efi.certificateConfigured=true",1)
+
+          old="await secureSet('efi',sec);const s=load();s.banks.efi.certificateConfigured=false"
+          assert old in bridge
+          bridge=bridge.replace(old,"await secureSet('efi',sec);if(window.__PROVEDOR_PLUS_CLOUD__)await automationBankSave('efi',sec);automationBankVaultFingerprint='';const s=load();s.banks.efi.certificateConfigured=false",1)
+
+          old="await secureSet('mercadoPago',sec);s.banks.mercadoPago={"
+          assert old in bridge
+          bridge=bridge.replace(old,"await secureSet('mercadoPago',sec);if(window.__PROVEDOR_PLUS_CLOUD__)await automationBankSave('mercadoPago',sec);automationBankVaultFingerprint='';s.banks.mercadoPago={",1)
+
+          assert ".filter(i=>i.status==='Pendente'&&i.bank_provider).slice(0,100)" in bridge
+          bridge=bridge.replace(".filter(i=>i.status==='Pendente'&&i.bank_provider).slice(0,100)",".filter(i=>i.status==='Pendente'&&i.bank_provider)",1)
+
+          old="""  if(!window.__PROVEDOR_PLUS_CLOUD__){
+            void runExpiredTrustWeb().catch(()=>{});
+            void runAutoBlockWeb().catch(()=>{});
+            void syncInvoicesWeb().catch(()=>{});
+          }
+          setInterval(()=>void runExpiredTrustWeb().catch(()=>{}),60*1000);
+          setInterval(()=>void runAutoBlockWeb().catch(()=>{}),15*60*1000);
+          setInterval(()=>void syncInvoicesWeb().catch(()=>{}),5*60*1000);
+"""
+          assert old in bridge
+          new="""  if(!window.__PROVEDOR_PLUS_CLOUD__){
+            void runExpiredTrustWeb().catch(()=>{});
+            void runAutoBlockWeb().catch(()=>{});
+            void syncInvoicesWeb().catch(()=>{});
+            setInterval(()=>void runExpiredTrustWeb().catch(()=>{}),60*1000);
+            setInterval(()=>void runAutoBlockWeb().catch(()=>{}),15*60*1000);
+            setInterval(()=>void syncInvoicesWeb().catch(()=>{}),5*60*1000);
+          }
+"""
+          bridge=bridge.replace(old,new,1)
+
+          Path('/tmp/bridge.js').write_text(bridge)
+          packed=base64.b64encode(gzip.compress(bridge.encode(),compresslevel=9,mtime=0)).decode()
+          size=(len(packed)+3)//4
+          chunks=[packed[i*size:(i+1)*size] for i in range(4)]
+          assert ''.join(chunks)==packed and all(chunks)
+          for path,chunk in zip(parts,chunks):path.write_text(chunk+'\n')
           PY
+          node --check lib/automation-handler.js
+          node --check api/automation.js
+          node --check api/cloud-state.js
+          node --check lib/cloud-data-handler.js
+          node --check /tmp/bridge.js
+          node --check bootstrap.js
+          node -e "JSON.parse(require('fs').readFileSync('vercel.json','utf8'))"
+          grep -q "automation.bank.save" /tmp/bridge.js
+          grep -q "syncAutomationBankVault" /tmp/bridge.js
+          ! grep -q "filter(i=>i.status==='Pendente'&&i.bank_provider).slice(0,100)" /tmp/bridge.js
+          grep -q '"/api/automation"' vercel.json
+          grep -q '"*/5 * * * *"' vercel.json
           git config user.name fibratelecom
           git config user.email lanconta2015@gmail.com
-          git add .automation-inspect.txt
-          git commit -m "Registra inspeção temporária da automação bancária"
+          git add lib/automation-handler.js bootstrap.js packed/bridgegz-*.txt
+          git commit -m "Integra automação 24h ao banco e ao painel"
           git push origin HEAD:fix/global-navigation-duplication

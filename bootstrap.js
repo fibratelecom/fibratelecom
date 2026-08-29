@@ -53,8 +53,6 @@
   if(typeof window.ProvedorPlusInstallCloudAdapter!=='function')throw new Error('A ponte HTTPS do MikroTik não foi carregada.');
   await window.ProvedorPlusInstallCloudAdapter();
   await loadScript('/cloud-client-status-fix.js?v=1017-cloud17-audit2');
-  if(typeof window.provedor?.invoices?.sync==='function')await window.provedor.invoices.sync().catch(error=>console.error('Provedor Plus: falha na conciliação inicial de cobranças.',error));
-
   await loadScript('/cloud-backup-store.js?v=1017-cloud17');
   window.ProvedorPlusCloudState.wrapApi(window.provedor);
   await loadScript('/mikrotik-read-stability.js?v=1017-mikrotikstable1').catch(error=>console.error('Provedor Plus: a estabilização das leituras MikroTik não foi carregada.',error));

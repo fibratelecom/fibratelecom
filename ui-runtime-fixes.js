@@ -173,7 +173,7 @@
     const STATE_KEY='provedor_plus_web_1_0_17';
     const norm=value=>String(value??'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
     const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-    let normalizeAttempted=false,normalizeBusy=false,actionBusy=false,routeToken=0,gateTimer=null,repairTimer=null;
+    let normalizeAttempted=false,normalizeBusy=false,actionBusy=false,routeToken=0,gateTimer=null,repairTimer=null,cachedClients=[];
 
     const active=plan=>plan?.active!==false&&plan?.enabled!==false;
     const getState=()=>window.ProvedorPlusCloudState?.getState?.()||{};
@@ -189,8 +189,9 @@
       }).length;
     };
     const readClients=async()=>{
-      try{const rows=await window.provedor?.clients?.list?.();if(Array.isArray(rows))return rows}catch(error){console.error('Provedor Plus: não foi possível atualizar os clientes antes de validar os planos.',error)}
-      return Array.isArray(getState()?.clients)?getState().clients:[];
+      try{const rows=await window.provedor?.clients?.list?.();if(Array.isArray(rows)){cachedClients=rows;return rows}}catch(error){console.error('Provedor Plus: não foi possível atualizar os clientes antes de validar os planos.',error)}
+      cachedClients=Array.isArray(getState()?.clients)?getState().clients:[];
+      return cachedClients;
     };
     const persist=async state=>{
       localStorage.setItem(STATE_KEY,JSON.stringify(state));
@@ -213,15 +214,16 @@
       nav?.click();
     };
     const cardPrice=card=>{
-      const text=String(card.querySelector(':scope > strong')?.textContent||'');
+      const priceNode=[...card.querySelectorAll('strong')].find(node=>/R\$/i.test(String(node.textContent||'')));
+      const text=String(priceNode?.textContent||'');
       const match=text.match(/R\$\s*([\d.]+(?:,\d{1,2})?)/i);if(!match)return 0;
       const value=Number(match[1].replace(/\./g,'').replace(',','.'));return Number.isFinite(value)?Math.round(value*100):0;
     };
-    const cardSpeed=card=>norm(card.querySelector('.plan-head>span')?.textContent||'');
+    const cardSpeed=card=>norm(card.querySelector('.plan-head span')?.textContent||'');
     const planEntries=state=>(Array.isArray(state?.plans)?state.plans:[]).map((plan,index)=>({plan,index})).filter(entry=>active(entry.plan));
     function mapCards(state,grid){
       const entries=planEntries(state),used=new Set(),mapped=[];
-      for(const card of [...grid.querySelectorAll(':scope > .plan-card')]){
+      for(const card of [...grid.querySelectorAll('.plan-card')]){
         const name=norm(card.querySelector('h2')?.textContent),cents=cardPrice(card),cardSpd=cardSpeed(card);
         const candidates=entries.filter(entry=>!used.has(entry.index));
         let entry=candidates.find(item=>norm(item.plan?.name||item.plan?.title)===name&&priceCents(item.plan)===cents&&(!cardSpd||!norm(speed(item.plan))||cardSpd.includes(norm(speed(item.plan)))||norm(speed(item.plan)).includes(cardSpd)));
@@ -241,8 +243,8 @@
         .pp-plan-management-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 14px;padding:12px 14px;background:#fff;border:1px solid #dfe8e5;border-radius:10px;box-sizing:border-box}
         .pp-plan-management-toolbar strong{display:block;color:#27453f;font-size:12px}.pp-plan-management-toolbar small{display:block;margin-top:3px;color:#778984;font-size:10px;line-height:1.35}.pp-plan-management-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}
         .pp-plan-management-actions button{min-height:33px;padding:0 11px;border:1px solid #d7e3e0;border-radius:8px;background:#fff;color:#536a64;font-size:10px;font-weight:800;cursor:pointer}.pp-plan-management-actions button[data-pp-plan-save-promo]{background:#0d8b78;border-color:#0d8b78;color:#fff}.pp-plan-management-actions button[data-pp-plan-delete-selected]{color:#b54b44;border-color:#efc9c5;background:#fff8f7}.pp-plan-management-actions button:disabled{opacity:.55;cursor:wait}
-        .plan-card>.pp-plan-management-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:9px 0 0;padding:8px 9px;border:1px solid #e1ebe8;border-radius:8px;background:#f8fbfa}.pp-plan-management-row label{display:inline-flex;align-items:center;gap:6px;margin:0;color:#596d68;font-size:9px;font-weight:750;cursor:pointer}.pp-plan-management-row label:first-child{color:#0a7f6e}.pp-plan-management-row input{margin:0;accent-color:#0d8b78}
-        @media(max-width:760px){.pp-plan-management-toolbar{align-items:stretch;flex-direction:column}.pp-plan-management-actions{justify-content:stretch}.pp-plan-management-actions button{flex:1}.plan-card>.pp-plan-management-row{align-items:flex-start;flex-direction:column}}
+        .plan-card .pp-plan-management-row{display:flex!important;align-items:center!important;justify-content:space-between!important;gap:8px!important;flex:0 0 auto!important;margin:0 0 9px!important;padding:8px 9px!important;border:1px solid #e1ebe8!important;border-radius:8px!important;background:#f8fbfa!important}.pp-plan-management-row label{display:inline-flex!important;align-items:center!important;gap:6px!important;margin:0!important;color:#596d68!important;font-size:9px!important;font-weight:750!important;cursor:pointer!important}.pp-plan-management-row label:first-child{color:#0a7f6e!important}.pp-plan-management-row input{margin:0!important;accent-color:#0d8b78!important}
+        @media(max-width:760px){.pp-plan-management-toolbar{align-items:stretch;flex-direction:column}.pp-plan-management-actions{justify-content:stretch}.pp-plan-management-actions button{flex:1}.plan-card .pp-plan-management-row{align-items:flex-start!important;flex-direction:column!important}}
       `;document.head.appendChild(style);
     }
     function setRouteGate(enabled){
@@ -287,12 +289,22 @@
     function createToolbar(area,grid){
       let toolbar=area.querySelector('.pp-plan-management-toolbar');if(toolbar)return toolbar;
       toolbar=document.createElement('section');toolbar.className='pp-plan-management-toolbar';toolbar.innerHTML='<div><strong>Divulgação na Área do Cliente</strong><small>Marque “Área do Cliente” nos planos da promoção. Use “Selecionar” somente para excluir planos.</small></div><div class="pp-plan-management-actions"><span data-pp-plan-selected-label style="font-size:9px;color:#7b8c88">Nenhum selecionado</span><button type="button" data-pp-plan-select-all>Selecionar todos</button><button type="button" data-pp-plan-delete-selected>Excluir selecionados</button><button type="button" data-pp-plan-save-promo>Salvar promoção</button></div>';
-      grid.parentElement?.insertBefore(toolbar,grid);return toolbar;
+      grid.insertAdjacentElement('beforebegin',toolbar);return toolbar;
+    }
+    function applyFeaturedDom(mapped,state){
+      const clients=cachedClients.length?cachedClients:(Array.isArray(state?.clients)?state.clients:[]);
+      let best=null,bestCount=0;
+      for(const item of mapped){const count=planUse(item.plan,clients);if(count>bestCount){best=item;bestCount=count}}
+      for(const {card} of mapped){
+        card.classList.remove('featured');
+        for(const badge of [...card.querySelectorAll(':scope > em')])if(norm(badge.textContent)==='mais contratado')badge.remove();
+      }
+      if(bestCount>0&&best?.card){const badge=document.createElement('em');badge.textContent='MAIS CONTRATADO';best.card.classList.add('featured');best.card.prepend(badge)}
     }
     const viewReady=current=>{
       if(!current?.grid?.isConnected||!current?.area?.isConnected)return false;
-      const cards=[...current.grid.querySelectorAll(':scope > .plan-card')];
-      return Boolean(cards.length&&current.area.querySelector('.pp-plan-management-toolbar')&&cards.every(card=>card.querySelector(':scope > .pp-plan-management-row')));
+      const cards=[...current.grid.querySelectorAll('.plan-card')];
+      return Boolean(cards.length&&current.area.querySelector('.pp-plan-management-toolbar')&&cards.every(card=>card.querySelector('.pp-plan-management-row')));
     };
     async function patchPlans(){
       const current=page();if(!current)return false;
@@ -303,10 +315,15 @@
       createToolbar(current.area,current.grid);
       for(const {card,plan,index} of mapped){
         card.dataset.ppPlanIndex=String(index);
-        let row=card.querySelector(':scope > .pp-plan-management-row');
-        if(!row){row=document.createElement('div');row.className='pp-plan-management-row';row.innerHTML='<label><input type="checkbox" data-pp-plan-portal> Área do Cliente</label><label><input type="checkbox" data-pp-plan-select> Selecionar</label>';card.appendChild(row)}
-        const portal=row.querySelector('[data-pp-plan-portal]');if(portal)portal.checked=plan?.portal_visible===true;
+        let row=card.querySelector('.pp-plan-management-row');
+        if(!row){
+          row=document.createElement('div');row.className='pp-plan-management-row';row.innerHTML='<label><input type="checkbox" data-pp-plan-portal> Área do Cliente</label><label><input type="checkbox" data-pp-plan-select> Selecionar</label>';
+          const actions=card.querySelector('.plan-actions');
+          if(actions&&actions.parentElement===card)card.insertBefore(row,actions);else card.appendChild(row);
+        }
+        const portal=row.querySelector('[data-pp-plan-portal]');if(portal)portal.checked=plan?.portal_visible!==false;
       }
+      applyFeaturedDom(mapped,state);
       updateSelectedLabel(current.area);
       return viewReady(current);
     }

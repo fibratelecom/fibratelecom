@@ -1,6 +1,6 @@
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260830-2025-chamados-rota1';
+  const BUILD_TOKEN='20260830-2145-rotas-isoladas1';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');
@@ -34,56 +34,133 @@
     window.MutationObserver=FilteredMutationObserver;
     try{return await loadScript(src)}finally{window.MutationObserver=Native}
   };
-  const installTicketRouteGuard=()=>{
-    if(window.__ProvedorPlusTicketRouteGuardInstalled)return;
-    window.__ProvedorPlusTicketRouteGuardInstalled=true;
+  const installRouteIsolationGuard=()=>{
+    if(window.__ProvedorPlusRouteIsolationGuardInstalled)return;
+    window.__ProvedorPlusRouteIsolationGuardInstalled=true;
     const style=document.createElement('style');
-    style.id='pp-ticket-route-guard-style';
-    style.textContent='.content.pp-ticket-route-active{position:relative!important;overflow:auto!important}.content.pp-ticket-route-active>:not(.pp-ticket-layer){display:none!important}.content.pp-ticket-route-active>.pp-ticket-layer{position:absolute!important;inset:0!important;z-index:17!important;display:block!important;visibility:visible!important;opacity:1!important;background:#f6f8f7!important;overflow:auto!important}';
+    style.id='pp-route-isolation-style';
+    style.textContent=`
+      .content.pp-route-overlay-active{position:relative!important;overflow:auto!important;background:#f6f8f7!important}
+      .content.pp-route-overlay-active::before{content:'Carregando...';position:absolute;inset:0;z-index:0;display:grid;place-items:center;color:#80908c;background:#f6f8f7;font:600 11px/1.4 Segoe UI,Arial,sans-serif}
+      .content.pp-route-billing-active>:not(.pp-billing-auto-layer),
+      .content.pp-route-ticket-active>:not(.pp-ticket-layer),
+      .content.pp-route-staff-active>:not(.pp-staff-layer){display:none!important}
+      .content.pp-route-billing-active>.pp-billing-auto-layer,
+      .content.pp-route-ticket-active>.pp-ticket-layer,
+      .content.pp-route-staff-active>.pp-staff-layer{display:block!important;visibility:visible!important;opacity:1!important;z-index:18!important}
+    `;
     document.head.appendChild(style);
-    const normalize=value=>String(value||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-    let activeContent=null,contentObserver=null,syncTimer=null;
-    const activeTicketButton=()=>[...document.querySelectorAll('.sidebar nav button.active,nav button.active')].find(button=>normalize(button.textContent).includes('chamado'))||null;
-    const release=()=>{
-      contentObserver?.disconnect();contentObserver=null;
-      activeContent?.classList.remove('pp-ticket-route-active');activeContent=null;
+
+    const normalize=value=>String(value||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
+    const routeClasses=['pp-route-overlay-active','pp-route-billing-active','pp-route-ticket-active','pp-route-staff-active'];
+    const layerSelectors={billing:'.pp-billing-auto-layer',ticket:'.pp-ticket-layer',staff:'.pp-staff-layer'};
+    let intentButton=null,intentAt=0,syncTimer=null,contentObserver=null,observedContent=null;
+
+    const routeForButton=button=>{
+      const label=normalize(button?.textContent);
+      if(label.includes('mensalidade'))return'billing';
+      if(label.includes('chamado'))return'ticket';
+      if(label.includes('funcionario'))return'staff';
+      if(label.includes('dashboard')||label.includes('visao geral'))return'dashboard';
+      return'base';
+    };
+    const activeButton=()=>{
+      const buttons=[...document.querySelectorAll('.sidebar nav button.active,aside nav button.active,nav button.active')];
+      return buttons.find(button=>button.offsetParent!==null)||buttons[0]||null;
+    };
+    const intendedButton=()=>{
+      const active=activeButton();
+      if(intentButton?.isConnected&&Date.now()-intentAt<6000){
+        if(active&&routeForButton(active)===routeForButton(intentButton))intentButton=null;
+        else return intentButton;
+      }
+      return active;
     };
     const resolveContent=button=>{
       const shell=button?.closest('.app-shell')||document.querySelector('.app-shell');
-      if(!shell)return null;
-      return [...shell.children].find(el=>el.classList?.contains('content'))||shell.querySelector('.content');
+      if(!shell)return document.querySelector('.content')||null;
+      return [...shell.children].find(el=>el.classList?.contains('content'))||shell.querySelector('.content')||null;
+    };
+    const resetContents=()=>{
+      for(const content of document.querySelectorAll('.content'))content.classList.remove(...routeClasses);
+    };
+    const resetDashboard=except=>{
+      for(const host of document.querySelectorAll('.page-wrap.pp-dashboard-host'))if(host!==except)host.classList.remove('pp-dashboard-host');
+      if(!except)document.querySelectorAll('.pp-pppoe-modal-layer').forEach(node=>node.remove());
+    };
+    const closeForeignEditors=route=>{
+      if(route!=='ticket')document.querySelectorAll('.pp-ticket-modal-layer').forEach(node=>node.remove());
+      if(route!=='staff')document.querySelectorAll('.pp-staff-modal-layer').forEach(node=>node.remove());
+      if(route!=='dashboard')document.querySelectorAll('.pp-pppoe-modal-layer').forEach(node=>node.remove());
+    };
+    const setLayerState=(route,content)=>{
+      for(const [key,selector] of Object.entries(layerSelectors)){
+        const nodes=[...document.querySelectorAll(selector)].filter(node=>node.isConnected);
+        if(key!==route){
+          nodes.forEach(node=>node.style.setProperty('display','none','important'));
+          continue;
+        }
+        const current=nodes[nodes.length-1]||null;
+        for(const duplicate of nodes.slice(0,-1))duplicate.remove();
+        if(current){
+          current.style.removeProperty('display');
+          if(content&&current.parentElement!==content)content.appendChild(current);
+        }
+      }
+    };
+    const observeContent=content=>{
+      if(observedContent===content)return;
+      contentObserver?.disconnect();contentObserver=null;observedContent=content||null;
+      if(!content)return;
+      contentObserver=new MutationObserver(()=>schedule());
+      contentObserver.observe(content,{childList:true});
     };
     const sync=()=>{
-      const button=activeTicketButton();
-      if(!button){release();return}
+      const button=intendedButton();
+      const route=routeForButton(button);
       const content=resolveContent(button);
-      if(!content){release();return}
-      const layers=[...document.querySelectorAll('.pp-ticket-layer')].filter(node=>node.isConnected);
-      if(!layers.length){
-        if(activeContent!==content){release();activeContent=content;activeContent.classList.add('pp-ticket-route-active')}
+      resetContents();
+      closeForeignEditors(route);
+      observeContent(content);
+
+      if(route==='dashboard'){
+        setLayerState('dashboard',content);
+        const pageWrap=content?.querySelector(':scope > .page-wrap')||content?.querySelector('.page-wrap')||null;
+        resetDashboard(pageWrap);
+        if(pageWrap)pageWrap.classList.add('pp-dashboard-host');
         return;
       }
-      const current=layers[layers.length-1];
-      for(const duplicate of layers.slice(0,-1))duplicate.remove();
-      if(current.parentElement!==content)content.appendChild(current);
-      if(activeContent!==content){release();activeContent=content;activeContent.classList.add('pp-ticket-route-active')}
-      if(!contentObserver){
-        contentObserver=new MutationObserver(()=>{
-          if(!activeTicketButton()){release();return}
-          clearTimeout(syncTimer);syncTimer=setTimeout(sync,20);
-        });
-        contentObserver.observe(content,{childList:true});
+
+      resetDashboard(null);
+      if(route==='billing'||route==='ticket'||route==='staff'){
+        setLayerState(route,content);
+        if(content){
+          content.classList.add('pp-route-overlay-active');
+          content.classList.add(route==='billing'?'pp-route-billing-active':route==='ticket'?'pp-route-ticket-active':'pp-route-staff-active');
+        }
+        return;
       }
+
+      setLayerState('base',content);
     };
-    const schedule=()=>{
+    function schedule(){
       clearTimeout(syncTimer);
       syncTimer=setTimeout(sync,20);
       setTimeout(sync,90);
       setTimeout(sync,220);
-    };
-    const navObserver=new MutationObserver(schedule);
-    for(const nav of document.querySelectorAll('.sidebar nav,nav'))navObserver.observe(nav,{subtree:true,childList:true,attributes:true,attributeFilter:['class']});
-    document.addEventListener('click',event=>{if(event.target.closest('.sidebar nav button,nav button'))setTimeout(schedule,30)},true);
+      setTimeout(sync,600);
+    }
+
+    const navs=[...new Set(document.querySelectorAll('.sidebar nav,aside nav,nav'))];
+    for(const nav of navs){
+      const observer=new MutationObserver(schedule);
+      observer.observe(nav,{subtree:true,childList:true,attributes:true,attributeFilter:['class']});
+    }
+    document.addEventListener('click',event=>{
+      const button=event.target.closest?.('.sidebar nav button,aside nav button,nav button');
+      if(!button)return;
+      intentButton=button;intentAt=Date.now();schedule();
+    },true);
     schedule();
   };
   const gunzipB64=async b64=>{const bin=atob(b64.replace(/\s+/g,'')),bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);if(typeof DecompressionStream!=='function')throw new Error('Este navegador não suporta a descompressão necessária. Atualize o Chrome/Edge.');const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));return new Response(stream).text()};
@@ -141,12 +218,12 @@
   try{await import(appUrl)}finally{setTimeout(()=>URL.revokeObjectURL(appUrl),1500)}
 
   await loadScript('/ui-runtime-fixes.js?v=1017-fix13-client-actions');
-  await loadScriptStable('/dashboard-enhancements.js?v=1017-dashboard1',{dropCharacterData:true,ignoreWithin:['.pp-dashboard-v2','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer']}).catch(error=>console.error('Provedor Plus: o Dashboard gerencial não foi carregado.',error));
+  await loadScriptStable('/dashboard-enhancements.js?v=1017-dashboard1',{dropCharacterData:true,observerTargetSelector:'.app-shell',ignoreWithin:['.pp-dashboard-v2','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer']}).catch(error=>console.error('Provedor Plus: o Dashboard gerencial não foi carregado.',error));
   await loadScriptStable('/billing-bank-selector.js?v=1017-billingbank3',{ignoreWithin:['.pp-dashboard-v2','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer']}).catch(error=>console.error('Provedor Plus: a seleção do banco emissor não foi carregada.',error));
   await loadScript('/billing-automation.js?v=1017-billingauto1').catch(error=>console.error('Provedor Plus: a automação de mensalidades não foi carregada.',error));
-  await loadScriptStable('/staff-access.js?v=1017-staff1',{ignoreWithin:['.pp-dashboard-v2','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer']}).catch(error=>console.error('Provedor Plus: a gestão de funcionários não foi carregada.',error));
+  await loadScriptStable('/staff-access.js?v=1017-staff1',{observerTargetSelector:'.sidebar',ignoreWithin:['.pp-dashboard-v2','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer']}).catch(error=>console.error('Provedor Plus: a gestão de funcionários não foi carregada.',error));
   await loadScriptStable('/ticket-enhancements.js?v=1017-ticket1',{observerTargetSelector:'.app-shell',ignoreWithin:['.pp-dashboard-v2','.client-status-modal','.pp-staff-layer','.pp-ticket-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer']}).catch(error=>console.error('Provedor Plus: a gestão avançada de chamados não foi carregada.',error));
-  installTicketRouteGuard();
+  installRouteIsolationGuard();
   await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
   if(typeof window.ProvedorPlusPatchClientViewButtons==='function')window.ProvedorPlusPatchClientViewButtons();
   if(root)root.style.visibility='';

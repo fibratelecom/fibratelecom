@@ -1,8 +1,10 @@
 import { neon } from '@neondatabase/serverless';
+import { handleNativeAuth,handleNativeCloudState,handleNativeCloudData } from './worker-native-api.js';
 
-const UPSTREAM='https://fibratelecom.vercel.app';
+const SPECIALIZED_UPSTREAM='https://fibratelecom.vercel.app';
 const STATE_KEY='web_state_v1017';
 const CUSTOMER_PORTAL_PATH='/api/customer-portal';
+const SPECIALIZED_PROXY_PATHS=new Set(['/api/bank-proxy','/api/mikrotik-proxy','/api/mikrotik-proxy-v2']);
 const ALLOWED_PORTAL_ORIGINS=new Set([
   'https://cliente.fibramais.workers.dev'
 ]);
@@ -41,9 +43,9 @@ function copyHeaders(headers){
   return next;
 }
 
-async function proxyApi(request){
+async function proxySpecializedApi(request){
   const incoming=new URL(request.url);
-  const target=new URL(incoming.pathname+incoming.search,UPSTREAM);
+  const target=new URL(incoming.pathname+incoming.search,SPECIALIZED_UPSTREAM);
   const headers=copyHeaders(request.headers);
   headers.set('x-forwarded-host',incoming.host);
   headers.set('x-forwarded-proto','https');
@@ -52,8 +54,8 @@ async function proxyApi(request){
   const response=await fetch(target.toString(),init);
   const responseHeaders=new Headers(response.headers);
   const location=responseHeaders.get('location');
-  if(location&&location.startsWith(UPSTREAM))responseHeaders.set('location',location.replace(UPSTREAM,incoming.origin));
-  responseHeaders.set('x-provedor-plus-edge','cloudflare-migration-fallback');
+  if(location&&location.startsWith(SPECIALIZED_UPSTREAM))responseHeaders.set('location',location.replace(SPECIALIZED_UPSTREAM,incoming.origin));
+  responseHeaders.set('x-provedor-plus-edge','cloudflare-specialized-integration');
   return new Response(response.body,{status:response.status,statusText:response.statusText,headers:responseHeaders});
 }
 
@@ -269,13 +271,20 @@ export default {
         worker:'painel',
         databaseConfigured:database.configured,
         databaseConnected:database.connected,
+        coreApiMode:'cloudflare-native',
         customerPortalMode:'cloudflare-native',
-        vercelCustomerPortalFallback:false
+        vercelCoreFallback:false,
+        vercelCustomerPortalFallback:false,
+        specializedIntegrationProxy:'bank-and-mikrotik-only'
       },database.connected?200:503,{'x-provedor-plus-edge':'cloudflare-health'});
     }
 
+    if(url.pathname==='/api/auth')return handleNativeAuth(request,env);
+    if(url.pathname==='/api/cloud-state')return handleNativeCloudState(request,env);
+    if(url.pathname==='/api/cloud-data')return handleNativeCloudData(request,env);
     if(url.pathname===CUSTOMER_PORTAL_PATH)return handleNativeCustomerPortal(request,env);
-    if(url.pathname.startsWith('/api/'))return proxyApi(request);
+    if(SPECIALIZED_PROXY_PATHS.has(url.pathname))return proxySpecializedApi(request);
+    if(url.pathname.startsWith('/api/'))return json({ok:false,error:'API não encontrada no Provedor Plus Cloudflare.'},404,{'x-provedor-plus-edge':'cloudflare-native-routing'});
     return env.ASSETS.fetch(request);
   }
 };

@@ -3,6 +3,7 @@ import { handleNativeAuth,handleNativeCloudState,handleNativeCloudData } from '.
 
 const SPECIALIZED_UPSTREAM='https://fibratelecom.vercel.app';
 const STATE_KEY='web_state_v1017';
+const BANK_SETTINGS_KEY='bank_credentials_v1';
 const CUSTOMER_PORTAL_PATH='/api/customer-portal';
 const SPECIALIZED_PROXY_PATHS=new Set(['/api/bank-proxy','/api/mikrotik-proxy','/api/mikrotik-proxy-v2']);
 const ALLOWED_PORTAL_ORIGINS=new Set([
@@ -12,6 +13,7 @@ const ALLOWED_PORTAL_ORIGINS=new Set([
 const text=value=>String(value??'').trim();
 const digits=value=>text(value).replace(/\D/g,'');
 const number=value=>{const n=Number(value);return Number.isFinite(n)?n:null};
+const bankUtf8=new TextEncoder();
 
 function json(data,status=200,headers={}){
   return new Response(JSON.stringify(data),{
@@ -41,6 +43,131 @@ function copyHeaders(headers){
   next.delete('cf-ray');
   next.delete('cf-visitor');
   return next;
+}
+
+function bankB64(bytes){
+  const view=bytes instanceof Uint8Array?bytes:new Uint8Array(bytes);
+  let binary='';
+  for(const byte of view)binary+=String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function bankBytes(value){
+  const binary=atob(text(value));
+  const out=new Uint8Array(binary.length);
+  for(let i=0;i<binary.length;i++)out[i]=binary.charCodeAt(i);
+  return out;
+}
+
+async function bankCryptoKey(env){
+  const secret=text(env.BANK_SECRET_KEY)||text(env.PORTAL_SESSION_SECRET)||text(env.DATABASE_URL);
+  if(!secret)throw Object.assign(new Error('Chave de proteção das credenciais bancárias não configurada.'),{statusCode:503});
+  const raw=await crypto.subtle.digest('SHA-256',bankUtf8.encode(`provedor-plus-bank-v1|${secret}`));
+  return crypto.subtle.importKey('raw',raw,{name:'AES-GCM'},false,['encrypt','decrypt']);
+}
+
+async function encryptBankSettings(env,value){
+  const key=await bankCryptoKey(env),iv=crypto.getRandomValues(new Uint8Array(12));
+  const cipher=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,bankUtf8.encode(JSON.stringify(value||{})));
+  return {v:1,iv:bankB64(iv),data:bankB64(new Uint8Array(cipher))};
+}
+
+async function decryptBankSettings(env,record){
+  if(!record?.iv||!record?.data)return {};
+  try{
+    const key=await bankCryptoKey(env),plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:bankBytes(record.iv)},key,bankBytes(record.data));
+    const parsed=JSON.parse(new TextDecoder().decode(plain));
+    return parsed&&typeof parsed==='object'?parsed:{};
+  }catch{
+    throw Object.assign(new Error('Não foi possível abrir as credenciais bancárias salvas.'),{statusCode:500});
+  }
+}
+
+function emptyBankSettings(){
+  return {
+    efi:{enabled:false,environment:'sandbox',clientId:'',clientSecret:'',certificatePassword:'',pixKey:'',pixAutoReceiverAgency:'',pixAutoReceiverAccount:'',webhookUrl:''},
+    mercadoPago:{enabled:false,environment:'sandbox',publicKey:'',accessToken:''}
+  };
+}
+
+async function requireBankAdmin(request,env){
+  const headers=new Headers(request.headers);
+  headers.set('Content-Type','application/json');
+  const authRequest=new Request(request.url,{method:'POST',headers,body:JSON.stringify({action:'status'})});
+  const response=await handleNativeAuth(authRequest,env);
+  let body={};
+  try{body=await response.json()}catch{}
+  if(!response.ok||!body.ok||body?.data?.authenticated!==true)throw Object.assign(new Error('Sessão expirada ou não autenticada.'),{statusCode:401});
+  if(text(body?.data?.user?.role).toLowerCase()!=='admin')throw Object.assign(new Error('Somente o administrador pode alterar as credenciais bancárias.'),{statusCode:403});
+  return body.data.user;
+}
+
+async function readBankSettings(env){
+  if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Neon não configurada.'),{statusCode:503});
+  const sql=neon(env.DATABASE_URL),rows=await sql`SELECT value FROM pp_settings WHERE key=${BANK_SETTINGS_KEY} LIMIT 1`;
+  const encrypted=Array.isArray(rows)?rows[0]?.value:null;
+  if(!encrypted)return emptyBankSettings();
+  const stored=await decryptBankSettings(env,encrypted);
+  return {
+    ...emptyBankSettings(),
+    ...stored,
+    efi:{...emptyBankSettings().efi,...(stored?.efi||{})},
+    mercadoPago:{...emptyBankSettings().mercadoPago,...(stored?.mercadoPago||{})}
+  };
+}
+
+async function writeBankSettings(env,value){
+  if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Neon não configurada.'),{statusCode:503});
+  const sql=neon(env.DATABASE_URL),updatedAt=new Date().toISOString(),encrypted=await encryptBankSettings(env,value),raw=JSON.stringify(encrypted);
+  await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${BANK_SETTINGS_KEY},${raw}::jsonb,${updatedAt}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at`;
+  return value;
+}
+
+function mergeEfiBank(current,data={}){
+  const previous=current?.efi||emptyBankSettings().efi;
+  return {
+    enabled:data.enabled===undefined?Boolean(previous.enabled):Boolean(data.enabled),
+    environment:data.environment==='production'?'production':data.environment==='sandbox'?'sandbox':text(previous.environment)||'sandbox',
+    clientId:text(data.clientId)||text(previous.clientId),
+    clientSecret:text(data.clientSecret)||text(previous.clientSecret),
+    certificatePassword:String(data.certificatePassword??'')?String(data.certificatePassword):String(previous.certificatePassword||''),
+    pixKey:data.pixKey===undefined?text(previous.pixKey):text(data.pixKey),
+    pixAutoReceiverAgency:data.pixAutoReceiverAgency===undefined?text(previous.pixAutoReceiverAgency):digits(data.pixAutoReceiverAgency),
+    pixAutoReceiverAccount:data.pixAutoReceiverAccount===undefined?text(previous.pixAutoReceiverAccount):digits(data.pixAutoReceiverAccount),
+    webhookUrl:data.webhookUrl===undefined?text(previous.webhookUrl):text(data.webhookUrl)
+  };
+}
+
+function mergeMercadoPagoBank(current,data={}){
+  const previous=current?.mercadoPago||emptyBankSettings().mercadoPago;
+  return {
+    enabled:data.enabled===undefined?Boolean(previous.enabled):Boolean(data.enabled),
+    environment:data.environment==='production'?'production':data.environment==='sandbox'?'sandbox':text(previous.environment)||'sandbox',
+    publicKey:data.publicKey===undefined?text(previous.publicKey):text(data.publicKey),
+    accessToken:text(data.accessToken)||text(previous.accessToken)
+  };
+}
+
+async function handleBankSettings(request,env){
+  if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-bank-settings'});
+  try{
+    await requireBankAdmin(request,env);
+    let body={};
+    try{body=await request.json()}catch{}
+    const action=text(body?.action),data=body?.data||{};
+    let result;
+    if(action==='get')result=await readBankSettings(env);
+    else if(action==='save-efi'){
+      const current=await readBankSettings(env),next={...current,efi:mergeEfiBank(current,data)};
+      result=await writeBankSettings(env,next);
+    }else if(action==='save-mercado-pago'){
+      const current=await readBankSettings(env),next={...current,mercadoPago:mergeMercadoPagoBank(current,data)};
+      result=await writeBankSettings(env,next);
+    }else throw Object.assign(new Error('Ação bancária não permitida.'),{statusCode:400});
+    return json({ok:true,data:result},200,{'x-provedor-plus-edge':'cloudflare-bank-settings'});
+  }catch(error){
+    return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,{'x-provedor-plus-edge':'cloudflare-bank-settings'});
+  }
 }
 
 async function proxySpecializedApi(request){
@@ -282,6 +409,7 @@ export default {
     if(url.pathname==='/api/auth')return handleNativeAuth(request,env);
     if(url.pathname==='/api/cloud-state')return handleNativeCloudState(request,env);
     if(url.pathname==='/api/cloud-data')return handleNativeCloudData(request,env);
+    if(url.pathname==='/api/bank-settings')return handleBankSettings(request,env);
     if(url.pathname===CUSTOMER_PORTAL_PATH)return handleNativeCustomerPortal(request,env);
     if(SPECIALIZED_PROXY_PATHS.has(url.pathname))return proxySpecializedApi(request);
     if(url.pathname.startsWith('/api/'))return json({ok:false,error:'API não encontrada no Provedor Plus Cloudflare.'},404,{'x-provedor-plus-edge':'cloudflare-native-routing'});

@@ -127,13 +127,12 @@ function mapPlan(plan){
   };
 }
 
-function sameClient(client,{cpf,contract}){
-  const doc=digits(client?.document),storedContract=text(client?.contract_number);
-  const contractDigits=digits(storedContract);
-  const byCpf=cpf?doc===cpf:false;
-  const byContract=contract?(storedContract===contract||contractDigits===digits(contract)):false;
-  if(cpf&&contract)return byCpf&&byContract;
-  return byCpf||byContract;
+function sameClient(client,{document,contract}){
+  const doc=digits(client?.document),storedContract=text(client?.contract_number),storedContractDigits=digits(storedContract);
+  const byDocument=document?doc===document:false;
+  const byContract=contract?(storedContract===contract||storedContractDigits===digits(contract)):false;
+  if(document&&contract)return byDocument&&byContract;
+  return byDocument||byContract;
 }
 
 function portalSession(client){
@@ -150,14 +149,14 @@ async function stateGet(req){
 }
 
 async function login(req,data){
-  const cpf=digits(data?.cpf),contract=text(data?.contract||data?.contrato);
-  if(!cpf&&!contract)throw Object.assign(new Error('Informe CPF ou contrato.'),{statusCode:400});
-  if(cpf&&cpf.length!==11)throw Object.assign(new Error('CPF inválido.'),{statusCode:400});
+  const document=digits(data?.document||data?.cpf||data?.cnpj),contract=text(data?.contract||data?.contrato);
+  if(!document&&!contract)throw Object.assign(new Error('Informe CPF, CNPJ ou contrato.'),{statusCode:400});
+  if(document&&![11,14].includes(document.length))throw Object.assign(new Error('CPF ou CNPJ inválido.'),{statusCode:400});
   if(contract&&digits(contract).length<6)throw Object.assign(new Error('Contrato inválido.'),{statusCode:400});
 
   const clients=await db(req,'/pp_clients?select=id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,router_id,connection_type,pppoe_username,ip,mikrotik_status,mikrotik_last_sync&order=id.asc');
-  const client=(Array.isArray(clients)?clients:[]).find(item=>sameClient(item,{cpf,contract}));
-  if(!client)throw Object.assign(new Error('Cliente não encontrado. Confira o CPF ou contrato informado.'),{statusCode:404});
+  const client=(Array.isArray(clients)?clients:[]).find(item=>sameClient(item,{document,contract}));
+  if(!client)throw Object.assign(new Error('Cliente não encontrado. Confira o CPF, CNPJ ou contrato informado.'),{statusCode:404});
 
   const state=await stateGet(req);
   const invoices=(Array.isArray(state.invoices)?state.invoices:[])

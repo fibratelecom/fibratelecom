@@ -31,7 +31,7 @@ function dueFor(year,monthIndex,dueDay){
 function addMonthsDue(date,months,dueDay){return dueFor(date.getFullYear(),date.getMonth()+months,dueDay)}
 function daysBetween(a,b){return Math.max(0,Math.round((b.getTime()-a.getTime())/DAY))}
 function brl(cents){return new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format((num(cents)||0)/100)}
-function escapeHtml(value){return String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[ch]))}
+function escapeHtml(value){return String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
 
 function toast(message,type='ok'){
   document.querySelector('.pp-billing-auto-toast')?.remove();
@@ -249,17 +249,31 @@ function menuButtonTemplate(){
   const buttons=[...document.querySelectorAll('.sidebar nav button,aside nav button,nav button')];
   return buttons.find(button=>normalize(button.textContent)==='financeiro')||buttons.find(button=>normalize(button.textContent).includes('financeiro'))||null;
 }
+function replaceMenuLabel(button){
+  const walker=document.createTreeWalker(button,NodeFilter.SHOW_TEXT);let node,changed=false;
+  while((node=walker.nextNode())){
+    const value=String(node.nodeValue||'');
+    if(/financeiro/i.test(value)){node.nodeValue=value.replace(/financeiro/gi,'Mensalidades');changed=true}
+  }
+  if(!changed){
+    const label=[...button.querySelectorAll('span,strong,b,em')].find(el=>normalize(el.textContent)==='financeiro');
+    if(label)label.textContent='Mensalidades';
+  }
+}
 function mountButton(){
   injectStyle();
   const template=menuButtonTemplate();
   let button=document.querySelector('.pp-billing-auto-fab');
   if(!template){if(button?.isConnected)button.remove();return}
-  if(!button){
-    button=document.createElement('button');
-    button.type='button';
-    button.className=`${String(template.className||'').replace(/\bactive\b/g,'').trim()} pp-billing-auto-fab`.trim();
-    button.innerHTML=String(template.innerHTML||'Financeiro').replace(/Financeiro/gi,'Mensalidades');
-    if(normalize(button.textContent)!=='mensalidades')button.textContent='Mensalidades';
+  if(!button||button.dataset.ppMenuClone!=='financeiro'){
+    if(button?.isConnected)button.remove();
+    button=template.cloneNode(true);
+    button.classList.remove('active');
+    button.classList.add('pp-billing-auto-fab');
+    button.dataset.ppMenuClone='financeiro';
+    button.removeAttribute('id');
+    button.removeAttribute('aria-current');
+    replaceMenuLabel(button);
     button.title='Geração automática, gerar agora e gerar em lote';
     button.setAttribute('aria-label','Mensalidades');
     button.onclick=event=>{event.preventDefault();event.stopPropagation();openManager().catch(error=>toast(error.message||String(error),'error'))};

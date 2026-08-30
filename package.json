@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@neondatabase/serverless": "^1.0.2"
+    "@neondatabase/serverless": "^1.0.2",
+    "scrypt-js": "^3.0.1"
   },
   "devDependencies": {
     "wrangler": "^4.33.1"

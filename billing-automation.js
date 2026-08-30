@@ -216,34 +216,63 @@ api.clients.save=async data=>{
 function injectStyle(){
   if(document.getElementById('pp-billing-auto-style'))return;
   const style=document.createElement('style');style.id='pp-billing-auto-style';style.textContent=`
+.content{position:relative}
 .pp-billing-auto-fab{cursor:pointer}
-.pp-billing-auto-layer{position:fixed;inset:0;z-index:10050;display:grid;place-items:center;padding:18px;background:rgba(16,32,28,.38);backdrop-filter:blur(2px)}
-.pp-billing-auto-modal{width:min(820px,96vw);max-height:90vh;overflow:auto;background:#fff;border-radius:16px;box-shadow:0 24px 70px rgba(0,0,0,.2);color:#304b45;font-family:Segoe UI,Arial,sans-serif}
-.pp-billing-auto-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 20px;border-bottom:1px solid #e3ece9}.pp-billing-auto-head h2{margin:0;font-size:18px}.pp-billing-auto-close{border:0;background:#eef5f3;border-radius:8px;width:32px;height:32px;cursor:pointer}
-.pp-billing-auto-body{display:grid;gap:14px;padding:18px 20px}.pp-billing-auto-card{padding:14px;border:1px solid #dfeae7;border-radius:12px;background:#fbfdfc}.pp-billing-auto-card h3{margin:0 0 10px;font-size:14px}
+.pp-billing-auto-layer{position:absolute;inset:0;z-index:18;background:#f6f8f7;overflow:auto;color:#304b45;font-family:Segoe UI,Arial,sans-serif}
+.pp-billing-auto-page{padding:26px 28px 48px;max-width:1500px;margin:0 auto}
+.pp-billing-auto-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:18px}
+.pp-billing-auto-head-text>span{display:block;font-size:10px;letter-spacing:1.2px;font-weight:800;color:#0d8b78}.pp-billing-auto-head h2{margin:4px 0 5px;font-size:25px;color:#24332f}.pp-billing-auto-head p{margin:0;color:#7a8985;font-size:12px}
+.pp-billing-auto-close{height:36px;border-radius:8px;border:1px solid #dbe5e2;background:#fff;color:#52645f;font-size:11px;font-weight:750;padding:0 13px;cursor:pointer}
+.pp-billing-auto-body{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.pp-billing-auto-card{padding:17px 18px;border:1px solid #dfe8e5;border-radius:12px;background:#fff}.pp-billing-auto-card:first-child{grid-column:1/-1}.pp-billing-auto-card h3{margin:0 0 10px;font-size:15px;color:#2e433d}
 .pp-billing-auto-row{display:flex;flex-wrap:wrap;align-items:end;gap:10px}.pp-billing-auto-row label{display:grid;gap:5px;font-size:11px;font-weight:700}.pp-billing-auto-row input,.pp-billing-auto-row select{height:36px;box-sizing:border-box;border:1px solid #cbded9;border-radius:8px;padding:0 9px;background:#fff;color:#304b45}.pp-billing-auto-row button,.pp-billing-auto-actions button{height:36px;border:0;border-radius:8px;padding:0 12px;background:#0d8b78;color:#fff;font-weight:750;cursor:pointer}.pp-billing-auto-row button.secondary{background:#edf4f2;color:#35534c}
-.pp-billing-auto-note{margin:8px 0 0;color:#6b7f79;font-size:10px;line-height:1.45}.pp-billing-auto-clients{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;max-height:230px;overflow:auto;margin-top:10px}.pp-billing-auto-client{display:flex;align-items:center;gap:7px;padding:7px 8px;border:1px solid #e2ebe8;border-radius:8px;font-size:11px}.pp-billing-auto-client input{accent-color:#0d8b78}.pp-billing-auto-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}.pp-billing-auto-toast{position:fixed;left:50%;bottom:18px;z-index:12000;max-width:min(620px,90vw);transform:translateX(-50%);padding:11px 15px;border-radius:10px;background:#174f44;color:#fff;font:700 11px/1.4 Segoe UI,Arial;box-shadow:0 12px 35px rgba(0,0,0,.2)}.pp-billing-auto-toast.is-error{background:#9b2c2c}
+.pp-billing-auto-note{margin:8px 0 0;color:#6b7f79;font-size:10px;line-height:1.45}.pp-billing-auto-clients{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;max-height:360px;overflow:auto;margin-top:10px}.pp-billing-auto-client{display:flex;align-items:center;gap:7px;padding:7px 8px;border:1px solid #e2ebe8;border-radius:8px;font-size:11px}.pp-billing-auto-client input{accent-color:#0d8b78}.pp-billing-auto-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}.pp-billing-auto-toast{position:fixed;left:50%;bottom:18px;z-index:12000;max-width:min(620px,90vw);transform:translateX(-50%);padding:11px 15px;border-radius:10px;background:#174f44;color:#fff;font:700 11px/1.4 Segoe UI,Arial;box-shadow:0 12px 35px rgba(0,0,0,.2)}.pp-billing-auto-toast.is-error{background:#9b2c2c}
+@media(max-width:900px){.pp-billing-auto-layer{position:fixed;inset:60px 0 0}.pp-billing-auto-page{padding:18px 13px 36px}.pp-billing-auto-head{flex-direction:column}.pp-billing-auto-body{grid-template-columns:1fr}.pp-billing-auto-card:first-child{grid-column:auto}}
 @media(max-width:650px){.pp-billing-auto-clients{grid-template-columns:1fr}}
 `;document.head.appendChild(style);
 }
 
+let navButton=null;
+function closeManager({goDashboard=false}={}){
+  document.querySelector('.pp-billing-auto-layer')?.remove();
+  navButton?.classList.remove('active');
+  if(goDashboard){
+    const dashboard=[...document.querySelectorAll('.sidebar nav button,aside nav button,nav button')].find(button=>{const value=normalize(button.textContent);return value.includes('dashboard')||value.includes('visao geral')});
+    dashboard?.click();
+  }
+}
+function activateManagerNav(){
+  document.querySelectorAll('.sidebar nav button.active,aside nav button.active,nav button.active').forEach(button=>button.classList.remove('active'));
+  navButton?.classList.add('active');
+}
+
 async function openManager(){
-  injectStyle();document.querySelector('.pp-billing-auto-layer')?.remove();
-  const [settings,clientRows]=await Promise.all([getSettings(),clients()]),days=Math.max(0,Math.min(30,Math.floor(num(settings.billing_auto_days_before)||7))),enabled=settings.billing_auto_enabled!==false&&String(settings.billing_auto_enabled)!=='false';
-  const active=clientRows.filter(activeClient),layer=document.createElement('div');layer.className='pp-billing-auto-layer';
-  layer.innerHTML=`<section class="pp-billing-auto-modal" role="dialog" aria-modal="true"><header class="pp-billing-auto-head"><h2>Geração de mensalidades</h2><button class="pp-billing-auto-close" type="button">×</button></header><div class="pp-billing-auto-body">
-  <section class="pp-billing-auto-card"><h3>Automática mensal</h3><div class="pp-billing-auto-row"><label><span>Ativa</span><select class="pp-auto-enabled"><option value="true">Sim</option><option value="false">Não</option></select></label><label><span>Gerar quantos dias antes</span><input class="pp-auto-days" type="number" min="0" max="30" value="${days}"></label><button class="pp-auto-save" type="button">Salvar</button><button class="pp-auto-run secondary" type="button">Verificar agora</button></div><p class="pp-billing-auto-note">Evita duplicidade por cliente + vencimento. A primeira cobrança proporcional é gerada no cadastro e não participa do cashback.</p></section>
-  <section class="pp-billing-auto-card"><h3>Gerar agora</h3><div class="pp-billing-auto-row"><label style="flex:1;min-width:230px"><span>Cliente</span><select class="pp-now-client"><option value="">Selecione</option>${active.map(c=>`<option value="${Number(c.id)}">${escapeHtml(c.name||`Cliente ${c.id}`)} · ${escapeHtml(c.contract_number||'sem contrato')}</option>`).join('')}</select></label><button class="pp-now-generate" type="button">Gerar agora</button></div></section>
-  <section class="pp-billing-auto-card"><h3>Gerar em lote</h3><div class="pp-billing-auto-row"><label><span>Competência</span><input class="pp-batch-month" type="month" value="${monthKey(new Date())}"></label><button class="pp-batch-all secondary" type="button">Selecionar todos</button></div><div class="pp-billing-auto-clients">${active.map(c=>`<label class="pp-billing-auto-client"><input type="checkbox" value="${Number(c.id)}"><span>${escapeHtml(c.name||`Cliente ${c.id}`)}</span></label>`).join('')||'<span>Nenhum cliente ativo.</span>'}</div><div class="pp-billing-auto-actions"><button class="pp-batch-generate" type="button">Gerar selecionados</button></div></section>
-  </div></section>`;
-  document.body.appendChild(layer);
-  layer.querySelector('.pp-auto-enabled').value=enabled?'true':'false';
-  layer.querySelector('.pp-billing-auto-close').onclick=()=>layer.remove();layer.addEventListener('click',event=>{if(event.target===layer)layer.remove()});
-  layer.querySelector('.pp-auto-save').onclick=async()=>{try{const nextEnabled=layer.querySelector('.pp-auto-enabled').value==='true',nextDays=Math.max(0,Math.min(30,Math.floor(num(layer.querySelector('.pp-auto-days').value)||7)));await saveSettings({billing_auto_enabled:nextEnabled,billing_auto_days_before:nextDays});toast('Configuração da geração automática salva.')}catch(error){toast(error.message||String(error),'error')}};
-  layer.querySelector('.pp-auto-run').onclick=async()=>{try{await runAutomatic({force:true,notify:true})}catch(error){toast(error.message||String(error),'error')}};
-  layer.querySelector('.pp-now-generate').onclick=async()=>{const id=Number(layer.querySelector('.pp-now-client').value);if(!id)return toast('Selecione um cliente.','error');try{await generateNow(id)}catch(error){toast(error.message||String(error),'error')}};
-  layer.querySelector('.pp-batch-all').onclick=()=>{const boxes=[...layer.querySelectorAll('.pp-billing-auto-client input')],all=boxes.every(x=>x.checked);boxes.forEach(x=>x.checked=!all)};
-  layer.querySelector('.pp-batch-generate').onclick=async()=>{const ids=[...layer.querySelectorAll('.pp-billing-auto-client input:checked')].map(x=>Number(x.value)),month=layer.querySelector('.pp-batch-month').value;try{await generateBatch(ids,month)}catch(error){toast(error.message||String(error),'error')}};
+  injectStyle();
+  closeManager();
+  activateManagerNav();
+  const content=document.querySelector('.content')||document.body,layer=document.createElement('div');
+  layer.className='pp-billing-auto-layer';
+  layer.innerHTML='<div class="pp-billing-auto-page"><header class="pp-billing-auto-head"><div class="pp-billing-auto-head-text"><span>FINANCEIRO E COBRANÇAS</span><h2>Mensalidades</h2><p>Gerencie a geração automática, individual e em lote das mensalidades dos clientes.</p></div><button class="pp-billing-auto-close" type="button">Voltar</button></header><section class="pp-billing-auto-card"><h3>Carregando mensalidades...</h3></section></div>';
+  content.appendChild(layer);
+  layer.querySelector('.pp-billing-auto-close').onclick=()=>closeManager({goDashboard:true});
+  try{
+    const [settings,clientRows]=await Promise.all([getSettings(),clients()]),days=Math.max(0,Math.min(30,Math.floor(num(settings.billing_auto_days_before)||7))),enabled=settings.billing_auto_enabled!==false&&String(settings.billing_auto_enabled)!=='false';
+    if(!layer.isConnected)return;
+    const active=clientRows.filter(activeClient),page=layer.querySelector('.pp-billing-auto-page');
+    page.innerHTML=`<header class="pp-billing-auto-head"><div class="pp-billing-auto-head-text"><span>FINANCEIRO E COBRANÇAS</span><h2>Mensalidades</h2><p>Gerencie a geração automática, individual e em lote das mensalidades dos clientes.</p></div><button class="pp-billing-auto-close" type="button">Voltar</button></header><div class="pp-billing-auto-body">
+    <section class="pp-billing-auto-card"><h3>Automática mensal</h3><div class="pp-billing-auto-row"><label><span>Ativa</span><select class="pp-auto-enabled"><option value="true">Sim</option><option value="false">Não</option></select></label><label><span>Gerar quantos dias antes</span><input class="pp-auto-days" type="number" min="0" max="30" value="${days}"></label><button class="pp-auto-save" type="button">Salvar</button><button class="pp-auto-run secondary" type="button">Verificar agora</button></div><p class="pp-billing-auto-note">Evita duplicidade por cliente + vencimento. A primeira cobrança proporcional é gerada no cadastro e não participa do cashback.</p></section>
+    <section class="pp-billing-auto-card"><h3>Gerar agora</h3><div class="pp-billing-auto-row"><label style="flex:1;min-width:230px"><span>Cliente</span><select class="pp-now-client"><option value="">Selecione</option>${active.map(c=>`<option value="${Number(c.id)}">${escapeHtml(c.name||`Cliente ${c.id}`)} · ${escapeHtml(c.contract_number||'sem contrato')}</option>`).join('')}</select></label><button class="pp-now-generate" type="button">Gerar agora</button></div></section>
+    <section class="pp-billing-auto-card"><h3>Gerar em lote</h3><div class="pp-billing-auto-row"><label><span>Competência</span><input class="pp-batch-month" type="month" value="${monthKey(new Date())}"></label><button class="pp-batch-all secondary" type="button">Selecionar todos</button></div><div class="pp-billing-auto-clients">${active.map(c=>`<label class="pp-billing-auto-client"><input type="checkbox" value="${Number(c.id)}"><span>${escapeHtml(c.name||`Cliente ${c.id}`)}</span></label>`).join('')||'<span>Nenhum cliente ativo.</span>'}</div><div class="pp-billing-auto-actions"><button class="pp-batch-generate" type="button">Gerar selecionados</button></div></section>
+    </div>`;
+    layer.querySelector('.pp-auto-enabled').value=enabled?'true':'false';
+    layer.querySelector('.pp-billing-auto-close').onclick=()=>closeManager({goDashboard:true});
+    layer.querySelector('.pp-auto-save').onclick=async()=>{try{const nextEnabled=layer.querySelector('.pp-auto-enabled').value==='true',nextDays=Math.max(0,Math.min(30,Math.floor(num(layer.querySelector('.pp-auto-days').value)||7)));await saveSettings({billing_auto_enabled:nextEnabled,billing_auto_days_before:nextDays});toast('Configuração da geração automática salva.')}catch(error){toast(error.message||String(error),'error')}};
+    layer.querySelector('.pp-auto-run').onclick=async()=>{try{await runAutomatic({force:true,notify:true})}catch(error){toast(error.message||String(error),'error')}};
+    layer.querySelector('.pp-now-generate').onclick=async()=>{const id=Number(layer.querySelector('.pp-now-client').value);if(!id)return toast('Selecione um cliente.','error');try{await generateNow(id)}catch(error){toast(error.message||String(error),'error')}};
+    layer.querySelector('.pp-batch-all').onclick=()=>{const boxes=[...layer.querySelectorAll('.pp-billing-auto-client input')],all=boxes.every(x=>x.checked);boxes.forEach(x=>x.checked=!all)};
+    layer.querySelector('.pp-batch-generate').onclick=async()=>{const ids=[...layer.querySelectorAll('.pp-billing-auto-client input:checked')].map(x=>Number(x.value)),month=layer.querySelector('.pp-batch-month').value;try{await generateBatch(ids,month)}catch(error){toast(error.message||String(error),'error')}};
+  }catch(error){
+    if(layer.isConnected){const page=layer.querySelector('.pp-billing-auto-page');page.innerHTML=`<header class="pp-billing-auto-head"><div class="pp-billing-auto-head-text"><span>FINANCEIRO E COBRANÇAS</span><h2>Mensalidades</h2><p>Não foi possível carregar esta área.</p></div><button class="pp-billing-auto-close" type="button">Voltar</button></header><section class="pp-billing-auto-card"><h3>${escapeHtml(error.message||String(error))}</h3></section>`;layer.querySelector('.pp-billing-auto-close').onclick=()=>closeManager({goDashboard:true})}
+  }
 }
 function menuButtonTemplate(){
   const buttons=[...document.querySelectorAll('.sidebar nav button,aside nav button,nav button')];
@@ -264,7 +293,7 @@ function mountButton(){
   injectStyle();
   const template=menuButtonTemplate();
   let button=document.querySelector('.pp-billing-auto-fab');
-  if(!template){if(button?.isConnected)button.remove();return false}
+  if(!template){if(button?.isConnected)button.remove();navButton=null;return false}
   if(!button||button.dataset.ppMenuClone!=='financeiro'){
     if(button?.isConnected)button.remove();
     button=template.cloneNode(true);
@@ -276,8 +305,9 @@ function mountButton(){
     replaceMenuLabel(button);
     button.title='Geração automática, gerar agora e gerar em lote';
     button.setAttribute('aria-label','Mensalidades');
-    button.onclick=event=>{event.preventDefault();event.stopPropagation();openManager().catch(error=>toast(error.message||String(error),'error'))};
+    button.onclick=event=>{event.preventDefault();event.stopPropagation();navButton=button;openManager().catch(error=>toast(error.message||String(error),'error'))};
   }
+  navButton=button;
   if(button.previousElementSibling!==template)template.insertAdjacentElement('afterend',button);
   return true;
 }
@@ -309,6 +339,11 @@ function observeMenu(){
   });
   menuWaitObserver.observe(document.documentElement,{childList:true,subtree:true});
 }
+
+document.addEventListener('click',event=>{
+  const button=event.target.closest?.('.sidebar nav button,aside nav button,nav button');
+  if(button&&button!==navButton&&document.querySelector('.pp-billing-auto-layer'))closeManager();
+},true);
 
 window.ProvedorPlusBillingAutomation={run:runAutomatic,generateNow,generateBatch,generateFirst:issueFirstProrated,open:openManager};
 

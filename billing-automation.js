@@ -280,11 +280,22 @@ function mountButton(){
   }
   if(button.previousElementSibling!==template)template.insertAdjacentElement('afterend',button);
 }
+function observeMenu(){
+  const nav=document.querySelector('.sidebar nav,aside nav,nav');
+  if(!nav)return;
+  let scheduled=false;
+  const observer=new MutationObserver(()=>{
+    if(scheduled)return;
+    scheduled=true;
+    requestAnimationFrame(()=>{scheduled=false;mountButton()});
+  });
+  observer.observe(nav,{childList:true,subtree:true});
+}
 
 window.ProvedorPlusBillingAutomation={run:runAutomatic,generateNow,generateBatch,generateFirst:issueFirstProrated,open:openManager};
 
 mountButton();
-setInterval(mountButton,1200);
+observeMenu();
 setTimeout(()=>runAutomatic().catch(error=>console.error('Provedor Plus: falha na geração automática de mensalidades.',error)),5000);
 setInterval(()=>runAutomatic().catch(error=>console.error('Provedor Plus: falha na verificação diária de mensalidades.',error)),30*60*1000);
 })();

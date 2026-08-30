@@ -11,6 +11,12 @@
     if(!response.ok||!body.ok)throw Error(body.error||`Falha no banco da nuvem (HTTP ${response.status}).`);
     return body.data;
   }
+  async function bankSettingsCall(action,data={}){
+    const response=await fetch('/api/bank-settings',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data})});
+    let body={};try{body=await response.json()}catch{}
+    if(!response.ok||!body.ok)throw Error(body.error||`Falha ao salvar a integração bancária (HTTP ${response.status}).`);
+    return body.data;
+  }
   async function secretSet(id,password){return dataCall('routers.secret.save',{id:Number(id),password:String(password||'')})}
   async function secretGet(id){try{return String((await dataCall('routers.secret.get',{id:Number(id)}))?.password||'')}catch{return ''}}
   async function secretDelete(id){try{return await dataCall('routers.secret.delete',{id:Number(id)})}catch{return {deleted:false,id:Number(id)||0}}}
@@ -39,7 +45,40 @@
 
   window.ProvedorPlusInstallCloudAdapter=async()=>{
     const api=window.provedor;if(!api||api.__cloudAdapterInstalled)return;
-    const base={routers:{...api.routers},mikrotik:{...api.mikrotik},clients:{...api.clients},vpn:{...api.vpn}};
+    const base={routers:{...api.routers},mikrotik:{...api.mikrotik},clients:{...api.clients},vpn:{...api.vpn},banks:{...api.banks}};
+
+    async function hydrateBankSettings(){
+      if(!base.banks?.get)return;
+      try{
+        const remote=await bankSettingsCall('get'),local=await base.banks.get();
+        const efi=remote?.efi||{};
+        if(base.banks.saveEfi&&(efi.clientId||efi.clientSecret||efi.certificatePassword)){
+          await base.banks.saveEfi({
+            enabled:efi.enabled??local?.efi?.enabled,
+            environment:efi.environment||local?.efi?.environment||'sandbox',
+            clientId:efi.clientId||'',
+            clientSecret:efi.clientSecret||'',
+            certificatePassword:efi.certificatePassword||'',
+            pixKey:efi.pixKey??local?.efi?.pixKey??'',
+            pixAutoReceiverAgency:efi.pixAutoReceiverAgency??local?.efi?.pixAutoReceiverAgency??'',
+            pixAutoReceiverAccount:efi.pixAutoReceiverAccount??local?.efi?.pixAutoReceiverAccount??'',
+            webhookUrl:efi.webhookUrl??local?.efi?.webhookUrl??''
+          });
+        }
+        const mercadoPago=remote?.mercadoPago||{};
+        if(base.banks.saveMercadoPago&&(mercadoPago.publicKey||mercadoPago.accessToken)){
+          await base.banks.saveMercadoPago({
+            enabled:mercadoPago.enabled??local?.mercadoPago?.enabled,
+            environment:mercadoPago.environment||local?.mercadoPago?.environment||'sandbox',
+            publicKey:mercadoPago.publicKey??local?.mercadoPago?.publicKey??'',
+            accessToken:mercadoPago.accessToken||''
+          });
+        }
+      }catch(error){
+        if(!/Somente o administrador|Sessão expirada/i.test(String(error?.message||error)))console.warn('Provedor Plus: credenciais bancárias da nuvem não puderam ser restauradas.',error);
+      }
+    }
+
     async function routerRecord(id){const list=await base.routers.list(),r=(list||[]).find(x=>Number(x.id)===Number(id));if(!r)throw Error('MikroTik cadastrado não encontrado.');return r}
     async function routerAuth(id,password=''){
       const entered=String(password||'').trim();
@@ -49,6 +88,53 @@
       return normalizeRouter(r,pass);
     }
     async function clientRecord(id){const list=await base.clients.list(),c=(list||[]).find(x=>Number(x.id)===Number(id));if(!c)throw Error('Cliente não encontrado.');return c}
+
+    await hydrateBankSettings();
+
+    if(base.banks?.get){
+      api.banks.get=async()=>{
+        const local=await base.banks.get();
+        try{
+          const remote=await bankSettingsCall('get'),efi=remote?.efi||{},mercadoPago=remote?.mercadoPago||{};
+          return {
+            ...local,
+            efi:{
+              ...(local?.efi||{}),
+              enabled:efi.enabled??local?.efi?.enabled,
+              environment:efi.environment||local?.efi?.environment,
+              clientIdConfigured:Boolean(efi.clientId)||Boolean(local?.efi?.clientIdConfigured),
+              clientSecretConfigured:Boolean(efi.clientSecret)||Boolean(local?.efi?.clientSecretConfigured),
+              certificatePasswordConfigured:Boolean(efi.certificatePassword)||Boolean(local?.efi?.certificatePasswordConfigured),
+              pixKey:efi.pixKey??local?.efi?.pixKey,
+              pixAutoReceiverAgency:efi.pixAutoReceiverAgency??local?.efi?.pixAutoReceiverAgency,
+              pixAutoReceiverAccount:efi.pixAutoReceiverAccount??local?.efi?.pixAutoReceiverAccount,
+              webhookUrl:efi.webhookUrl??local?.efi?.webhookUrl
+            },
+            mercadoPago:{
+              ...(local?.mercadoPago||{}),
+              enabled:mercadoPago.enabled??local?.mercadoPago?.enabled,
+              environment:mercadoPago.environment||local?.mercadoPago?.environment,
+              publicKey:mercadoPago.publicKey??local?.mercadoPago?.publicKey,
+              accessTokenConfigured:Boolean(mercadoPago.accessToken)||Boolean(local?.mercadoPago?.accessTokenConfigured)
+            }
+          };
+        }catch{return local}
+      };
+    }
+    if(base.banks?.saveEfi){
+      api.banks.saveEfi=async data=>{
+        const saved=await base.banks.saveEfi(data||{});
+        await bankSettingsCall('save-efi',data||{});
+        return saved;
+      };
+    }
+    if(base.banks?.saveMercadoPago){
+      api.banks.saveMercadoPago=async data=>{
+        const saved=await base.banks.saveMercadoPago(data||{});
+        await bankSettingsCall('save-mercado-pago',data||{});
+        return saved;
+      };
+    }
 
     api.routers.list=async()=>{const list=await base.routers.list();return Promise.all((list||[]).map(async r=>({...r,connection_method:'rest',port:Number(r.port)===8728?443:(Number(r.port)||443),has_password:Boolean(await secretGet(r.id))||Boolean(r.has_password)})))};
     api.routers.save=async data=>{

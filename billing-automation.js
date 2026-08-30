@@ -264,7 +264,7 @@ function mountButton(){
   injectStyle();
   const template=menuButtonTemplate();
   let button=document.querySelector('.pp-billing-auto-fab');
-  if(!template){if(button?.isConnected)button.remove();return}
+  if(!template){if(button?.isConnected)button.remove();return false}
   if(!button||button.dataset.ppMenuClone!=='financeiro'){
     if(button?.isConnected)button.remove();
     button=template.cloneNode(true);
@@ -279,23 +279,41 @@ function mountButton(){
     button.onclick=event=>{event.preventDefault();event.stopPropagation();openManager().catch(error=>toast(error.message||String(error),'error'))};
   }
   if(button.previousElementSibling!==template)template.insertAdjacentElement('afterend',button);
+  return true;
+}
+let menuObserver=null,menuWaitObserver=null,observedNav=null;
+function connectMenuObserver(){
+  const nav=document.querySelector('.sidebar nav,aside nav,nav');
+  if(!nav)return false;
+  if(observedNav!==nav){
+    menuObserver?.disconnect();
+    observedNav=nav;
+    let scheduled=false;
+    menuObserver=new MutationObserver(()=>{
+      if(scheduled)return;
+      scheduled=true;
+      requestAnimationFrame(()=>{scheduled=false;mountButton()});
+    });
+    menuObserver.observe(nav,{childList:true,subtree:true});
+  }
+  mountButton();
+  return true;
 }
 function observeMenu(){
-  const nav=document.querySelector('.sidebar nav,aside nav,nav');
-  if(!nav)return;
-  let scheduled=false;
-  const observer=new MutationObserver(()=>{
-    if(scheduled)return;
-    scheduled=true;
-    requestAnimationFrame(()=>{scheduled=false;mountButton()});
+  if(connectMenuObserver())return;
+  if(menuWaitObserver)return;
+  menuWaitObserver=new MutationObserver(()=>{
+    if(!connectMenuObserver())return;
+    menuWaitObserver?.disconnect();
+    menuWaitObserver=null;
   });
-  observer.observe(nav,{childList:true,subtree:true});
+  menuWaitObserver.observe(document.documentElement,{childList:true,subtree:true});
 }
 
 window.ProvedorPlusBillingAutomation={run:runAutomatic,generateNow,generateBatch,generateFirst:issueFirstProrated,open:openManager};
 
-mountButton();
 observeMenu();
+setTimeout(()=>{if(!document.querySelector('.pp-billing-auto-fab'))observeMenu()},600);
 setTimeout(()=>runAutomatic().catch(error=>console.error('Provedor Plus: falha na geração automática de mensalidades.',error)),5000);
 setInterval(()=>runAutomatic().catch(error=>console.error('Provedor Plus: falha na verificação diária de mensalidades.',error)),30*60*1000);
 })();

@@ -1,8 +1,15 @@
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const read=async(paths)=>{const parts=await Promise.all(paths.map(async p=>{const r=await fetch(p,{cache:'no-store'});if(!r.ok)throw new Error(`Falha ao carregar ${p}: ${r.status}`);return r.text()}));return parts.join('')};
-  const loadScript=src=>new Promise((resolve,reject)=>{const s=document.createElement('script');s.src=src;s.onload=resolve;s.onerror=()=>reject(new Error(`Falha ao carregar ${src}`));document.head.appendChild(s)});
-  const loadStyle=(href,id)=>new Promise((resolve,reject)=>{const existing=document.getElementById(id);if(existing){resolve();return}const link=document.createElement('link');link.rel='stylesheet';link.href=href;link.id=id;link.onload=resolve;link.onerror=()=>reject(new Error(`Falha ao carregar ${href}`));document.head.appendChild(link)});
+  const BUILD_TOKEN='20260830-1741-cache1';
+  window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
+  const assetUrl=value=>{
+    const src=String(value||'');
+    if(!src.startsWith('/'))return src;
+    return `${src}${src.includes('?')?'&':'?'}ppbuild=${encodeURIComponent(BUILD_TOKEN)}`;
+  };
+  const read=async(paths)=>{const parts=await Promise.all(paths.map(async p=>{const url=assetUrl(p),r=await fetch(url,{cache:'no-store'});if(!r.ok)throw new Error(`Falha ao carregar ${p}: ${r.status}`);return r.text()}));return parts.join('')};
+  const loadScript=src=>new Promise((resolve,reject)=>{const s=document.createElement('script');s.src=assetUrl(src);s.onload=resolve;s.onerror=()=>reject(new Error(`Falha ao carregar ${src}`));document.head.appendChild(s)});
+  const loadStyle=(href,id)=>new Promise((resolve,reject)=>{const existing=document.getElementById(id);if(existing){resolve();return}const link=document.createElement('link');link.rel='stylesheet';link.href=assetUrl(href);link.id=id;link.onload=resolve;link.onerror=()=>reject(new Error(`Falha ao carregar ${href}`));document.head.appendChild(link)});
   const loadScriptStable=async(src,{dropCharacterData=false,ignoreWithin=[]}={})=>{
     const Native=window.MutationObserver;
     if(typeof Native!=='function')return loadScript(src);

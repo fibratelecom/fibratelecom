@@ -31,7 +31,7 @@ function dueFor(year,monthIndex,dueDay){
 function addMonthsDue(date,months,dueDay){return dueFor(date.getFullYear(),date.getMonth()+months,dueDay)}
 function daysBetween(a,b){return Math.max(0,Math.round((b.getTime()-a.getTime())/DAY))}
 function brl(cents){return new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format((num(cents)||0)/100)}
-function escapeHtml(value){return String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
+function escapeHtml(value){return String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[ch]))}
 
 function toast(message,type='ok'){
   document.querySelector('.pp-billing-auto-toast')?.remove();
@@ -216,15 +216,14 @@ api.clients.save=async data=>{
 function injectStyle(){
   if(document.getElementById('pp-billing-auto-style'))return;
   const style=document.createElement('style');style.id='pp-billing-auto-style';style.textContent=`
-.pp-billing-auto-fab{position:static;z-index:auto;display:inline-flex;align-items:center;justify-content:center;min-height:38px;border:1px solid #b9dcd4;border-radius:8px;padding:8px 13px;background:#edf8f5;color:#0d806f;font:750 12px/1.25 Segoe UI,Arial;box-shadow:none;cursor:pointer;white-space:nowrap}
-.pp-billing-auto-fab:hover{background:#e3f4ef;border-color:#9dcfc4}
+.pp-billing-auto-fab{cursor:pointer}
 .pp-billing-auto-layer{position:fixed;inset:0;z-index:10050;display:grid;place-items:center;padding:18px;background:rgba(16,32,28,.38);backdrop-filter:blur(2px)}
 .pp-billing-auto-modal{width:min(820px,96vw);max-height:90vh;overflow:auto;background:#fff;border-radius:16px;box-shadow:0 24px 70px rgba(0,0,0,.2);color:#304b45;font-family:Segoe UI,Arial,sans-serif}
 .pp-billing-auto-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 20px;border-bottom:1px solid #e3ece9}.pp-billing-auto-head h2{margin:0;font-size:18px}.pp-billing-auto-close{border:0;background:#eef5f3;border-radius:8px;width:32px;height:32px;cursor:pointer}
 .pp-billing-auto-body{display:grid;gap:14px;padding:18px 20px}.pp-billing-auto-card{padding:14px;border:1px solid #dfeae7;border-radius:12px;background:#fbfdfc}.pp-billing-auto-card h3{margin:0 0 10px;font-size:14px}
 .pp-billing-auto-row{display:flex;flex-wrap:wrap;align-items:end;gap:10px}.pp-billing-auto-row label{display:grid;gap:5px;font-size:11px;font-weight:700}.pp-billing-auto-row input,.pp-billing-auto-row select{height:36px;box-sizing:border-box;border:1px solid #cbded9;border-radius:8px;padding:0 9px;background:#fff;color:#304b45}.pp-billing-auto-row button,.pp-billing-auto-actions button{height:36px;border:0;border-radius:8px;padding:0 12px;background:#0d8b78;color:#fff;font-weight:750;cursor:pointer}.pp-billing-auto-row button.secondary{background:#edf4f2;color:#35534c}
 .pp-billing-auto-note{margin:8px 0 0;color:#6b7f79;font-size:10px;line-height:1.45}.pp-billing-auto-clients{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;max-height:230px;overflow:auto;margin-top:10px}.pp-billing-auto-client{display:flex;align-items:center;gap:7px;padding:7px 8px;border:1px solid #e2ebe8;border-radius:8px;font-size:11px}.pp-billing-auto-client input{accent-color:#0d8b78}.pp-billing-auto-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}.pp-billing-auto-toast{position:fixed;left:50%;bottom:18px;z-index:12000;max-width:min(620px,90vw);transform:translateX(-50%);padding:11px 15px;border-radius:10px;background:#174f44;color:#fff;font:700 11px/1.4 Segoe UI,Arial;box-shadow:0 12px 35px rgba(0,0,0,.2)}.pp-billing-auto-toast.is-error{background:#9b2c2c}
-@media(max-width:650px){.pp-billing-auto-clients{grid-template-columns:1fr}.pp-billing-auto-fab{width:100%}}
+@media(max-width:650px){.pp-billing-auto-clients{grid-template-columns:1fr}}
 `;document.head.appendChild(style);
 }
 
@@ -246,13 +245,26 @@ async function openManager(){
   layer.querySelector('.pp-batch-all').onclick=()=>{const boxes=[...layer.querySelectorAll('.pp-billing-auto-client input')],all=boxes.every(x=>x.checked);boxes.forEach(x=>x.checked=!all)};
   layer.querySelector('.pp-batch-generate').onclick=async()=>{const ids=[...layer.querySelectorAll('.pp-billing-auto-client input:checked')].map(x=>Number(x.value)),month=layer.querySelector('.pp-batch-month').value;try{await generateBatch(ids,month)}catch(error){toast(error.message||String(error),'error')}};
 }
+function menuButtonTemplate(){
+  const buttons=[...document.querySelectorAll('.sidebar nav button,aside nav button,nav button')];
+  return buttons.find(button=>normalize(button.textContent)==='financeiro')||buttons.find(button=>normalize(button.textContent).includes('financeiro'))||null;
+}
 function mountButton(){
   injectStyle();
-  const host=document.querySelector('.pp-dashboard-refresh');
+  const template=menuButtonTemplate();
   let button=document.querySelector('.pp-billing-auto-fab');
-  if(!button){button=document.createElement('button');button.className='pp-billing-auto-fab';button.type='button';button.textContent='Mensalidades';button.title='Geração automática, gerar agora e gerar em lote';button.onclick=()=>openManager().catch(error=>toast(error.message||String(error),'error'))}
-  if(host){const refresh=host.querySelector('#pp-dashboard-refresh');if(button.parentElement!==host){if(refresh)host.insertBefore(button,refresh);else host.appendChild(button)}}
-  else if(button.isConnected)button.remove();
+  if(!template){if(button?.isConnected)button.remove();return}
+  if(!button){
+    button=document.createElement('button');
+    button.type='button';
+    button.className=`${String(template.className||'').replace(/\bactive\b/g,'').trim()} pp-billing-auto-fab`.trim();
+    button.innerHTML=String(template.innerHTML||'Financeiro').replace(/Financeiro/gi,'Mensalidades');
+    if(normalize(button.textContent)!=='mensalidades')button.textContent='Mensalidades';
+    button.title='Geração automática, gerar agora e gerar em lote';
+    button.setAttribute('aria-label','Mensalidades');
+    button.onclick=event=>{event.preventDefault();event.stopPropagation();openManager().catch(error=>toast(error.message||String(error),'error'))};
+  }
+  if(button.previousElementSibling!==template)template.insertAdjacentElement('afterend',button);
 }
 
 window.ProvedorPlusBillingAutomation={run:runAutomatic,generateNow,generateBatch,generateFirst:issueFirstProrated,open:openManager};

@@ -1,6 +1,6 @@
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260830-1741-cache1';
+  const BUILD_TOKEN='20260830-1747-cache2';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');

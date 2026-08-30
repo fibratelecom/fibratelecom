@@ -172,7 +172,8 @@
     window.__ProvedorPlusPlanManagementInstalled=true;
     const STATE_KEY='provedor_plus_web_1_0_17';
     const norm=value=>String(value??'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
-    let normalizeAttempted=false,normalizeBusy=false,actionBusy=false,patchTimer=null;
+    const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+    let normalizeAttempted=false,normalizeBusy=false,actionBusy=false,routeToken=0,gateTimer=null,repairTimer=null;
 
     const active=plan=>plan?.active!==false&&plan?.enabled!==false;
     const getState=()=>window.ProvedorPlusCloudState?.getState?.()||{};
@@ -199,6 +200,10 @@
       const grid=[...document.querySelectorAll('.plans-grid')].find(node=>node.getClientRects().length>0);
       if(!grid)return null;
       return {grid,area:grid.closest('.page-wrap')||grid.closest('.content')||grid.parentElement};
+    };
+    const activePlansNav=()=>{
+      const buttons=[...document.querySelectorAll('.sidebar nav button.active,aside nav button.active,nav button.active')];
+      return buttons.find(button=>button.getClientRects().length>0&&norm(button.textContent)==='planos')||null;
     };
     const originalRefresh=area=>[...(area?.querySelectorAll('button')||[])].find(button=>norm(button.textContent)==='atualizar')||null;
     const refreshView=area=>{
@@ -230,6 +235,9 @@
     function ensurePlanStyle(){
       if(document.getElementById('pp-plan-management-style'))return;
       const style=document.createElement('style');style.id='pp-plan-management-style';style.textContent=`
+        html.pp-plan-route-loading .content{position:relative!important;min-height:calc(100vh - 1px)!important;overflow:hidden!important;background:#f6f8f7!important}
+        html.pp-plan-route-loading .content>*{visibility:hidden!important}
+        html.pp-plan-route-loading .content::after{content:'Carregando Planos...';position:absolute;inset:0;z-index:40;display:grid;place-items:center;visibility:visible!important;color:#71847f;background:#f6f8f7;font:700 11px/1.4 Segoe UI,Arial,sans-serif}
         .pp-plan-management-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 14px;padding:12px 14px;background:#fff;border:1px solid #dfe8e5;border-radius:10px;box-sizing:border-box}
         .pp-plan-management-toolbar strong{display:block;color:#27453f;font-size:12px}.pp-plan-management-toolbar small{display:block;margin-top:3px;color:#778984;font-size:10px;line-height:1.35}.pp-plan-management-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}
         .pp-plan-management-actions button{min-height:33px;padding:0 11px;border:1px solid #d7e3e0;border-radius:8px;background:#fff;color:#536a64;font-size:10px;font-weight:800;cursor:pointer}.pp-plan-management-actions button[data-pp-plan-save-promo]{background:#0d8b78;border-color:#0d8b78;color:#fff}.pp-plan-management-actions button[data-pp-plan-delete-selected]{color:#b54b44;border-color:#efc9c5;background:#fff8f7}.pp-plan-management-actions button:disabled{opacity:.55;cursor:wait}
@@ -237,8 +245,15 @@
         @media(max-width:760px){.pp-plan-management-toolbar{align-items:stretch;flex-direction:column}.pp-plan-management-actions{justify-content:stretch}.pp-plan-management-actions button{flex:1}.plan-card>.pp-plan-management-row{align-items:flex-start;flex-direction:column}}
       `;document.head.appendChild(style);
     }
+    function setRouteGate(enabled){
+      ensurePlanStyle();
+      clearTimeout(gateTimer);gateTimer=null;
+      document.documentElement.classList.toggle('pp-plan-route-loading',Boolean(enabled));
+      if(enabled)gateTimer=setTimeout(()=>{document.documentElement.classList.remove('pp-plan-route-loading');gateTimer=null},7000);
+    }
     async function normalizePlansOnce(){
-      if(normalizeAttempted||normalizeBusy)return false;
+      if(normalizeBusy){while(normalizeBusy)await wait(25);return false}
+      if(normalizeAttempted)return false;
       normalizeAttempted=true;normalizeBusy=true;
       try{
         const clients=await readClients(),state=getState(),plans=Array.isArray(state?.plans)?state.plans:[];
@@ -274,13 +289,18 @@
       toolbar=document.createElement('section');toolbar.className='pp-plan-management-toolbar';toolbar.innerHTML='<div><strong>Divulgação na Área do Cliente</strong><small>Marque “Área do Cliente” nos planos da promoção. Use “Selecionar” somente para excluir planos.</small></div><div class="pp-plan-management-actions"><span data-pp-plan-selected-label style="font-size:9px;color:#7b8c88">Nenhum selecionado</span><button type="button" data-pp-plan-select-all>Selecionar todos</button><button type="button" data-pp-plan-delete-selected>Excluir selecionados</button><button type="button" data-pp-plan-save-promo>Salvar promoção</button></div>';
       grid.parentElement?.insertBefore(toolbar,grid);return toolbar;
     }
+    const viewReady=current=>{
+      if(!current?.grid?.isConnected||!current?.area?.isConnected)return false;
+      const cards=[...current.grid.querySelectorAll(':scope > .plan-card')];
+      return Boolean(cards.length&&current.area.querySelector('.pp-plan-management-toolbar')&&cards.every(card=>card.querySelector(':scope > .pp-plan-management-row')));
+    };
     async function patchPlans(){
-      const current=page();if(!current)return;
+      const current=page();if(!current)return false;
       ensurePlanStyle();
       const changed=await normalizePlansOnce();
-      if(changed){refreshView(current.area);schedulePatch(320);return}
-      const state=getState(),mapped=mapCards(state,current.grid);if(!mapped.length)return;
-      const toolbar=createToolbar(current.area,current.grid);
+      if(changed){refreshView(current.area);return 'refresh'}
+      const state=getState(),mapped=mapCards(state,current.grid);if(!mapped.length)return false;
+      createToolbar(current.area,current.grid);
       for(const {card,plan,index} of mapped){
         card.dataset.ppPlanIndex=String(index);
         let row=card.querySelector(':scope > .pp-plan-management-row');
@@ -288,8 +308,41 @@
         const portal=row.querySelector('[data-pp-plan-portal]');if(portal)portal.checked=plan?.portal_visible===true;
       }
       updateSelectedLabel(current.area);
+      return viewReady(current);
     }
-    function schedulePatch(delay=120){clearTimeout(patchTimer);patchTimer=setTimeout(()=>patchPlans().catch(error=>console.error('Provedor Plus: falha ao preparar os controles de Planos.',error)),delay)}
+    async function stableView(token){
+      for(const delay of [80,160,280,420]){
+        await wait(delay);
+        if(token!==routeToken)return false;
+        const current=page();
+        if(!viewReady(current))return false;
+      }
+      return true;
+    }
+    async function preparePlanRoute(resetNormalization=true){
+      const token=++routeToken;
+      if(resetNormalization)normalizeAttempted=false;
+      setRouteGate(true);
+      const deadline=Date.now()+6500;
+      while(token===routeToken&&Date.now()<deadline){
+        try{
+          const result=await patchPlans();
+          if(result===true&&await stableView(token)){
+            if(token===routeToken)setRouteGate(false);
+            return true;
+          }
+          await wait(result==='refresh'?140:55);
+        }catch(error){console.error('Provedor Plus: falha ao preparar os controles de Planos.',error);await wait(90)}
+      }
+      if(token===routeToken)setRouteGate(false);
+      return false;
+    }
+    function repairPlanRoute(delay=180){
+      clearTimeout(repairTimer);
+      repairTimer=setTimeout(()=>{
+        if(page()||activePlansNav())preparePlanRoute(false).catch(error=>console.error('Provedor Plus: falha ao restaurar a tela atual de Planos.',error));
+      },delay);
+    }
     async function savePromotion(area){
       if(actionBusy)return;actionBusy=true;
       const button=area.querySelector('[data-pp-plan-save-promo]');if(button)button.disabled=true;
@@ -316,24 +369,29 @@
         await persist({...state,plans:next});
         normalizeAttempted=false;
         window.alert(`${allowed.length} plano(s) excluído(s).${blocked.length?' Os planos vinculados a clientes foram mantidos.':''}`);
-        refreshView(area);schedulePatch(350);
+        refreshView(area);
+        preparePlanRoute(true).catch(error=>console.error('Provedor Plus: falha ao atualizar Planos após exclusão.',error));
       }catch(error){window.alert(error?.message||'Não foi possível excluir os planos selecionados.')}
       finally{actionBusy=false;if(button)button.disabled=false}
     }
 
+    document.addEventListener('click',event=>{
+      const nav=event.target.closest?.('.sidebar nav button,aside nav button,nav button');
+      if(nav&&norm(nav.textContent)==='planos')preparePlanRoute(true).catch(error=>console.error('Provedor Plus: falha ao abrir Planos.',error));
+    },true);
     document.addEventListener('change',event=>{if(event.target.matches?.('[data-pp-plan-select]')){const current=page();if(current)updateSelectedLabel(current.area)}});
     document.addEventListener('click',event=>{
-      const target=event.target;
-      const nav=target.closest?.('.sidebar nav button,aside nav button,nav button');
-      if(nav&&norm(nav.textContent)==='planos'){normalizeAttempted=false;schedulePatch(180);setTimeout(()=>schedulePatch(0),520);return}
-      const current=page();if(!current)return;
+      const target=event.target,current=page();if(!current)return;
       const all=target.closest?.('[data-pp-plan-select-all]');if(all){event.preventDefault();const boxes=[...current.area.querySelectorAll('[data-pp-plan-select]')],mark=!boxes.length?false:!boxes.every(box=>box.checked);boxes.forEach(box=>box.checked=mark);all.textContent=mark?'Desmarcar todos':'Selecionar todos';updateSelectedLabel(current.area);return}
       if(target.closest?.('[data-pp-plan-save-promo]')){event.preventDefault();savePromotion(current.area);return}
       if(target.closest?.('[data-pp-plan-delete-selected]')){event.preventDefault();deleteSelected(current.area);return}
-      const originalButton=target.closest?.('button');
-      if(originalButton&&['atualizar','criar plano','editar plano','desativar','ativar'].some(label=>norm(originalButton.textContent).includes(label))){normalizeAttempted=false;schedulePatch(450)}
+      const originalButton=target.closest?.('button');if(!originalButton)return;
+      const label=norm(originalButton.textContent);
+      if(['atualizar','desativar','ativar'].some(action=>label.includes(action))){normalizeAttempted=false;repairPlanRoute(20);return}
+      if(originalButton.closest('.modal,.modal-layer')&&label.includes('salvar')){normalizeAttempted=false;repairPlanRoute(80);return}
+      if(['criar plano','editar plano'].some(action=>label.includes(action)))repairPlanRoute(700);
     });
-    setTimeout(()=>schedulePatch(0),280);setTimeout(()=>schedulePatch(0),900);
+    if(page()||activePlansNav())preparePlanRoute(true).catch(error=>console.error('Provedor Plus: falha ao preparar a primeira exibição de Planos.',error));
   }
 
   function patchLogout(){

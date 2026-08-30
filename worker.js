@@ -47,16 +47,13 @@ async function proxyApi(request){
   const headers=copyHeaders(request.headers);
   headers.set('x-forwarded-host',incoming.host);
   headers.set('x-forwarded-proto','https');
-
   const init={method:request.method,headers,redirect:'manual'};
   if(request.method!=='GET'&&request.method!=='HEAD')init.body=request.body;
-
   const response=await fetch(target.toString(),init);
   const responseHeaders=new Headers(response.headers);
   const location=responseHeaders.get('location');
   if(location&&location.startsWith(UPSTREAM))responseHeaders.set('location',location.replace(UPSTREAM,incoming.origin));
   responseHeaders.set('x-provedor-plus-edge','cloudflare-migration-fallback');
-
   return new Response(response.body,{status:response.status,statusText:response.statusText,headers:responseHeaders});
 }
 
@@ -172,8 +169,19 @@ async function portalSession(client,env){
   return `${encoded}.${base64Url(signature)}`;
 }
 
+async function dbHealth(env){
+  if(!env.DATABASE_URL)return {configured:false,connected:false};
+  try{
+    const sql=neon(env.DATABASE_URL);
+    const rows=await sql`SELECT 1 AS ok`;
+    return {configured:true,connected:Number(rows?.[0]?.ok)===1};
+  }catch(error){
+    return {configured:true,connected:false,error:'Falha de conexão com o Neon'};
+  }
+}
+
 async function nativePortalLogin(env,data){
-  if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão nativa com o Neon ainda não foi configurada na Cloudflare.'),{statusCode:503});
+  if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão nativa com o Neon não configurada na Cloudflare.'),{statusCode:503});
   const document=digits(data?.document||data?.cpf||data?.cnpj),contract=text(data?.contract||data?.contrato);
   if(!document&&!contract)throw Object.assign(new Error('Informe CPF, CNPJ ou contrato.'),{statusCode:400});
   if(document&&![11,14].includes(document.length))throw Object.assign(new Error('CPF ou CNPJ inválido.'),{statusCode:400});
@@ -255,19 +263,18 @@ export default {
     const url=new URL(request.url);
 
     if(url.pathname==='/api/cloudflare-health'){
+      const database=await dbHealth(env);
       return json({
-        ok:true,
+        ok:database.connected,
         worker:'painel',
-        databaseConfigured:Boolean(env.DATABASE_URL),
-        customerPortalMode:env.DATABASE_URL?'cloudflare-native':'vercel-fallback'
-      },200,{'x-provedor-plus-edge':'cloudflare-health'});
+        databaseConfigured:database.configured,
+        databaseConnected:database.connected,
+        customerPortalMode:'cloudflare-native',
+        vercelCustomerPortalFallback:false
+      },database.connected?200:503,{'x-provedor-plus-edge':'cloudflare-health'});
     }
 
-    if(url.pathname===CUSTOMER_PORTAL_PATH){
-      if(env.DATABASE_URL||request.method==='OPTIONS')return handleNativeCustomerPortal(request,env);
-      return proxyApi(request);
-    }
-
+    if(url.pathname===CUSTOMER_PORTAL_PATH)return handleNativeCustomerPortal(request,env);
     if(url.pathname.startsWith('/api/'))return proxyApi(request);
     return env.ASSETS.fetch(request);
   }

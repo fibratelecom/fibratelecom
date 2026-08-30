@@ -164,7 +164,7 @@ async function portalSession(client,env){
   const secret=text(env.PORTAL_SESSION_SECRET)||text(env.DATABASE_URL);
   const payload={clientId:Number(client.id)||client.id,exp:Date.now()+30*60*1000};
   const encoded=base64Url(new TextEncoder().encode(JSON.stringify(payload)));
-  const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),'HMAC',false,['sign']);
+  const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']);
   const signature=await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(encoded));
   return `${encoded}.${base64Url(signature)}`;
 }

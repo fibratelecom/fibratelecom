@@ -37,11 +37,38 @@
     for(const key of AUX_KEYS){if(!Object.prototype.hasOwnProperty.call(aux,key))continue;const value=aux[key];nativeSet.call(window.localStorage,key,typeof value==='string'?value:JSON.stringify(value))}
   }
 
+  function preservePortalNegotiations(localState,remoteState){
+    const local=localState&&typeof localState==='object'?{...localState}:{},remote=remoteState&&typeof remoteState==='object'?remoteState:{};
+    const localNegotiations=Array.isArray(local.negotiations)?[...local.negotiations]:[],remoteNegotiations=Array.isArray(remote.negotiations)?remote.negotiations:[],knownNegotiations=new Set(localNegotiations.map(item=>String(item?.id||'')).filter(Boolean));
+    for(const item of remoteNegotiations){const id=String(item?.id||'');if(id&&!knownNegotiations.has(id)){localNegotiations.push(item);knownNegotiations.add(id)}}
+    if(localNegotiations.length)local.negotiations=localNegotiations;
+
+    const localInvoices=Array.isArray(local.invoices)?[...local.invoices]:[],remoteInvoices=Array.isArray(remote.invoices)?remote.invoices:[];
+    const index=new Map(localInvoices.map((item,i)=>[String(item?.id??''),i]));
+    for(const remoteInvoice of remoteInvoices){
+      if(!remoteInvoice?.negotiation_id)continue;
+      const key=String(remoteInvoice?.id??''),position=index.get(key);
+      if(position===undefined){index.set(key,localInvoices.length);localInvoices.push(remoteInvoice);continue}
+      const localInvoice=localInvoices[position];
+      if(!localInvoice?.negotiation_id||String(localInvoice.negotiation_id)!==String(remoteInvoice.negotiation_id))localInvoices[position]=remoteInvoice;
+    }
+    if(localInvoices.length)local.invoices=localInvoices;
+    const maxInvoiceId=Math.max(Number(local?.seq?.invoices)||0,...localInvoices.map(item=>Number(item?.id)||0));
+    if(maxInvoiceId)local.seq={...(local.seq||{}),invoices:maxInvoiceId};
+    return local;
+  }
+
   async function saveRaw(raw){
-    const state=parse(raw);
+    let state=parse(raw);
     if(!state||typeof state!=='object')throw new Error('O estado do Provedor Plus está inválido e não pode ser sincronizado.');
+    try{
+      const remote=await cloud('state.get');
+      if(remote?.state&&typeof remote.state==='object')state=preservePortalNegotiations(state,remote.state);
+    }catch(error){console.warn('Provedor Plus: não foi possível conferir acordos do portal antes da sincronização.',error)}
+    const mergedRaw=JSON.stringify(state);
+    if(mergedRaw!==raw){nativeSet.call(window.localStorage,KEY,mergedRaw);latestRaw=mergedRaw}
     const result=await cloud('state.save',{state});
-    lastSyncedRaw=raw;
+    lastSyncedRaw=mergedRaw;
     return result;
   }
 

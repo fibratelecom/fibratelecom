@@ -3,7 +3,14 @@ api/
 lib/
 functions/
 .github/
+cf/
+scripts/
 worker.js
+worker-native-api.js
+worker-cloudflare.js
+worker-customer-portal.js
+worker-native-guard.js
+worker-node-adapter.js
 wrangler.toml
 vercel.json
 package.json

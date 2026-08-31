@@ -54,12 +54,15 @@
   function ensureButton(){styles();const nav=navRoot();if(!nav)return;const systemLabel=[...nav.querySelectorAll('.nav-label,small')].find(x=>norm(x.textContent)==='sistema'),systemRow=systemLabel?[...nav.children].find(x=>x===systemLabel||x.contains(systemLabel)):null;if(!systemRow)return;let b=nav.querySelector('[data-pp-integration-hub="1"]');const template=[...nav.querySelectorAll('button')].find(x=>x!==b);if(!b){b=document.createElement('button');b.type='button';b.dataset.ppIntegrationHub='1';b.innerHTML='<span>⌁</span>Integração<span class="pp-integration-chevron">›</span>'}b.className=String(template?.className||b.className||'');b.classList.remove('active');b.classList.add('pp-integration-hub-button');b.setAttribute('aria-haspopup','menu');b.setAttribute('aria-expanded',popup&&!popup.hidden?'true':'false');b.onmouseenter=showPopup;b.onmouseleave=()=>timer=setTimeout(closePopup,150);b.onclick=e=>{e.preventDefault();e.stopPropagation();popup&&!popup.hidden?closePopup():showPopup()};const target=systemRow.nextSibling;if(target!==b)nav.insertBefore(b,target);hubButton=b;buildPopup()}
   function closeLayer(){contentRoot()?.classList.remove('pp-integration-hub-active');layer?.remove();layer=null;hubButton?.classList.remove('active')}
   document.addEventListener('click',e=>{const nav=navRoot(),b=e.target.closest?.('button');if(b&&nav?.contains(b)&&b!==hubButton){closePopup();closeLayer();return}if(popup&&!popup.hidden&&!e.target.closest('.pp-integration-menu')&&!hubButton?.contains(e.target))closePopup()},true);addEventListener('resize',position);addEventListener('scroll',position,true);
-  styles();ensureButton();
-  const integrationSidebar=document.querySelector('aside.sidebar')||document.querySelector('aside');
-  if(integrationSidebar){
-    const integrationObserver=new MutationObserver(()=>ensureButton());
-    integrationObserver.observe(integrationSidebar,{childList:true,subtree:true});
+  let integrationSidebarObserver=null,integrationShellObserver=null,integrationRootObserver=null,integrationObservedSidebar=null,integrationObservedShell=null,integrationEnsureTimer=null;
+  function scheduleIntegrationEnsure(){clearTimeout(integrationEnsureTimer);integrationEnsureTimer=setTimeout(()=>{ensureButton();bindIntegrationObservers()},30)}
+  function bindIntegrationObservers(){
+    const root=document.getElementById('root'),shell=document.querySelector('.app-shell'),sidebar=document.querySelector('aside.sidebar')||document.querySelector('aside');
+    if(sidebar!==integrationObservedSidebar){integrationSidebarObserver?.disconnect();integrationSidebarObserver=null;integrationObservedSidebar=sidebar||null;if(sidebar){integrationSidebarObserver=new MutationObserver(()=>scheduleIntegrationEnsure());integrationSidebarObserver.observe(sidebar,{childList:true,subtree:true})}}
+    if(shell!==integrationObservedShell){integrationShellObserver?.disconnect();integrationShellObserver=null;integrationObservedShell=shell||null;if(shell){integrationShellObserver=new MutationObserver(()=>scheduleIntegrationEnsure());integrationShellObserver.observe(shell,{childList:true})}}
+    if(root&&!integrationRootObserver){integrationRootObserver=new MutationObserver(()=>scheduleIntegrationEnsure());integrationRootObserver.observe(root,{childList:true})}
   }
+  styles();scheduleIntegrationEnsure();
 })();
 
 ;(()=>{

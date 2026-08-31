@@ -26,7 +26,7 @@ const __ppStartup={
 window.addEventListener('provedor-plus-react-error',__ppReactErrorListener);
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260831-uiatomic1';
+  const BUILD_TOKEN='20260831-uiatomic2';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');
@@ -251,15 +251,19 @@ if(prepareOutcome.kind==='timeout'){
   await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
   await loadScript('/dashboard-transition-guard.js?v=20260831-uiatomic1');
   await loadScriptStable('/dashboard-enhancements.js?v=20260831-uiatomic1',{dropCharacterData:true,observerTargetSelector:'.app-shell',ignoreWithin:['.pp-dashboard-root-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-new-plans-layer']});
-  const coreUiDeadline=Date.now()+3000;
+  const coreUiDeadline=Date.now()+12000;
   const adminNeedsIntegration=String(auth?.user?.role||'').toLowerCase()==='admin';
   let coreUiReady=false;
   while(Date.now()<coreUiDeadline){
     const shell=document.querySelector('.app-shell'),nav=shell?.querySelector('.sidebar nav,aside nav'),content=shell?.querySelector('.content');
     const dashboard=nav?.querySelector('[data-pp-dashboard-root="1"]'),client=nav?.querySelector('[data-pp-client-hub="1"]'),integration=nav?.querySelector('[data-pp-integration-hub="1"]');
-    const dashboardLayer=content?.querySelector(':scope>.pp-dashboard-root-layer');
-    if(shell&&nav&&content&&dashboard&&client&&(!adminNeedsIntegration||integration)&&dashboardLayer){coreUiReady=true;break}
-    await new Promise(resolve=>setTimeout(resolve,25));
+    let dashboardLayer=content?.querySelector(':scope>.pp-dashboard-root-layer');
+    if(shell&&nav&&content&&dashboard&&client&&(!adminNeedsIntegration||integration)){
+      if(!dashboardLayer&&!content.classList.contains('pp-dashboard-root-active'))dashboard.click();
+      dashboardLayer=content.querySelector(':scope>.pp-dashboard-root-layer');
+      if(dashboardLayer){coreUiReady=true;break}
+    }
+    await new Promise(resolve=>setTimeout(resolve,50));
   }
   if(!coreUiReady)throw new Error('A interface atual do Provedor Plus não concluiu a montagem de Dashboard, Cliente e Integração.');
   document.documentElement.classList.remove('pp-atomic-ui-mounting');

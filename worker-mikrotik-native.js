@@ -50,7 +50,8 @@ async function request(router,path,{method='GET',body}={}){
   const payload=body===undefined?undefined:JSON.stringify(body);
   const auth=Buffer.from(`${router.username}:${router.password}`).toString('base64');
   try{
-    const response=await fetch(url,{method,cache:'no-store',redirect:'error',headers:{Authorization:`Basic ${auth}`,Accept:'application/json',...(payload!==undefined?{'Content-Type':'application/json'}:{})},body:payload,signal:ctl.signal});
+    const response=await fetch(url,{method,cache:'no-store',redirect:'manual',headers:{Authorization:`Basic ${auth}`,Accept:'application/json',...(payload!==undefined?{'Content-Type':'application/json'}:{})},body:payload,signal:ctl.signal});
+    if(response.status>=300&&response.status<400)throw Error(`MikroTik respondeu com redirecionamento HTTP inesperado (HTTP ${response.status}).`);
     const raw=await response.text();
     if(new TextEncoder().encode(raw).byteLength>MAX_BODY)throw Error('Resposta do MikroTik excedeu o limite de segurança.');
     let data=null;try{data=raw?JSON.parse(raw):null}catch{data=raw}

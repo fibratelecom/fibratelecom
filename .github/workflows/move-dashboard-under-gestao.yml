@@ -1,0 +1,61 @@
+name: Move Dashboard Under Gestao
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: ['.github/workflows/move-dashboard-under-gestao.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+          fetch-depth: 0
+      - name: Posicionar Dashboard abaixo de Gestao
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('dashboard-enhancements.js')
+          s=p.read_text(encoding='utf-8')
+          old="""nav.insertBefore(current,nav.firstElementChild||null)}else if(current!==nav.firstElementChild)nav.insertBefore(current,nav.firstElementChild||null);button=current;"""
+          new="""const gestao=[...nav.children].find(item=>item!==current&&norm(item.textContent)==='gestao'),target=gestao?.nextSibling||nav.firstElementChild||null;nav.insertBefore(current,target)}else{const gestao=[...nav.children].find(item=>item!==current&&norm(item.textContent)==='gestao'),target=gestao?.nextSibling||nav.firstElementChild||null;if(current!==target)nav.insertBefore(current,target)}button=current;"""
+          if old not in s:
+              raise SystemExit('Trecho de posicionamento atual do Dashboard não encontrado')
+          s=s.replace(old,new,1)
+          p.write_text(s,encoding='utf-8')
+
+          b=Path('bootstrap.js')
+          x=b.read_text(encoding='utf-8')
+          oldq='/dashboard-enhancements.js?v=20260831-dashboard-root1'
+          newq='/dashboard-enhancements.js?v=20260831-dashboard-pos2'
+          if oldq not in x:
+              raise SystemExit('URL atual do Dashboard não encontrada no bootstrap')
+          b.write_text(x.replace(oldq,newq,1),encoding='utf-8')
+
+          i=Path('index.html')
+          x=i.read_text(encoding='utf-8')
+          oldi='/bootstrap.js?v=20260831-dashboard-root1'
+          newi='/bootstrap.js?v=20260831-dashboard-pos2'
+          if oldi not in x:
+              raise SystemExit('URL atual do bootstrap não encontrada no index')
+          i.write_text(x.replace(oldi,newi,1),encoding='utf-8')
+          PY
+          node --check dashboard-enhancements.js
+          node --check bootstrap.js
+          grep -Fq "norm(item.textContent)==='gestao'" dashboard-enhancements.js
+          grep -Fq '/dashboard-enhancements.js?v=20260831-dashboard-pos2' bootstrap.js
+          grep -Fq '/bootstrap.js?v=20260831-dashboard-pos2' index.html
+      - name: Publicar e remover workflow temporario
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/move-dashboard-under-gestao.yml
+          git add dashboard-enhancements.js bootstrap.js index.html
+          git commit -m 'Reposiciona Dashboard abaixo de Gestao'
+          git push origin HEAD:cloudflare-provedor-plus

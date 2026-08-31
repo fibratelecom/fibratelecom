@@ -2,7 +2,7 @@ const __ppStartup={done(){},fail(error){console.error(error)}};
 window.addEventListener('provedor-plus-react-error',event=>{const message=event?.detail?.message||'Falha ao montar o painel.';console.error(new Error(message))});
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260831-boot-unblock1';
+  const BUILD_TOKEN='20260831-boot-unblock2';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');
@@ -295,4 +295,13 @@ window.addEventListener('provedor-plus-react-error',event=>{const message=event?
     await new Promise(resolve=>setTimeout(resolve,100));
   }
   __ppStartup.done();
-})().catch(err=>{__ppStartup.fail(err)});
+})().catch(err=>{
+  __ppStartup.fail(err);
+  const root=document.getElementById('root');
+  if(root&&!root.children.length){
+    const box=document.createElement('div');
+    box.style.cssText='min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box;background:#f4f7f6;font-family:Segoe UI,Arial,sans-serif;color:#173c35';
+    box.innerHTML='<div style="max-width:520px;text-align:center"><h2 style="margin:0 0 8px">Não foi possível abrir o painel</h2><p style="margin:0 0 16px;color:#6b7f79">A inicialização foi interrompida antes da tela principal.</p><button type="button" style="height:40px;padding:0 16px;border:0;border-radius:9px;background:#0b8f7c;color:#fff;font-weight:800;cursor:pointer">Tentar novamente</button></div>';
+    box.querySelector('button').onclick=()=>location.reload();root.appendChild(box);
+  }
+});

@@ -1,9 +1,15 @@
 (()=>{
   async function api(action,data={}){
-    const response=await fetch('/api/auth',{method:'POST',cache:'no-store',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data})});
-    let body={};try{body=await response.json()}catch{}
-    if(!response.ok||!body.ok)throw new Error(body.error||`Falha de autenticação (HTTP ${response.status}).`);
-    return body.data;
+    const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),8000);
+    try{
+      const response=await fetch('/api/auth',{method:'POST',cache:'no-store',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data}),signal:ctl.signal});
+      let body={};try{body=await response.json()}catch{}
+      if(!response.ok||!body.ok)throw new Error(body.error||`Falha de autenticação (HTTP ${response.status}).`);
+      return body.data;
+    }catch(error){
+      if(error?.name==='AbortError')throw new Error('Tempo limite ao validar a sessão.');
+      throw error;
+    }finally{clearTimeout(timer)}
   }
 
   function shell({configured,error=''}){

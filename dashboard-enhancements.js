@@ -91,5 +91,5 @@
     if(shell!==dashboardObservedShell){dashboardShellObserver?.disconnect();dashboardShellObserver=null;dashboardObservedShell=shell||null;if(shell){dashboardShellObserver=new MutationObserver(()=>scheduleDashboardEnsure());dashboardShellObserver.observe(shell,{childList:true})}}
     if(root&&!dashboardRootObserver){dashboardRootObserver=new MutationObserver(()=>scheduleDashboardEnsure());dashboardRootObserver.observe(root,{childList:true})}
   }
-  scheduleDashboardEnsure();
+  ensureButton();bindDashboardObservers();
 })();

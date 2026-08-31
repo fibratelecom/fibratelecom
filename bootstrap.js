@@ -26,7 +26,7 @@ const __ppStartup={
 window.addEventListener('provedor-plus-react-error',__ppReactErrorListener);
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260831-client-create1';
+  const BUILD_TOKEN='20260831-uiatomic1';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');
@@ -239,14 +239,32 @@ if(prepareOutcome.kind==='timeout'){
   await loadScript('/client-status-enhancements.js?v=1017-status7-stable').catch(error=>console.error('Provedor Plus: os indicadores avançados do cliente não foram carregados.',error));
   await loadScript('/client-status-layout-cleanup.js?v=1017-statuslayout6-freshdata').catch(error=>console.error('Provedor Plus: a organização visual do status do cliente não foi carregada.',error));
   const root=document.getElementById('root');
+  const uiGateStyle=document.createElement('style');
+  uiGateStyle.id='pp-atomic-ui-gate';
+  uiGateStyle.textContent='.pp-atomic-ui-mounting .app-shell{visibility:hidden!important;pointer-events:none!important}';
+  document.head.appendChild(uiGateStyle);
+  document.documentElement.classList.add('pp-atomic-ui-mounting');
   const appB64=await read(Array.from({length:33},(_,i)=>`/packed/appgz-${String(i+1).padStart(2,'0')}.txt`));
   const app=await gunzipB64(appB64),appUrl=URL.createObjectURL(new Blob([app],{type:'text/javascript'}));
   try{await import(appUrl)}finally{setTimeout(()=>URL.revokeObjectURL(appUrl),1500)}
   if(__ppReactBootError||window.__PP_REACT_BOOT_ERROR__)throw (__ppReactBootError||window.__PP_REACT_BOOT_ERROR__);
   await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-  await loadScript('/dashboard-transition-guard.js?v=20260831-client-create1').catch(error=>console.error('Provedor Plus: os hubs de navegação não foram carregados.',error));
+  await loadScript('/dashboard-transition-guard.js?v=20260831-uiatomic1');
+  await loadScriptStable('/dashboard-enhancements.js?v=20260831-uiatomic1',{dropCharacterData:true,observerTargetSelector:'.app-shell',ignoreWithin:['.pp-dashboard-root-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-new-plans-layer']});
+  const coreUiDeadline=Date.now()+3000;
+  const adminNeedsIntegration=String(auth?.user?.role||'').toLowerCase()==='admin';
+  let coreUiReady=false;
+  while(Date.now()<coreUiDeadline){
+    const shell=document.querySelector('.app-shell'),nav=shell?.querySelector('.sidebar nav,aside nav'),content=shell?.querySelector('.content');
+    const dashboard=nav?.querySelector('[data-pp-dashboard-root="1"]'),client=nav?.querySelector('[data-pp-client-hub="1"]'),integration=nav?.querySelector('[data-pp-integration-hub="1"]');
+    const dashboardLayer=content?.querySelector(':scope>.pp-dashboard-root-layer');
+    if(shell&&nav&&content&&dashboard&&client&&(!adminNeedsIntegration||integration)&&dashboardLayer){coreUiReady=true;break}
+    await new Promise(resolve=>setTimeout(resolve,25));
+  }
+  if(!coreUiReady)throw new Error('A interface atual do Provedor Plus não concluiu a montagem de Dashboard, Cliente e Integração.');
+  document.documentElement.classList.remove('pp-atomic-ui-mounting');
+  uiGateStyle.remove();
   await loadScript('/ui-runtime-fixes.js?v=20260831-step6-observer1').catch(error=>console.error('Provedor Plus: correcoes de interface nao impediram os demais modulos de carregar.',error));
-  await loadScriptStable('/dashboard-enhancements.js?v=20260831-step8-mikrotik1',{dropCharacterData:true,observerTargetSelector:'.app-shell',ignoreWithin:['.pp-dashboard-root-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-new-plans-layer']}).catch(error=>console.error('Provedor Plus: o Dashboard gerencial não foi carregado.',error));
   await loadScriptStable('/billing-bank-selector.js?v=1017-billingbank3',{ignoreWithin:['.pp-dashboard-root-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.pp-new-plans-layer']}).catch(error=>console.error('Provedor Plus: a seleção do banco emissor não foi carregada.',error));
   await loadScript('/billing-automation.js?v=1017-billingauto1').catch(error=>console.error('Provedor Plus: a automação de mensalidades não foi carregada.',error));
   await loadScriptStable('/staff-access.js?v=20260831-step7-permissions1',{observerTargetSelector:'.sidebar',ignoreWithin:['.pp-dashboard-root-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.pp-new-plans-layer']}).catch(error=>console.error('Provedor Plus: a gestão de funcionários não foi carregada.',error));

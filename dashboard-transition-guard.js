@@ -64,7 +64,7 @@
     if(shell!==integrationObservedShell){integrationShellObserver?.disconnect();integrationShellObserver=null;integrationObservedShell=shell||null;if(shell){integrationShellObserver=new MutationObserver(()=>scheduleIntegrationEnsure());integrationShellObserver.observe(shell,{childList:true})}}
     if(root&&!integrationRootObserver){integrationRootObserver=new MutationObserver(()=>scheduleIntegrationEnsure());integrationRootObserver.observe(root,{childList:true})}
   }
-  styles();scheduleIntegrationEnsure();
+  styles();ensureButton();bindIntegrationObservers();
 })();
 
 ;(()=>{
@@ -217,5 +217,5 @@
     if(shell!==clientObservedShell){clientShellObserver?.disconnect();clientShellObserver=null;clientObservedShell=shell||null;if(shell){clientShellObserver=new MutationObserver(()=>scheduleClientEnsure());clientShellObserver.observe(shell,{childList:true})}}
     if(root&&!clientRootObserver){clientRootObserver=new MutationObserver(()=>scheduleClientEnsure());clientRootObserver.observe(root,{childList:true})}
   }
-  clientStyles();scheduleClientEnsure();
+  clientStyles();ensureClientButton();bindClientObservers();
 })();

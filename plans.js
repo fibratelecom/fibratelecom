@@ -128,7 +128,7 @@
       const next=plans.map((plan,i)=>({
         ...plan,
         portal_visible:active(plan)&&visible.has(i),
-        description:`Upload ${uploadMbps(plan)} Mbps`,
+        description:[String(plan?.description||'').replace(/\s*(?:·\s*)?Upload\s+[\d.,]+\s*Mbps\s*$/i,'').trim(),`Upload ${uploadMbps(plan)} Mbps`].filter(Boolean).join(' · '),
         highlight:maxUse>0&&counts[i]===maxUse&&active(plan)
       }));
       await saveState({...state,plans:next});window.alert('Área do Cliente atualizada. Somente os planos marcados serão exibidos como oferta.');await render();return;

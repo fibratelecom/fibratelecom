@@ -26,7 +26,7 @@ const __ppStartup={
 window.addEventListener('provedor-plus-react-error',__ppReactErrorListener);
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260831-uiatomic2';
+  const BUILD_TOKEN='20260831-uiatomic3';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');
@@ -249,7 +249,7 @@ if(prepareOutcome.kind==='timeout'){
   try{await import(appUrl)}finally{setTimeout(()=>URL.revokeObjectURL(appUrl),1500)}
   if(__ppReactBootError||window.__PP_REACT_BOOT_ERROR__)throw (__ppReactBootError||window.__PP_REACT_BOOT_ERROR__);
   await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-  await loadScript('/dashboard-transition-guard.js?v=20260831-uiatomic1');
+  await loadScript('/dashboard-transition-guard.js?v=20260831-uiatomic3');
   await loadScriptStable('/dashboard-enhancements.js?v=20260831-uiatomic1',{dropCharacterData:true,observerTargetSelector:'.app-shell',ignoreWithin:['.pp-dashboard-root-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-new-plans-layer']});
   const coreUiDeadline=Date.now()+12000;
   const adminNeedsIntegration=String(auth?.user?.role||'').toLowerCase()==='admin';
@@ -265,7 +265,7 @@ if(prepareOutcome.kind==='timeout'){
     }
     await new Promise(resolve=>setTimeout(resolve,50));
   }
-  if(!coreUiReady)throw new Error('A interface atual do Provedor Plus não concluiu a montagem de Dashboard, Cliente e Integração.');
+  if(!coreUiReady){const shell=document.querySelector('.app-shell'),nav=shell?.querySelector('.sidebar nav,aside nav'),content=shell?.querySelector('.content');const missing=[];if(!shell)missing.push('estrutura principal');if(!nav)missing.push('navegação');if(!content)missing.push('conteúdo');if(nav&&!nav.querySelector('[data-pp-dashboard-root=\"1\"]'))missing.push('Dashboard');if(nav&&!nav.querySelector('[data-pp-client-hub=\"1\"]'))missing.push('Cliente');if(adminNeedsIntegration&&nav&&!nav.querySelector('[data-pp-integration-hub=\"1\"]'))missing.push('Integração');if(content&&!content.querySelector(':scope>.pp-dashboard-root-layer'))missing.push('camada do Dashboard');throw new Error(`A interface atual do Provedor Plus não concluiu a montagem. Pendência: ${missing.join(', ')||'estado desconhecido'}.`)}
   document.documentElement.classList.remove('pp-atomic-ui-mounting');
   uiGateStyle.remove();
   await loadScript('/ui-runtime-fixes.js?v=20260831-step6-observer1').catch(error=>console.error('Provedor Plus: correcoes de interface nao impediram os demais modulos de carregar.',error));

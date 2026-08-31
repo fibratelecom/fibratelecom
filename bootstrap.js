@@ -2,7 +2,7 @@ const __ppStartup={done(){},fail(error){console.error(error)}};
 window.addEventListener('provedor-plus-react-error',event=>{const message=event?.detail?.message||'Falha ao montar o painel.';console.error(new Error(message))});
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260831-no-loading1';
+  const BUILD_TOKEN='20260831-boot-unblock1';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');
@@ -234,11 +234,14 @@ window.addEventListener('provedor-plus-react-error',event=>{const message=event?
 
   await loadScript('/cloud-state-store.js?v=1017-cloud17-audit1');
   if(!window.ProvedorPlusCloudState?.prepare)throw new Error('A sincronização com o banco da nuvem não foi carregada.');
-  await window.ProvedorPlusCloudState.prepare();
+  await Promise.race([
+    window.ProvedorPlusCloudState.prepare().catch(error=>{console.warn('Provedor Plus: estado remoto indisponivel na abertura; seguindo com o estado local.',error);return null}),
+    new Promise(resolve=>setTimeout(()=>resolve(null),1200))
+  ]);
   const currentState=window.ProvedorPlusCloudState.getState()||{};
   currentState.settings={...(currentState.settings||{}),current_user_name:auth?.user?.name||currentState.settings?.current_user_name||'Administrador'};
   localStorage.setItem('provedor_plus_web_1_0_17',JSON.stringify(currentState));
-  await window.ProvedorPlusCloudState.forceSync();
+  window.ProvedorPlusCloudState.forceSync().catch(error=>console.warn('Provedor Plus: sincronizacao inicial continuara depois.',error));
 
   const bridgeB64=await read(['/packed/bridgegz-01.txt','/packed/bridgegz-02.txt','/packed/bridgegz-03.txt','/packed/bridgegz-04.txt']);
   const bridge=await gunzipB64(bridgeB64);
@@ -252,7 +255,7 @@ window.addEventListener('provedor-plus-react-error',event=>{const message=event?
   if(typeof window.ProvedorPlusInstallCloudAdapter!=='function')throw new Error('A ponte HTTPS do MikroTik não foi carregada.');
   await window.ProvedorPlusInstallCloudAdapter();
   await loadScript('/cloud-client-status-fix.js?v=1017-cloud17-audit2');
-  if(typeof window.provedor?.invoices?.sync==='function')await window.provedor.invoices.sync().catch(error=>console.error('Provedor Plus: falha na conciliação inicial de cobranças.',error));
+  if(typeof window.provedor?.invoices?.sync==='function')window.provedor.invoices.sync().catch(error=>console.error('Provedor Plus: falha na conciliação inicial de cobranças.',error));
 
   await loadScript('/cloud-backup-store.js?v=1017-cloud17');
   window.ProvedorPlusCloudState.wrapApi(window.provedor);

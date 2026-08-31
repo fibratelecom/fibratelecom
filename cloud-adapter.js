@@ -100,7 +100,7 @@
     }
     async function clientRecord(id){const list=await base.clients.list(),c=(list||[]).find(x=>Number(x.id)===Number(id));if(!c)throw Error('Cliente não encontrado.');return c}
 
-    await hydrateBankSettings();
+    hydrateBankSettings().catch(error=>console.warn('Provedor Plus: hidratacao bancaria em segundo plano falhou.',error));
 
     if(base.banks?.get){
       api.banks.get=async()=>{

@@ -10,7 +10,19 @@
         const label=normalizeLabel(node.textContent);
         return label.includes('clientes')||label==='cliente';
       });
-      if(item)item.dataset.ppClientHub='1';
+      if(item){
+        item.dataset.ppClientHub='1';
+        return;
+      }
+      let marker=nav.querySelector('[data-pp-client-hub="1"][data-pp-legacy-client-marker="1"]');
+      if(!marker){
+        marker=document.createElement('span');
+        marker.hidden=true;
+        marker.setAttribute('aria-hidden','true');
+        marker.dataset.ppClientHub='1';
+        marker.dataset.ppLegacyClientMarker='1';
+        nav.appendChild(marker);
+      }
     };
     const observer=new MutationObserver(markLegacyClient);
     observer.observe(document.documentElement,{childList:true,subtree:true,characterData:true});

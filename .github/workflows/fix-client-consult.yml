@@ -1,0 +1,38 @@
+name: fix-client-consult
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-client-consult.yml'
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+          fetch-depth: 0
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Apply client consult visual
+        run: python3 .github/scripts/patch-client-consult.py
+      - name: Validate
+        run: |
+          node --check dashboard-transition-guard.js
+          node --check bootstrap.js
+          grep -q "GESTÃO DE ASSINANTES" dashboard-transition-guard.js
+          grep -q "data-client-edit" dashboard-transition-guard.js
+          grep -q "20260831-client-consult1" bootstrap.js
+          grep -q "20260831-client-consult1" index.html
+      - name: Commit functional change
+        run: |
+          git add dashboard-transition-guard.js bootstrap.js index.html
+          git commit -m "Renova consulta de clientes"
+      - name: Cleanup temporaries
+        run: |
+          git rm .github/scripts/patch-client-consult.py .github/workflows/fix-client-consult.yml
+          git commit -m "Remove aplicador temporario da consulta de clientes"
+          git push origin HEAD:cloudflare-provedor-plus

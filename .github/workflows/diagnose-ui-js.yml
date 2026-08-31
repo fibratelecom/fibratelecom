@@ -1,0 +1,28 @@
+name: diagnose-ui-js
+on:
+  push:
+    paths:
+      - '.github/workflows/diagnose-ui-js.yml'
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+      - name: Check JavaScript syntax
+        run: |
+          node --check bootstrap.js
+          node --check dashboard-transition-guard.js
+          node --check dashboard-enhancements.js
+      - name: Confirm boot references
+        run: |
+          grep -n "dashboard-transition-guard.js" bootstrap.js
+          grep -n "dashboard-enhancements.js" bootstrap.js
+          grep -n "data-pp-dashboard-root" dashboard-enhancements.js
+          grep -n "data-pp-client-hub" dashboard-transition-guard.js
+          grep -n "data-pp-integration-hub" dashboard-transition-guard.js
+      - name: File sizes
+        run: wc -c bootstrap.js dashboard-transition-guard.js dashboard-enhancements.js

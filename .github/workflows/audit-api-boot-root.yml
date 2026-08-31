@@ -1,0 +1,29 @@
+name: Audit API Boot Root
+on: push
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Auditar g e montagem
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat packed/appgz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/app.js
+          node --check /tmp/app.js
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('/tmp/app.js').read_text()
+          for needle in ['function g(){','const g=','let g=','window.provedor','createRoot','render((0,p.jsx)(A']:
+              print('\n###',needle)
+              start=0
+              count=0
+              while True:
+                  i=s.find(needle,start)
+                  if i<0 or count>=6: break
+                  print('INDEX',i)
+                  print(s[max(0,i-900):min(len(s),i+1800)])
+                  start=i+1; count+=1
+          PY

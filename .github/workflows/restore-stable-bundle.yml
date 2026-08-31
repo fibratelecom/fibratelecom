@@ -1,0 +1,41 @@
+name: Restore Stable Bundle
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: [.github/workflows/restore-stable-bundle.yml]
+permissions:
+  contents: write
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+          fetch-depth: 0
+      - name: Restaurar bundle estável
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout e0fefb6695a0543c585c1b5d4502f6fbb9a136e8 -- packed/appgz-*.txt
+          cat packed/appgz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/app-restored.js
+          node --check /tmp/app-restored.js
+          mkdir -p /tmp/good
+          for f in packed/appgz-*.txt; do git show e0fefb6695a0543c585c1b5d4502f6fbb9a136e8:$f > /tmp/good/$(basename "$f"); done
+          cat /tmp/good/appgz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/app-good.js
+          cmp /tmp/app-restored.js /tmp/app-good.js
+          grep -q "Clientes" /tmp/app-restored.js || true
+          sed -i "s/const BUILD_TOKEN='[^']*';/const BUILD_TOKEN='20260831-restore-good-bundle1';/" bootstrap.js
+          sed -i 's#/bootstrap.js?v=[^"'"']*#/bootstrap.js?v=20260831-restore-good-bundle1#' index.html
+          node --check bootstrap.js
+      - name: Publicar restauração
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add packed/appgz-*.txt bootstrap.js index.html
+          git commit -m 'Restaura bundle da ultima versao funcional'
+          git rm -f .github/workflows/restore-stable-bundle.yml
+          git commit -m 'Remove restaurador temporario do bundle'
+          git push origin HEAD:cloudflare-provedor-plus

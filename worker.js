@@ -1,12 +1,12 @@
 import { neon } from '@neondatabase/serverless';
 import { handleNativeAuth,handleNativeCloudState,handleNativeCloudData } from './worker-native-api.js';
+import { handleBankProxy } from './worker-bank-native.js';
+import { handleMikrotikProxy } from './worker-mikrotik-native.js';
 
-const SPECIALIZED_UPSTREAM='https://fibratelecom.vercel.app';
 const STATE_KEY='web_state_v1017';
 const BANK_SETTINGS_KEY='bank_credentials_v1';
 const CUSTOMER_PORTAL_PATH='/api/customer-portal';
 const PROTOCOLS_PATH='/api/protocols';
-const SPECIALIZED_PROXY_PATHS=new Set(['/api/bank-proxy','/api/mikrotik-proxy','/api/mikrotik-proxy-v2']);
 const ALLOWED_PORTAL_ORIGINS=new Set([
   'https://cliente.fibramais.workers.dev'
 ]);
@@ -292,159 +292,15 @@ async function handleProtocols(request,env){
   }
 }
 
-async function proxySpecializedApi(request,env){
-  const incoming=new URL(request.url),path=incoming.pathname;
-  if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-specialized-integration'});
+async function handleSpecializedNative(request,env){
+  const path=new URL(request.url).pathname;
+  if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-native-integration'});
   try{
     if(path==='/api/bank-proxy')await requirePanelPermission(request,env,'billing');
     else await requirePanelPermission(request,env,'network');
-  }catch(error){
-    return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||401,{'x-provedor-plus-edge':'cloudflare-specialized-integration'});
-  }
-  const target=new URL(path+incoming.search,SPECIALIZED_UPSTREAM),headers=copyHeaders(request.headers);
-  headers.set('x-forwarded-host',incoming.host);
-  headers.set('x-forwarded-proto','https');
-  headers.set('x-provedor-plus-proxy','cloudflare');
-  const timeoutMs=path==='/api/bank-proxy'?30000:22000,ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),timeoutMs);
-  try{
-    const init={method:request.method,headers,redirect:'manual',signal:ctl.signal};
-    if(request.method!=='GET'&&request.method!=='HEAD')init.body=request.body;
-    const response=await fetch(target.toString(),init),responseHeaders=new Headers(response.headers),location=responseHeaders.get('location');
-    if(location&&location.startsWith(SPECIALIZED_UPSTREAM))responseHeaders.set('location',location.replace(SPECIALIZED_UPSTREAM,incoming.origin));
-    responseHeaders.set('x-provedor-plus-edge','cloudflare-specialized-integration');
-    const contentType=text(responseHeaders.get('content-type')).toLowerCase();
-    if(!response.ok&&!contentType.includes('application/json')){
-      return json({ok:false,error:`A integração especializada respondeu com erro HTTP ${response.status}. Tente novamente.`},response.status>=500?502:response.status,{'x-provedor-plus-edge':'cloudflare-specialized-integration'});
-    }
-    return new Response(response.body,{status:response.status,statusText:response.statusText,headers:responseHeaders});
-  }catch(error){
-    const timedOut=error?.name==='AbortError';
-    console.error('Provedor Plus: proxy especializado indisponível.',{path,timedOut,error:error?.message||String(error)});
-    return json({ok:false,error:timedOut?'A integração demorou mais que o limite de segurança. Tente novamente.':'A integração especializada está temporariamente indisponível. Tente novamente.'},timedOut?504:502,{'x-provedor-plus-edge':'cloudflare-specialized-integration'});
-  }finally{clearTimeout(timer)}
-}
-
-function formatDate(value){
-  const raw=text(value).slice(0,10);
-  const match=raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  return match?`${match[3]}/${match[2]}/${match[1]}`:text(value);
-}
-
-function moneyNumber(row){
-  const centsKeys=['amount_cents','total_cents','value_cents','price_cents','service_amount_cents'];
-  for(const key of centsKeys){const n=number(row?.[key]);if(n!==null)return n/100;}
-  const keys=['amount','total','value','price','service_amount'];
-  for(const key of keys){const n=number(row?.[key]);if(n!==null)return n;}
-  return 0;
-}
-
-function invoiceCents(row){
-  const centsKeys=['amount_cents','total_cents','value_cents','price_cents','service_amount_cents'];
-  for(const key of centsKeys){const n=number(row?.[key]);if(n!==null)return Math.max(0,Math.round(n));}
-  return Math.max(0,Math.round(moneyNumber(row)*100));
-}
-
-function brl(value){
-  return new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(Number(value)||0);
-}
-
-function brlCents(value){return brl((Number(value)||0)/100)}
-
-function invoiceReference(row){
-  const explicit=text(row?.reference||row?.competency||row?.competence||row?.month||row?.period);
-  if(explicit)return explicit;
-  const raw=text(row?.due_date||row?.dueDate).slice(0,10),match=raw.match(/^(\d{4})-(\d{2})-/);
-  return match?`${match[2]}/${match[1]}`:'';
-}
-
-function mapInvoice(row,client,state){
-  const total=moneyNumber(row);
-  const planName=text(client.plan_name||client.plan||state?.plans?.find?.(p=>Number(p?.id)===Number(client.plan_id))?.name)||'Serviço de internet';
-  const company=state?.settings||state?.company||{};
-  return {
-    id:row?.id??null,
-    reference:invoiceReference(row),
-    dueDate:formatDate(row?.due_date||row?.dueDate),
-    dueDateRaw:text(row?.due_date||row?.dueDate),
-    total:brl(total),
-    totalNumber:total,
-    status:text(row?.status)||'Pendente',
-    serviceName:text(row?.description)||planName,
-    serviceAmount:brl(total),
-    serviceAmountRaw:brl(total),
-    subtotal:brl(total),
-    quantity:'1',
-    unitAmount:brl(total),
-    customerName:text(client.name),
-    customerDocument:text(client.document),
-    customerAddress:[client.address||client.street,client.city,client.state].map(text).filter(Boolean).join(' - '),
-    customerWhatsapp:text(client.phone||client.whatsapp),
-    contract:text(client.contract_number),
-    companyName:text(company.company_name||company.companyName||company.name)||'Fibra+',
-    companyCnpj:text(company.cnpj||company.company_cnpj),
-    companyIe:text(company.ie||company.state_registration||company.inscricao_estadual),
-    companyWhatsapp:text(company.whatsapp||company.phone)||'(92) 98486-7428',
-    pixPaymentUrl:text(row?.pix_payment_url||row?.pixPaymentUrl||row?.pix_url||row?.pixUrl||row?.bank_ticket_url),
-    pixCopyPaste:text(row?.pix_copy_paste||row?.pixCopyPaste||row?.pix_payload||row?.pixPayload||row?.bank_pix_code),
-    pixQrImage:text(row?.pix_qr_image||row?.pixQrImage||row?.pix_qr_url||row?.qr_code_url),
-    cardPaymentUrl:text(row?.card_payment_url||row?.cardPaymentUrl||row?.checkout_url||row?.payment_url),
-    pdfUrl:text(row?.pdf_url||row?.invoice_pdf_url||row?.boleto_pdf_url||row?.bank_slip_pdf_url||row?.bank_pdf_url),
-    digitableLine:text(row?.digitable_line||row?.linha_digitavel||row?.bank_digitable_line||row?.bank_barcode),
-    barcodeImage:text(row?.barcode_image||row?.barcode_url),
-    bankCode:text(row?.bank_code||row?.bankCode),
-    ourNumber:text(row?.our_number||row?.nosso_numero),
-    documentNumber:text(row?.document_number||row?.number||row?.id),
-    cashbackEnabled:row?.cashback_enabled!==false&&row?.cashback_eligible!==false,
-    cashbackRate:number(row?.cashback_rate??state?.settings?.cashback_rate)??null,
-    cashbackPending:number(row?.cashback_pending)??null,
-    cashbackBalance:number(client?.cashback_balance)??0,
-    negotiationId:text(row?.negotiation_id),
-    installmentNumber:number(row?.installment_number)??null,
-    installmentTotal:number(row?.installment_total)??null,
-    bankProvider:text(row?.bank_provider),bankStatus:text(row?.bank_status),paymentMethod:text(row?.payment_method),paidAt:text(row?.paid_at)
-  };
-}
-
-function mapPlan(plan){
-  const cents=number(plan?.price_cents),plain=number(plan?.price??plan?.amount);
-  return {
-    id:plan?.id??null,
-    name:text(plan?.name||plan?.title)||'Plano Fibra+',
-    speed:text(plan?.speed||plan?.bandwidth),
-    description:text(plan?.description),
-    price:cents!==null?cents/100:(plain??0),
-    highlight:plan?.highlight===true,
-    badge:text(plan?.badge||plan?.category)||'Plano Fibra+'
-  };
-}
-
-function sameClient(client,{document,contract}){
-  const doc=digits(client?.document),storedContract=text(client?.contract_number),storedContractDigits=digits(storedContract);
-  const byDocument=document?doc===document:false;
-  const byContract=contract?(storedContract===contract||storedContractDigits===digits(contract)):false;
-  if(document&&contract)return byDocument&&byContract;
-  return byDocument||byContract;
-}
-
-function parseStateValue(value){
-  if(value&&typeof value==='object')return value;
-  if(typeof value==='string'){try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'?parsed:{}}catch{}}
-  return {};
-}
-
-function base64Url(bytes){
-  const view=bytes instanceof Uint8Array?bytes:new Uint8Array(bytes);
-  let binary='';
-  for(const byte of view)binary+=String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
-}
-
-function base64UrlBytes(value){
-  let raw=text(value).replace(/-/g,'+').replace(/_/g,'/');
-  while(raw.length%4)raw+='=';
-  const binary=atob(raw),out=new Uint8Array(binary.length);
-  for(let i=0;i<binary.length;i++)out[i]=binary.charCodeAt(i);
-  return out;
+  }catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||401,{'x-provedor-plus-edge':'cloudflare-native-integration'})}
+  if(path==='/api/bank-proxy')return handleBankProxy(request);
+  return handleMikrotikProxy(request);
 }
 
 async function portalHmacKey(env,usage=['sign','verify']){
@@ -716,28 +572,10 @@ async function sha256Hex(value){
 function serviceToken(){const bytes=new Uint8Array(32);crypto.getRandomValues(bytes);return base64Url(bytes)}
 
 async function bankProxyAsService(env,sql,payload){
-  const admins=await sql`SELECT id FROM pp_users WHERE role='admin' ORDER BY id ASC LIMIT 1`,adminId=Number(admins?.[0]?.id)||0;
-  if(!adminId)throw Object.assign(new Error('Administrador do Provedor Plus não encontrado para autorizar a emissão bancária.'),{statusCode:503});
-  const token=serviceToken(),tokenHash=await sha256Hex(token),expires=new Date(Date.now()+2*60*1000).toISOString(),ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),30000);
-  await sql`INSERT INTO pp_sessions (user_id,token_hash,expires_at) VALUES (${adminId},${tokenHash},${expires})`;
-  try{
-    const response=await fetch(`${SPECIALIZED_UPSTREAM}/api/bank-proxy`,{method:'POST',headers:{'Content-Type':'application/json','Cookie':`pp_session=${encodeURIComponent(token)}`,'x-provedor-plus-proxy':'cloudflare-service'},body:JSON.stringify(payload),signal:ctl.signal});
-    let body={};try{body=await response.json()}catch{}
-    if(!response.ok||!body.ok)throw Object.assign(new Error(body?.error||`Falha na integração bancária (HTTP ${response.status}).`),{statusCode:response.status>=400&&response.status<500?409:502});
-    return body.data||{};
-  }catch(error){
-    if(error?.name==='AbortError')throw Object.assign(new Error('A integração bancária demorou mais que o limite de segurança. Tente novamente.'),{statusCode:504});
-    if(error?.statusCode)throw error;
-    throw Object.assign(new Error('A integração bancária está temporariamente indisponível. Tente novamente.'),{statusCode:502});
-  }finally{
-    clearTimeout(timer);
-    try{await sql`DELETE FROM pp_sessions WHERE token_hash=${tokenHash}`}catch{}
-  }
-}
-
-function nextInvoiceId(state){
-  const rows=Array.isArray(state.invoices)?state.invoices:[],seq=Math.max(Number(state?.seq?.invoices)||0,...rows.map(row=>Number(row?.id)||0)),next=seq+1;
-  state.seq={...(state.seq||{}),invoices:next};return next;
+  const response=await handleBankProxy(new Request('https://painel.fibramais.workers.dev/api/bank-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}));
+  let body={};try{body=await response.json()}catch{}
+  if(!response.ok||!body.ok)throw Object.assign(new Error(body?.error||`Falha na integração bancária Cloudflare (HTTP ${response.status}).`),{statusCode:response.status>=400&&response.status<500?409:502});
+  return body.data||{};
 }
 
 async function negotiationOptionsForSession(env,data){
@@ -944,7 +782,7 @@ export default {
     if(url.pathname==='/api/bank-settings')return handleBankSettings(request,env);
     if(url.pathname===PROTOCOLS_PATH)return handleProtocols(request,env);
     if(url.pathname===CUSTOMER_PORTAL_PATH)return handleNativeCustomerPortal(request,env);
-    if(SPECIALIZED_PROXY_PATHS.has(url.pathname))return proxySpecializedApi(request,env);
+    if(url.pathname==='/api/bank-proxy'||url.pathname==='/api/mikrotik-proxy'||url.pathname==='/api/mikrotik-proxy-v2')return handleSpecializedNative(request,env);
     if(url.pathname.startsWith('/api/'))return json({ok:false,error:'API não encontrada no Provedor Plus Cloudflare.'},404,{'x-provedor-plus-edge':'cloudflare-native-routing'});
     return env.ASSETS.fetch(request);
   }

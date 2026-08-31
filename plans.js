@@ -121,7 +121,18 @@
     if(event.target.closest('[data-toggle]')){const rows=[...plans],plan=rows[index];if(!plan)return;const value=!active(plan);rows[index]={...plan,active:value,enabled:value,portal_visible:value?plan.portal_visible:false,updated_at:new Date().toISOString()};await saveState({...state,plans:rows});await render();return}
     if(event.target.matches('[data-select]')){event.target.checked?selected.add(index):selected.delete(index);await render();return}
     if(event.target.closest('[data-select-all]')){selected=selected.size===plans.length?new Set():new Set(plans.map((_,i)=>i));await render();return}
-    if(event.target.closest('[data-save-portal]')){const ready=ensureLayer(navButton);if(!ready)return;const visible=new Set([...ready.layer.querySelectorAll('.pppc-card')].filter(node=>node.querySelector('[data-portal]')?.checked).map(node=>Number(node.dataset.index))),next=plans.map((plan,i)=>({...plan,portal_visible:active(plan)&&visible.has(i)}));await saveState({...state,plans:next});window.alert('Área do Cliente atualizada. Somente os planos marcados serão exibidos como oferta.');await render();return}
+    if(event.target.closest('[data-save-portal]')){
+      const ready=ensureLayer(navButton);if(!ready)return;
+      const visible=new Set([...ready.layer.querySelectorAll('.pppc-card')].filter(node=>node.querySelector('[data-portal]')?.checked).map(node=>Number(node.dataset.index)));
+      const clients=await readClients(),counts=plans.map(plan=>usage(plan,clients)),maxUse=Math.max(0,...counts);
+      const next=plans.map((plan,i)=>({
+        ...plan,
+        portal_visible:active(plan)&&visible.has(i),
+        description:`Upload ${uploadMbps(plan)} Mbps`,
+        highlight:maxUse>0&&counts[i]===maxUse&&active(plan)
+      }));
+      await saveState({...state,plans:next});window.alert('Área do Cliente atualizada. Somente os planos marcados serão exibidos como oferta.');await render();return;
+    }
     if(event.target.closest('[data-delete-selected]')){if(!selected.size){window.alert('Selecione pelo menos um plano para excluir.');return}const clients=await readClients(),allowed=[],blocked=[];for(const i of selected){const plan=plans[i];if(!plan)continue;(usage(plan,clients)>0?blocked:allowed).push(i)}if(!allowed.length){window.alert('Os planos selecionados estão vinculados a clientes e não podem ser excluídos.');return}const note=blocked.length?`\n\n${blocked.length} plano(s) em uso serão preservados.`:'';if(!window.confirm(`Excluir ${allowed.length} plano(s)?${note}`))return;const remove=new Set(allowed);await saveState({...state,plans:plans.filter((_,i)=>!remove.has(i))});selected=new Set();await render();return}
   }
 

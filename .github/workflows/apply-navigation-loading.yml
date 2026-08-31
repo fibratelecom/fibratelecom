@@ -1,0 +1,63 @@
+name: Apply Navigation Loading
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: [.github/workflows/apply-navigation-loading.yml]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+          fetch-depth: 0
+      - name: Aplicar carregamento padrao
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs=require('fs');
+          const jsPath='dashboard-enhancements.js';
+          let js=fs.readFileSync(jsPath,'utf8');
+          js=js.replace("CSS_VERSION='20260831-dashboard-root1'","CSS_VERSION='20260831-nav-loading1'");
+          const marker="  observer=new MutationObserver(()=>{clearTimeout(ensureTimer);ensureTimer=setTimeout(ensureButton,20)});observer.observe(document.documentElement,{childList:true,subtree:true});ensureButton();";
+          if(!js.includes(marker))throw new Error('Ponto de instalação do carregamento de navegação não encontrado.');
+          const addition=`  let navLoadingLayer=null,navLoadingObserver=null,navLoadingTimer=null;\n  function navSection(target,nav){let top=target;while(top?.parentElement&&top.parentElement!==nav)top=top.parentElement;for(let node=top?.previousElementSibling;node;node=node.previousElementSibling){const label=norm(node.textContent);if(label==='gestao'||label==='sistema')return label}return ''}\n  function hideNavLoading(){clearTimeout(navLoadingTimer);navLoadingTimer=null;navLoadingObserver?.disconnect();navLoadingObserver=null;const content=contentRoot();content?.classList.remove('pp-nav-loading-active');navLoadingLayer?.remove();navLoadingLayer=null}\n  function showNavLoading(target){const nav=navRoot(),content=contentRoot();if(!nav||!content||!target||target===button||target.dataset.ppIntegrationHub==='1'||target.disabled)return;const section=navSection(target,nav),label=String(target.textContent||'').trim();if(!['gestao','sistema'].includes(section)||!label||['gestao','sistema'].includes(norm(label)))return;hideNavLoading();content.classList.add('pp-nav-loading-active');navLoadingLayer=document.createElement('div');navLoadingLayer.className='pp-nav-loading-layer';navLoadingLayer.setAttribute('aria-live','polite');navLoadingLayer.innerHTML=\`<div class="ppd-loading"><span></span><strong>Carregando \${esc(label)}...</strong></div>\`;content.appendChild(navLoadingLayer);let changed=false,settle=null;navLoadingObserver=new MutationObserver(records=>{const useful=records.some(record=>{const element=record.target instanceof Element?record.target:record.target?.parentElement;return !element?.closest?.('.pp-nav-loading-layer')});if(!useful)return;changed=true;clearTimeout(settle);settle=setTimeout(hideNavLoading,180)});navLoadingObserver.observe(content,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});navLoadingTimer=setTimeout(hideNavLoading,changed?1200:2200)}\n  document.addEventListener('click',event=>{const nav=navRoot(),target=event.target.closest?.('button');if(target&&nav?.contains(target)&&target!==button)showNavLoading(target)},true);\n`+marker;
+          js=js.replace(marker,addition);
+          fs.writeFileSync(jsPath,js);
+
+          const cssPath='dashboard-enhancements.css';
+          let css=fs.readFileSync(cssPath,'utf8');
+          const navCss=`\n.content.pp-nav-loading-active{position:relative!important;overflow:hidden!important;min-height:420px!important}.pp-nav-loading-layer{position:absolute;inset:0;z-index:12000;display:grid;place-items:center;min-height:420px;background:linear-gradient(180deg,#f8faf9 0%,#f2f6f5 100%);font-family:Segoe UI,Arial,sans-serif}.pp-nav-loading-layer .ppd-loading{width:100%;min-height:420px}\n`;
+          if(!css.includes('.pp-nav-loading-layer'))css+=navCss;
+          fs.writeFileSync(cssPath,css);
+
+          const bootstrapPath='bootstrap.js';
+          let bootstrap=fs.readFileSync(bootstrapPath,'utf8');
+          bootstrap=bootstrap.replace(/const BUILD_TOKEN='[^']+';/,"const BUILD_TOKEN='20260831-nav-loading1';");
+          bootstrap=bootstrap.replace(/\/dashboard-enhancements\.js\?v=[^'\"]+/, '/dashboard-enhancements.js?v=20260831-nav-loading1');
+          fs.writeFileSync(bootstrapPath,bootstrap);
+
+          const indexPath='index.html';
+          let html=fs.readFileSync(indexPath,'utf8');
+          html=html.replace(/\/bootstrap\.js\?v=[^\"]+/, '/bootstrap.js?v=20260831-nav-loading1');
+          fs.writeFileSync(indexPath,html);
+          NODE
+          node --check dashboard-enhancements.js
+          node --check bootstrap.js
+          grep -q "Carregando .*\.\.\." dashboard-enhancements.js
+          grep -q "pp-nav-loading-layer" dashboard-enhancements.css
+          grep -q "20260831-nav-loading1" bootstrap.js
+          grep -q "bootstrap.js?v=20260831-nav-loading1" index.html
+      - name: Publicar e remover aplicador temporario
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dashboard-enhancements.js dashboard-enhancements.css bootstrap.js index.html
+          git commit -m "Padroniza carregamento das opcoes de Gestao e Sistema"
+          git rm .github/workflows/apply-navigation-loading.yml
+          git commit -m "Remove aplicador temporario do carregamento de navegacao"
+          git push origin HEAD:cloudflare-provedor-plus

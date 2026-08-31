@@ -1,0 +1,36 @@
+name: fix-step2-plans
+
+on:
+  push:
+    branches:
+      - cloudflare-provedor-plus
+    paths:
+      - '.github/fix-step2-plans.py'
+      - '.github/workflows/fix-step2-plans.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+          fetch-depth: 0
+      - name: Aplicar etapa 2
+        run: python .github/fix-step2-plans.py
+      - name: Validar JavaScript
+        run: |
+          node --check bootstrap.js
+          node --check ui-runtime-fixes.js
+          node --check plans.js
+      - name: Publicar e limpar aplicador
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/fix-step2-plans.py .github/workflows/fix-step2-plans.yml
+          git add bootstrap.js ui-runtime-fixes.js index.html
+          git commit -m 'Remove duplicidade do modulo Planos - etapa 2'
+          git push origin HEAD:cloudflare-provedor-plus

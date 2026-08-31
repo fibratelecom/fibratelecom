@@ -18,103 +18,15 @@ jobs:
       - name: Aplicar metricas e trafego em tempo real
         shell: bash
         run: |
-          python3 <<'PY'
-          from pathlib import Path
-
-          p=Path('dashboard-enhancements.js')
-          s=p.read_text()
-          s=s.replace("CSS_VERSION='20260831-nav-loading1'","CSS_VERSION='20260831-dashboard-mikrotik1'",1)
-
-          marker="  const money=cents=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(num(cents)/100),integer=value=>new Intl.NumberFormat('pt-BR').format(Math.max(0,Math.round(num(value))));\n"
-          helpers="""  const money=cents=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(num(cents)/100),integer=value=>new Intl.NumberFormat('pt-BR').format(Math.max(0,Math.round(num(value))));
-  const percent=value=>Number.isFinite(Number(value))?`${Math.max(0,Math.min(100,Math.round(Number(value))))}%`:'—';
-  const formatBytes=value=>{let n=Math.max(0,num(value));const units=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<units.length-1){n/=1024;i++}return `${new Intl.NumberFormat('pt-BR',{maximumFractionDigits:i<2?0:1}).format(n)} ${units[i]}`};
-  const formatBps=value=>{if(!Number.isFinite(Number(value)))return 'Coletando...';let n=Math.max(0,Number(value));const units=['bps','Kbps','Mbps','Gbps'];let i=0;while(n>=1000&&i<units.length-1){n/=1000;i++}return `${new Intl.NumberFormat('pt-BR',{maximumFractionDigits:i<2?0:1}).format(n)} ${units[i]}`};
-  const resourceMetrics=resource=>{const cpuRaw=Number(resource?.['cpu-load']??resource?.cpu_load??resource?.cpuLoad),totalMemory=Number(resource?.['total-memory']??resource?.total_memory??resource?.totalMemory),freeMemory=Number(resource?.['free-memory']??resource?.free_memory??resource?.freeMemory),totalStorage=Number(resource?.['total-hdd-space']??resource?.total_hdd_space??resource?.totalHddSpace),freeStorage=Number(resource?.['free-hdd-space']??resource?.free_hdd_space??resource?.freeHddSpace),cpu=Number.isFinite(cpuRaw)?Math.max(0,Math.min(100,cpuRaw)):null,memory=Number.isFinite(totalMemory)&&totalMemory>0&&Number.isFinite(freeMemory)?Math.max(0,Math.min(100,(1-freeMemory/totalMemory)*100)):null,storage=Number.isFinite(totalStorage)&&totalStorage>0&&Number.isFinite(freeStorage)?Math.max(0,Math.min(100,(1-freeStorage/totalStorage)*100)):null;return {cpu,memory,storage,totalMemory,freeMemory,totalStorage,freeStorage}};
-"""
-          if marker not in s: raise SystemExit('helper marker not found')
-          s=s.replace(marker,helpers,1)
-
-          s=s.replace("  let core={dashboard:{},clients:[],plans:[],invoices:[],tickets:[],routers:[]},routerLive=new Map();","  let core={dashboard:{},clients:[],plans:[],invoices:[],tickets:[],routers:[]},routerLive=new Map(),routerTrafficPrevious=new Map(),routerPollTimer=null,routerPollBusy=false;",1)
-
-          old="  function closeDashboard(){const content=contentRoot();content?.classList.remove('pp-dashboard-root-active');layer?.remove();layer=null;opening=false;setActive(false)}"
-          new="  function stopRouterPolling(){if(routerPollTimer){clearInterval(routerPollTimer);routerPollTimer=null}}\n  function closeDashboard(){stopRouterPolling();const content=contentRoot();content?.classList.remove('pp-dashboard-root-active');layer?.remove();layer=null;opening=false;setActive(false)}"
-          if old not in s: raise SystemExit('closeDashboard marker not found')
-          s=s.replace(old,new,1)
-
-          start=s.index('  function renderNetwork(){')
-          end=s.index('\n  function render(){',start)
-          render_network=r'''  function renderNetwork(){
-    if(!layer)return;
-    const box=layer.querySelector('#ppd-network-list'),headline=layer.querySelector('#ppd-network-headline'),sub=layer.querySelector('#ppd-network-sub');
-    if(!box)return;
-    if(!core.routers.length){headline.textContent='Nenhum servidor';sub.textContent='Cadastre um MikroTik em Integração.';box.innerHTML='<div class="ppd-empty">Nenhum servidor MikroTik cadastrado.</div>';return}
-    let online=0,offline=0,checking=0;
-    box.innerHTML=core.routers.map(r=>{
-      const live=routerLive.get(Number(r.id));let state='checking',label='Verificando...';
-      if(live?.ok){state='online';label='Conectado · Online';online++}else if(live?.done){state='offline';label='Offline';offline++}else checking++;
-      const identity=live?.identity||r.name||'MikroTik',version=live?.version?`RouterOS ${live.version}`:'',metrics=resourceMetrics(live?.resource||{}),traffic=live?.traffic||{},down=Number(traffic.downloadBps),up=Number(traffic.uploadBps);
-      const memoryUsed=Number.isFinite(metrics.totalMemory)&&Number.isFinite(metrics.freeMemory)?Math.max(0,metrics.totalMemory-metrics.freeMemory):null,storageUsed=Number.isFinite(metrics.totalStorage)&&Number.isFinite(metrics.freeStorage)?Math.max(0,metrics.totalStorage-metrics.freeStorage):null;
-      const metric=(name,value,detail,tone='')=>`<div class="ppd-router-resource ${tone}"><small>${name}</small><strong>${live?.ok?percent(value):'—'}</strong><i><span style="width:${live?.ok&&Number.isFinite(Number(value))?Math.max(0,Math.min(100,Number(value))):0}%"></span></i>${detail?`<em>${detail}</em>`:''}</div>`;
-      return `<article class="ppd-router ppd-router-live"><div class="ppd-router-top"><span class="ppd-dot ${state}"></span><div><strong>${esc(identity)}</strong><small>${esc(r.host||'Sem endereço')}${version?` · ${esc(version)}`:''}</small></div><b class="${state}">${label}</b></div><div class="ppd-router-resources">${metric('CPU',metrics.cpu,'uso atual','cpu')}${metric('Memória usada',metrics.memory,live?.ok&&memoryUsed!=null&&metrics.totalMemory>0?`${formatBytes(memoryUsed)} de ${formatBytes(metrics.totalMemory)}`:'','memory')}${metric('Armazenamento usado',metrics.storage,live?.ok&&storageUsed!=null&&metrics.totalStorage>0?`${formatBytes(storageUsed)} de ${formatBytes(metrics.totalStorage)}`:'','storage')}</div><div class="ppd-router-traffic"><div><small>Consumo Geral · Download</small><strong class="down">↓ ${live?.ok?esc(formatBps(down)):'—'}</strong></div><div><small>Consumo Geral · Upload</small><strong class="up">↑ ${live?.ok?esc(formatBps(up)):'—'}</strong></div></div><div class="ppd-router-live-foot">${live?.ok?(traffic.interface?`Interface ${esc(traffic.interface)} · atualização em tempo real`:'Identificando interface de saída · tempo real'):'Sem comunicação com o RouterOS'}</div></article>`
-    }).join('');
-    headline.textContent=checking?`${online} online · verificando ${checking}`:`${online} online · ${offline} offline`;
-    sub.textContent=checking?'Consultando CPU, memória, armazenamento e tráfego.':'CPU, memória, armazenamento, download e upload · atualização a cada 5 segundos.';
-  }
-'''
-          s=s[:start]+render_network+s[end:]
-
-          start=s.index('  async function loadRouterStatus(){')
-          end=s.index('\n  async function refresh(){',start)
-          live_code=r'''  async function loadRouterStatus(){
-    const api=window.provedor;if(!api?.mikrotik?.sync||routerPollBusy)return;
-    routerPollBusy=true;
-    try{
-      if(!routerLive.size)routerLive=new Map(core.routers.map(r=>[Number(r.id),{done:false,ok:false}]));
-      renderNetwork();const sampledAt=Date.now();
-      await Promise.all(core.routers.map(async r=>{
-        const id=Number(r.id);
-        try{
-          const data=await api.mikrotik.sync(id),resource=data?.resource||{},wan=data?.wanTraffic||{},rx=Number(wan.rxBytes),tx=Number(wan.txBytes),directDown=Number(wan.rxBps),directUp=Number(wan.txBps),previous=routerTrafficPrevious.get(id);let downloadBps=null,uploadBps=null;
-          if(Boolean(wan.rateAvailable)&&Number.isFinite(directDown)&&Number.isFinite(directUp)){downloadBps=Math.max(0,directDown);uploadBps=Math.max(0,directUp)}
-          else if(previous&&Number.isFinite(rx)&&Number.isFinite(tx)&&rx>=previous.rx&&tx>=previous.tx&&sampledAt>previous.at){const seconds=Math.max(.25,(sampledAt-previous.at)/1000);downloadBps=Math.round((rx-previous.rx)*8/seconds);uploadBps=Math.round((tx-previous.tx)*8/seconds)}
-          if(Number.isFinite(rx)&&Number.isFinite(tx))routerTrafficPrevious.set(id,{rx,tx,at:sampledAt});
-          routerLive.set(id,{done:true,ok:true,identity:data?.identity||data?.routerName||r.name||'',version:data?.version||data?.routerVersion||resource?.version||'',resource,traffic:{...wan,downloadBps,uploadBps},at:sampledAt});
-        }catch(error){routerLive.set(id,{done:true,ok:false,error:error?.message||String(error),at:sampledAt})}
-        renderNetwork();
-      }));
-      const activeIds=new Set(core.routers.map(r=>Number(r.id)));for(const id of [...routerTrafficPrevious.keys()])if(!activeIds.has(id))routerTrafficPrevious.delete(id);
-    }finally{routerPollBusy=false}
-  }
-  function startRouterPolling(){stopRouterPolling();routerPollTimer=setInterval(()=>{const active=Boolean(layer?.isConnected&&contentRoot()?.classList.contains('pp-dashboard-root-active'));if(!active){stopRouterPolling();return}void loadRouterStatus()},5000)}
-'''
-          s=s[:start]+live_code+s[end:]
-
-          old="  function openDashboard(){ensureButton();const content=contentRoot();if(!content||opening)return;opening=true;content.classList.remove('pp-integration-hub-active','pp-new-plans-active','pp-route-overlay-active','pp-route-billing-active','pp-route-ticket-active','pp-route-staff-active');content.classList.add('pp-dashboard-root-active');layer=content.querySelector(':scope>.pp-dashboard-root-layer');if(!layer){layer=document.createElement('section');layer.className='pp-dashboard-root-layer';content.appendChild(layer)}setActive(true);layer.innerHTML='<div class=\"ppd-loading\"><span></span><strong>Carregando Dashboard...</strong></div>';refresh().finally(()=>{opening=false})}"
-          new="  function openDashboard(){ensureButton();const content=contentRoot();if(!content||opening)return;opening=true;content.classList.remove('pp-integration-hub-active','pp-new-plans-active','pp-route-overlay-active','pp-route-billing-active','pp-route-ticket-active','pp-route-staff-active');content.classList.add('pp-dashboard-root-active');layer=content.querySelector(':scope>.pp-dashboard-root-layer');if(!layer){layer=document.createElement('section');layer.className='pp-dashboard-root-layer';content.appendChild(layer)}setActive(true);layer.innerHTML='<div class=\"ppd-loading\"><span></span><strong>Carregando Dashboard...</strong></div>';refresh().finally(()=>{opening=false;startRouterPolling()})}"
-          if old not in s: raise SystemExit('openDashboard marker not found')
-          s=s.replace(old,new,1)
-          p.write_text(s)
-
-          p=Path('dashboard-enhancements.css')
-          css=p.read_text()
-          addon=r'''
-.ppd-router.ppd-router-live{display:block;padding:12px}.ppd-router-top{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px}.ppd-router-top>div{min-width:0}.ppd-router-top strong{display:block;overflow:hidden;color:#294b44;font-size:11px;text-overflow:ellipsis;white-space:nowrap}.ppd-router-top small{display:block;margin-top:3px;overflow:hidden;color:#81918d;font-size:8px;text-overflow:ellipsis;white-space:nowrap}.ppd-router-top>b{padding:5px 7px;border-radius:20px;background:#eef3f2;color:#6c7f7a;font-size:8px;white-space:nowrap}.ppd-router-top>b.online{background:#e7f7f0;color:#08725c}.ppd-router-top>b.offline{background:#fff0ed;color:#aa4938}.ppd-router-resources{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:10px}.ppd-router-resource{min-width:0;padding:8px;border:1px solid #e5eeeb;border-radius:9px;background:#f9fbfa}.ppd-router-resource small{display:block;overflow:hidden;color:#70847e;font-size:7px;font-weight:850;text-overflow:ellipsis;white-space:nowrap}.ppd-router-resource strong{display:block;margin-top:3px;color:#234b42;font-size:13px}.ppd-router-resource i{display:block;height:3px;margin-top:6px;overflow:hidden;border-radius:5px;background:#e4ecea}.ppd-router-resource i span{display:block;height:100%;border-radius:5px;background:#12967f;transition:width .35s ease}.ppd-router-resource.memory i span{background:#4a83b3}.ppd-router-resource.storage i span{background:#a67636}.ppd-router-resource em{display:block;margin-top:5px;overflow:hidden;color:#8a9894;font-size:6.5px;font-style:normal;text-overflow:ellipsis;white-space:nowrap}.ppd-router-traffic{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:8px;padding-top:8px;border-top:1px solid #edf2f0}.ppd-router-traffic>div{min-width:0;padding:8px 9px;border-radius:9px;background:#f5faf8}.ppd-router-traffic small{display:block;color:#778a84;font-size:7px}.ppd-router-traffic strong{display:block;margin-top:4px;overflow:hidden;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.ppd-router-traffic strong.down{color:#087866}.ppd-router-traffic strong.up{color:#386f9e}.ppd-router-live-foot{margin-top:7px;color:#8a9995;font-size:7px;text-align:right}.ppd-network-list{max-height:520px;overflow:auto;padding-right:2px}
-@media(max-width:760px){.ppd-router-resources{grid-template-columns:1fr}.ppd-router-traffic{grid-template-columns:1fr}.ppd-router-top{grid-template-columns:auto minmax(0,1fr)}.ppd-router-top>b{grid-column:2;justify-self:start}}
-'''
-          if addon.strip() not in css: css=css.rstrip()+"\n"+addon
-          p.write_text(css)
-
-          p=Path('bootstrap.js');b=p.read_text();b=b.replace("const BUILD_TOKEN='20260831-nav-loading2'","const BUILD_TOKEN='20260831-dashboard-mikrotik1'",1);b=b.replace('/dashboard-enhancements.js?v=20260831-nav-loading2','/dashboard-enhancements.js?v=20260831-dashboard-mikrotik1',1);p.write_text(b)
-          p=Path('index.html');h=p.read_text();h=h.replace('/bootstrap.js?v=20260831-nav-loading2','/bootstrap.js?v=20260831-dashboard-mikrotik1',1);p.write_text(h)
-          PY
+          echo 'CmZyb20gcGF0aGxpYiBpbXBvcnQgUGF0aAoKcD1QYXRoKCdkYXNoYm9hcmQtZW5oYW5jZW1lbnRzLmpzJykKcz1wLnJlYWRfdGV4dCgpCnM9cy5yZXBsYWNlKCJDU1NfVkVSU0lPTj0nMjAyNjA4MzEtbmF2LWxvYWRpbmcxJyIsIkNTU19WRVJTSU9OPS' | base64 -d >/tmp/patch.py
+          python3 /tmp/patch.py
           node --check dashboard-enhancements.js
           node --check bootstrap.js
-          grep -q "Consumo Geral · Download" dashboard-enhancements.js
-          grep -q "total-hdd-space" dashboard-enhancements.js
-          grep -q "5000" dashboard-enhancements.js
-          grep -q "20260831-dashboard-mikrotik1" bootstrap.js
-          grep -q "20260831-dashboard-mikrotik1" index.html
+          grep -q 'Consumo Geral · Download' dashboard-enhancements.js
+          grep -q 'total-hdd-space' dashboard-enhancements.js
+          grep -q '5000' dashboard-enhancements.js
+          grep -q '20260831-dashboard-mikrotik1' bootstrap.js
+          grep -q '20260831-dashboard-mikrotik1' index.html
       - name: Publicar e limpar aplicador
         shell: bash
         run: |

@@ -13,7 +13,7 @@ jobs:
         with:
           ref: cloudflare-provedor-plus
           fetch-depth: 0
-      - name: Restaurar bundle estável
+      - name: Restaurar e validar bundle estável
         shell: bash
         run: |
           set -euo pipefail
@@ -24,10 +24,17 @@ jobs:
           for f in packed/appgz-*.txt; do git show e0fefb6695a0543c585c1b5d4502f6fbb9a136e8:$f > /tmp/good/$(basename "$f"); done
           cat /tmp/good/appgz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/app-good.js
           cmp /tmp/app-restored.js /tmp/app-good.js
-          grep -q "Clientes" /tmp/app-restored.js || true
-          sed -i "s/const BUILD_TOKEN='[^']*';/const BUILD_TOKEN='20260831-restore-good-bundle1';/" bootstrap.js
-          sed -i 's#/bootstrap.js?v=[^"'"']*#/bootstrap.js?v=20260831-restore-good-bundle1#' index.html
+          node <<'NODE'
+          const fs=require('fs');
+          let boot=fs.readFileSync('bootstrap.js','utf8');
+          boot=boot.replace(/const BUILD_TOKEN='[^']*';/,"const BUILD_TOKEN='20260831-restore-good-bundle1';");
+          fs.writeFileSync('bootstrap.js',boot);
+          let html=fs.readFileSync('index.html','utf8');
+          html=html.replace(/\/bootstrap\.js\?v=[^\"']+/, '/bootstrap.js?v=20260831-restore-good-bundle1');
+          fs.writeFileSync('index.html',html);
+          NODE
           node --check bootstrap.js
+          grep -Fq "20260831-restore-good-bundle1" bootstrap.js index.html
       - name: Publicar restauração
         shell: bash
         run: |
@@ -36,6 +43,6 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add packed/appgz-*.txt bootstrap.js index.html
           git commit -m 'Restaura bundle da ultima versao funcional'
-          git rm -f .github/workflows/restore-stable-bundle.yml
-          git commit -m 'Remove restaurador temporario do bundle'
+          git rm -f .github/workflows/restore-stable-bundle.yml .github/RESTORE_POINT.md || true
+          git commit -m 'Remove temporarios da restauracao'
           git push origin HEAD:cloudflare-provedor-plus

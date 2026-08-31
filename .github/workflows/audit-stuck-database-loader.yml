@@ -1,0 +1,26 @@
+name: Audit Stuck Database Loader
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/audit-stuck-database-loader.yml'
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruir e auditar bundle
+        run: |
+          set -euo pipefail
+          cat packed/appgz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/app.js
+          node --check /tmp/app.js
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('/tmp/app.js').read_text()
+          needles=['Abrindo banco de dados','Abrindo banco de dados...','banco de dados','database']
+          for n in needles:
+              i=s.find(n)
+              print('\n===',repr(n),'INDEX',i,'===')
+              if i>=0:
+                  print(s[max(0,i-2500):min(len(s),i+5000)])
+          PY

@@ -1,5 +1,5 @@
 const __ppStartup=(()=>{
-  const screen=document.getElementById('pp-startup-screen'),status=document.getElementById('pp-startup-status'),stage=document.getElementById('pp-startup-stage'),retry=document.getElementById('pp-startup-retry');
+  const screen=document.getElementById('pp-startup-screen-new'),status=document.getElementById('pp-startup-status-new'),stage=document.getElementById('pp-startup-stage-new'),retry=document.getElementById('pp-startup-retry-new');
   if(retry)retry.onclick=()=>location.reload();
   let finished=false;
   const watchdog=setTimeout(()=>{if(finished||!screen)return;screen.classList.add('is-error');if(status)status.textContent='O painel está demorando mais do que o esperado.';if(stage)stage.textContent='Verifique a conexão e tente novamente';},15000);
@@ -8,9 +8,10 @@ const __ppStartup=(()=>{
     fail(error){finished=true;clearTimeout(watchdog);console.error(error);if(!screen)return;screen.classList.add('is-error');if(status)status.textContent='Não foi possível concluir a inicialização do painel.';if(stage)stage.textContent='Use Recarregar painel para tentar novamente';}
   };
 })();
+window.addEventListener('provedor-plus-react-error',event=>{const message=event?.detail?.message||'Falha ao montar o painel.';__ppStartup.fail(new Error(message))});
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260831-startup-nolegacy1';
+  const BUILD_TOKEN='20260831-startup-rootfix1';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');
@@ -293,5 +294,11 @@ const __ppStartup=(()=>{
   installRouteIsolationGuard();
   await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
   if(typeof window.ProvedorPlusPatchClientViewButtons==='function')window.ProvedorPlusPatchClientViewButtons();
+  const shellDeadline=Date.now()+10000;
+  while(!document.querySelector('.app-shell')){
+    if(window.__PP_REACT_BOOT_ERROR__)throw window.__PP_REACT_BOOT_ERROR__;
+    if(Date.now()>=shellDeadline)throw new Error('O painel não concluiu a primeira renderização.');
+    await new Promise(resolve=>setTimeout(resolve,100));
+  }
   __ppStartup.done();
 })().catch(err=>{__ppStartup.fail(err)});

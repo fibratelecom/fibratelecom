@@ -4,7 +4,6 @@
 
   const replacements=[
     ['Provedor Plus 1.0.17','Provedor Plus'],
-    ['Visão geral','Dashboard'],
     ['IP privado ou VPN','Endereço MikroTik Cloud'],
     ['MikroTik Cloud / domínio público','Endereço MikroTik Cloud'],
     ['API nativa local','REST HTTPS'],

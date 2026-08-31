@@ -1,11 +1,9 @@
 {
-  "rewrites": [
-    { "source": "/api/mikrotik-proxy", "destination": "/api/mikrotik-proxy-v2" }
-  ],
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "git": {
-    "deploymentEnabled": {
-      "*": false,
-      "main": true
-    }
+    "deploymentEnabled": false
+  },
+  "github": {
+    "enabled": false
   }
 }

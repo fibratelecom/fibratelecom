@@ -1,0 +1,127 @@
+name: Fix Startup Root Controller
+on: push
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Corrigir controlador unico da abertura
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64,gzip,math
+
+          def replace_once(path,old,new):
+              p=Path(path); s=p.read_text()
+              if old not in s:
+                  raise SystemExit(f'Padrao nao encontrado em {path}: {old[:120]}')
+              p.write_text(s.replace(old,new,1))
+
+          # 1) Bootstrap passa a controlar A TELA NOVA que realmente existe no index.
+          replace_once('bootstrap.js',
+              "const screen=document.getElementById('pp-startup-screen'),status=document.getElementById('pp-startup-status'),stage=document.getElementById('pp-startup-stage'),retry=document.getElementById('pp-startup-retry');",
+              "const screen=document.getElementById('pp-startup-screen-new'),status=document.getElementById('pp-startup-status-new'),stage=document.getElementById('pp-startup-stage-new'),retry=document.getElementById('pp-startup-retry-new');")
+
+          # Captura erro fatal do React antes que ele possa virar tela branca.
+          replace_once('bootstrap.js',
+              "})();\n(async()=>{\n  window.__PROVEDOR_PLUS_CLOUD__=true;",
+              "})();\nwindow.addEventListener('provedor-plus-react-error',event=>{const message=event?.detail?.message||'Falha ao montar o painel.';__ppStartup.fail(new Error(message))});\n(async()=>{\n  window.__PROVEDOR_PLUS_CLOUD__=true;")
+
+          replace_once('bootstrap.js',"const BUILD_TOKEN='20260831-startup-nolegacy1';","const BUILD_TOKEN='20260831-startup-rootfix1';")
+
+          # Bootstrap só encerra o carregamento quando o app-shell REAL existir.
+          old_final="""  await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+  if(typeof window.ProvedorPlusPatchClientViewButtons==='function')window.ProvedorPlusPatchClientViewButtons();
+  __ppStartup.done();
+})().catch(err=>{__ppStartup.fail(err)});"""
+          new_final="""  await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+  if(typeof window.ProvedorPlusPatchClientViewButtons==='function')window.ProvedorPlusPatchClientViewButtons();
+  const shellDeadline=Date.now()+10000;
+  while(!document.querySelector('.app-shell')){
+    if(window.__PP_REACT_BOOT_ERROR__)throw window.__PP_REACT_BOOT_ERROR__;
+    if(Date.now()>=shellDeadline)throw new Error('O painel não concluiu a primeira renderização.');
+    await new Promise(resolve=>setTimeout(resolve,100));
+  }
+  __ppStartup.done();
+})().catch(err=>{__ppStartup.fail(err)});"""
+          replace_once('bootstrap.js',old_final,new_final)
+
+          # 2) Remove o SEGUNDO controlador, que liberava a tela à força em 8 segundos.
+          replace_once('index.html','<script defer src="/startup-loader.js?v=20260831-startup-unlock1"></script>\n','')
+          replace_once('index.html','/bootstrap.js?v=20260831-startup-nolegacy1','/bootstrap.js?v=20260831-startup-rootfix1')
+
+          # 3) Corrige a trava lógica dentro do React sem restaurar o visual antigo.
+          files=[Path(f'packed/appgz-{i:02d}.txt') for i in range(1,34)]
+          encoded=''.join(p.read_text().strip() for p in files)
+          app=gzip.decompress(base64.b64decode(encoded)).decode()
+
+          old_prefix="async function Se(){let e=g(),q=async(e,t,n)=>"
+          if old_prefix not in app: raise SystemExit('Prefixo atual de Se nao encontrado')
+          app=app.replace(old_prefix,"async function Se(){let q=async(e,t,n)=>",1)
+
+          start=app.find('async function Se(){')
+          if start<0: raise SystemExit('Se nao encontrada apos ajuste')
+          target=';try{let[t,n,r,i,o,s,c,u,d]=await Promise.all(['
+          pos=app.find(target,start,start+5000)
+          if pos<0: raise SystemExit('Bloco try de Se nao encontrado')
+          app=app[:pos]+app[pos:].replace(target,';try{let e=g(),[t,n,r,i,o,s,c,u,d]=await Promise.all([',1)
+
+          # i continua sendo a trava lógica, mas retorna null; a única tela visível é a nova do index.
+          render_old=';return c?(0,p.jsxs)(`main`,{className:`boot-screen error-screen`'
+          render_new=';return i?null:c?(0,p.jsxs)(`main`,{className:`boot-screen error-screen`'
+          if render_old not in app: raise SystemExit('Inicio do render atual nao encontrado')
+          app=app.replace(render_old,render_new,1)
+
+          # React 19: registra erro fatal para o bootstrap manter a nova tela e mostrar erro, nunca branco.
+          root_old='(0,d.createRoot)(document.getElementById(`root`)).render((0,p.jsx)(f.StrictMode,{children:(0,p.jsx)(A,{})}));'
+          root_new='(0,d.createRoot)(document.getElementById(`root`),{onUncaughtError:e=>{window.__PP_REACT_BOOT_ERROR__=e,console.error(`Provedor Plus: falha fatal de renderização.`,e),window.dispatchEvent(new CustomEvent(`provedor-plus-react-error`,{detail:{message:e instanceof Error?e.message:String(e)}}))}}).render((0,p.jsx)(f.StrictMode,{children:(0,p.jsx)(A,{})}));'
+          if root_old not in app: raise SystemExit('createRoot atual nao encontrado')
+          app=app.replace(root_old,root_new,1)
+
+          packed=base64.b64encode(gzip.compress(app.encode(),compresslevel=9)).decode()
+          chunk=math.ceil(len(packed)/len(files))
+          if chunk>3500: raise SystemExit(f'Chunk muito grande: {chunk}')
+          for idx,p in enumerate(files):
+              p.write_text(packed[idx*chunk:(idx+1)*chunk]+'\n')
+          PY
+
+          # O controlador antigo deixa de existir para impedir que volte a liberar a tela à força.
+          rm -f startup-loader.js
+
+          node --check bootstrap.js
+          cat packed/appgz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/app-after.js
+          node --check /tmp/app-after.js
+          grep -Fq 'return i?null:c?' /tmp/app-after.js
+          grep -Fq 'onUncaughtError' /tmp/app-after.js
+          grep -Fq 'let e=g(),[t,n,r,i,o,s,c,u,d]=await Promise.all' /tmp/app-after.js
+          ! grep -Fq 'Abrindo banco de dados...' /tmp/app-after.js
+          grep -Fq "pp-startup-screen-new" bootstrap.js
+          grep -Fq "shellDeadline=Date.now()+10000" bootstrap.js
+          ! grep -Fq 'startup-loader.js' index.html
+          grep -Fq '20260831-startup-rootfix1' bootstrap.js index.html
+
+      - name: Publicar e remover diagnosticos temporarios
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add bootstrap.js index.html packed/appgz-*.txt
+          git rm -f startup-loader.js || true
+          git commit -m 'Corrige raiz da tela branca na abertura'
+          for f in \
+            .github/workflows/audit-api-boot-root.yml \
+            .github/workflows/audit-bootstrap-order.yml \
+            .github/workflows/browser-runtime-diagnosis.yml \
+            .github/workflows/audit-initial-render.yml \
+            .github/workflows/fix-startup-root-controller.yml; do
+            [ -e "$f" ] && git rm "$f" || true
+          done
+          git commit -m 'Remove diagnosticos temporarios da abertura' || true
+          git push origin HEAD:cloudflare-provedor-plus

@@ -38,10 +38,44 @@
   };
   const uploadMbps=plan=>{
     const value=Number(plan?.upload_mbps??plan?.upload);
-    return Number.isFinite(value)?Math.round(value):0;
+    if(Number.isFinite(value)&&value>=0)return Math.round(value);
+    const match=String(plan?.description||'').match(/upload\s*[:\-]?\s*([\d.,]+)\s*(giga|gb|mega|mbps)?/i);
+    if(!match)return 0;
+    const parsed=Number(String(match[1]).replace(',','.'));
+    if(!Number.isFinite(parsed))return 0;
+    return /giga|gb/i.test(match[2]||'')?Math.round(parsed*1000):Math.round(parsed);
+  };
+  const decimalFromPt=value=>{
+    const raw=String(value??'').replace(/R\$/gi,'').replace(/\s+/g,'').trim();
+    if(!raw)return NaN;
+    const normalized=raw.includes(',')?raw.replace(/\./g,'').replace(',','.'):raw;
+    return Number(normalized);
+  };
+  const installationCents=plan=>{
+    const cents=Number(plan?.installation_fee_cents??plan?.install_fee_cents??plan?.installationFeeCents);
+    if(Number.isFinite(cents)&&cents>=0)return Math.round(cents);
+    const value=Number(plan?.installation_fee??plan?.install_fee??plan?.installationFee);
+    if(Number.isFinite(value)&&value>=0)return Math.round(value*100);
+    const match=String(plan?.description||'').match(/instala(?:ção|cao)\s*(?:R\$\s*)?([\d.,]+)/i);
+    const parsed=match?decimalFromPt(match[1]):NaN;
+    return Number.isFinite(parsed)&&parsed>=0?Math.round(parsed*100):7990;
   };
   const speedLabel=mbps=>mbps>=1000&&mbps%1000===0?`${mbps/1000} GIGA`:`${mbps} MEGA`;
   const profileName=plan=>String(plan?.profile_name||plan?.profile||plan?.access_profile||plan?.mikrotik_profile||'').trim();
+  const cleanPortalDescription=value=>String(value||'').split('·').map(part=>part.trim()).filter(part=>part&&!/^upload\s+[\d.,]+\s*(?:giga|gb|mega|mbps)?$/i.test(part)&&!/^instala(?:ção|cao)\s*(?:R\$\s*)?[\d.,]+$/i.test(part)).join(' · ');
+  const portalDescription=plan=>[cleanPortalDescription(plan?.description),`Upload ${uploadMbps(plan)} Mbps`,`Instalação ${money(installationCents(plan))}`].filter(Boolean).join(' · ');
+  const normalizePortalPlan=plan=>({
+    ...plan,
+    download_mbps:speedMbps(plan),
+    download:speedMbps(plan),
+    upload_mbps:uploadMbps(plan),
+    upload:uploadMbps(plan),
+    installation_fee_cents:installationCents(plan),
+    installationFeeCents:installationCents(plan),
+    installation_fee:installationCents(plan)/100,
+    installationFee:installationCents(plan)/100,
+    description:portalDescription(plan)
+  });
   const clientPlanId=client=>Number(client?.plan_id??client?.planId??client?.plan?.id)||0;
   const clientPlanName=client=>norm(client?.plan_name??client?.planName??client?.plan?.name??client?.plan??'');
   const readClients=async()=>{
@@ -91,24 +125,30 @@
   async function render(){
     if(!opened||!navButton)return;
     const ready=ensureLayer(navButton);if(!ready)return;
-    const state=getState(),plans=Array.isArray(state?.plans)?state.plans:[],clients=await readClients(),counts=plans.map(plan=>usage(plan,clients)),maxUse=Math.max(0,...counts),activeCount=plans.filter(active).length,portalCount=plans.filter(plan=>active(plan)&&plan?.portal_visible===true).length;
+    let state=getState(),plans=Array.isArray(state?.plans)?state.plans:[];
+    const migrated=plans.map(plan=>plan?.portal_visible===true?normalizePortalPlan(plan):plan);
+    const needsMigration=migrated.some((plan,index)=>JSON.stringify(plan)!==JSON.stringify(plans[index]));
+    if(needsMigration){plans=migrated;state={...state,plans};await saveState(state)}
+    const clients=await readClients(),counts=plans.map(plan=>usage(plan,clients)),maxUse=Math.max(0,...counts),activeCount=plans.filter(active).length,portalCount=plans.filter(plan=>active(plan)&&plan?.portal_visible===true).length;
     const cards=plans.map((plan,index)=>{
-      const count=counts[index],top=maxUse>0&&count===maxUse&&active(plan),checked=selected.has(index),down=speedMbps(plan),up=uploadMbps(plan);
-      return `<article class="pppc-card ${top?'is-top':''}" data-index="${index}">${top?'<span class="pppc-badge">MAIS CONTRATADO</span>':''}<div class="pppc-top"><span class="pppc-speed">${esc(speedLabel(down||0))}</span><span class="pppc-status ${active(plan)?'on':''}">${active(plan)?'ATIVO':'INATIVO'}</span></div><h2>${esc(planName(plan))}</h2><div class="pppc-price">${money(planCents(plan))}<small>/mês</small></div><div class="pppc-lines"><div>↓ Download <b>${down||0} Mbps</b></div><div>↑ Upload <b>${up||0} Mbps</b></div><div>Perfil <b>${esc(profileName(plan)||'Não configurado')}</b></div><div>Clientes vinculados <b>${count}</b></div></div><div class="pppc-flags"><label class="pppc-check portal"><input type="checkbox" data-portal ${plan?.portal_visible===true?'checked':''}> Área do Cliente</label><label class="pppc-check"><input type="checkbox" data-select ${checked?'checked':''}> Selecionar para excluir</label></div><div class="pppc-actions"><button type="button" data-edit>Editar</button><button type="button" class="${active(plan)?'danger':''}" data-toggle>${active(plan)?'Desativar':'Ativar'}</button></div></article>`;
+      const count=counts[index],top=maxUse>0&&count===maxUse&&active(plan),checked=selected.has(index),down=speedMbps(plan),up=uploadMbps(plan),installation=installationCents(plan);
+      return `<article class="pppc-card ${top?'is-top':''}" data-index="${index}">${top?'<span class="pppc-badge">MAIS CONTRATADO</span>':''}<div class="pppc-top"><span class="pppc-speed">${esc(speedLabel(down||0))}</span><span class="pppc-status ${active(plan)?'on':''}">${active(plan)?'ATIVO':'INATIVO'}</span></div><h2>${esc(planName(plan))}</h2><div class="pppc-price">${money(planCents(plan))}<small>/mês</small></div><div class="pppc-lines"><div>↓ Download <b>${down||0} Mbps</b></div><div>↑ Upload <b>${up||0} Mbps</b></div><div>Taxa de instalação <b>${money(installation)}</b></div><div>Perfil <b>${esc(profileName(plan)||'Não configurado')}</b></div><div>Clientes vinculados <b>${count}</b></div></div><div class="pppc-flags"><label class="pppc-check portal"><input type="checkbox" data-portal ${plan?.portal_visible===true?'checked':''}> Área do Cliente</label><label class="pppc-check"><input type="checkbox" data-select ${checked?'checked':''}> Selecionar para excluir</label></div><div class="pppc-actions"><button type="button" data-edit>Editar</button><button type="button" class="${active(plan)?'danger':''}" data-toggle>${active(plan)?'Desativar':'Ativar'}</button></div></article>`;
     }).join('');
     ready.layer.innerHTML=`<div class="pppc-head"><div><div class="pppc-eyebrow">Gestão comercial</div><h1>Planos & Ofertas</h1><p>Cadastre os planos e escolha quais ofertas aparecem na Área do Cliente.</p></div><button type="button" class="pppc-primary" data-new>+ Novo plano</button></div><div class="pppc-stats"><div class="pppc-stat"><small>Planos cadastrados</small><strong>${plans.length}</strong></div><div class="pppc-stat"><small>Planos ativos</small><strong>${activeCount}</strong></div><div class="pppc-stat"><small>Na Área do Cliente</small><strong>${portalCount}</strong></div></div><div class="pppc-toolbar"><div class="pppc-toolbar-left"><button type="button" data-select-all>Selecionar todos</button><span>${selected.size?`${selected.size} selecionado${selected.size===1?'':'s'}`:'Nenhum selecionado'}</span></div><div class="pppc-toolbar-right"><button type="button" data-delete-selected>Excluir selecionados</button><button type="button" data-save-portal>Salvar Área do Cliente</button></div></div><div class="pppc-grid">${cards||'<div class="pppc-empty">Nenhum plano cadastrado. Clique em “Novo plano” para começar.</div>'}</div>`;
   }
 
   async function openEditor(index=null){
-    closeModal();const state=getState(),plans=Array.isArray(state?.plans)?state.plans:[],plan=index===null?null:plans[index],down=plan?speedMbps(plan):0,up=plan?uploadMbps(plan):0,price=plan?planCents(plan)/100:0;
-    modal=document.createElement('div');modal.className='pppc-modal';modal.innerHTML=`<div class="pppc-modal-card"><div class="pppc-modal-head"><h3>${plan?'Editar plano':'Novo plano'}</h3><button type="button" class="pppc-x" data-close>×</button></div><form class="pppc-form"><label class="full">Nome do plano<input name="name" required value="${esc(planName(plan||{}))}"></label><label>Download (Mbps)<input name="download" type="number" min="1" required value="${down||''}"></label><label>Upload (Mbps)<input name="upload" type="number" min="0" value="${up||''}"></label><label>Mensalidade (R$)<input name="price" type="number" min="0.01" step="0.01" required value="${price||''}"></label><label>Perfil de acesso / MikroTik<input name="profile" value="${esc(profileName(plan||{}))}"></label><div class="pppc-switches"><label><input name="active" type="checkbox" ${!plan||active(plan)?'checked':''}> Plano ativo</label><label><input name="portal" type="checkbox" ${plan?.portal_visible===true?'checked':''}> Mostrar na Área do Cliente</label></div></form><div class="pppc-modal-actions"><button type="button" data-close>Cancelar</button><button type="button" class="primary" data-save>Salvar plano</button></div></div>`;
+    closeModal();const state=getState(),plans=Array.isArray(state?.plans)?state.plans:[],plan=index===null?null:plans[index],down=plan?speedMbps(plan):0,up=plan?uploadMbps(plan):0,price=plan?planCents(plan)/100:0,installation=plan?installationCents(plan)/100:79.90;
+    modal=document.createElement('div');modal.className='pppc-modal';modal.innerHTML=`<div class="pppc-modal-card"><div class="pppc-modal-head"><h3>${plan?'Editar plano':'Novo plano'}</h3><button type="button" class="pppc-x" data-close>×</button></div><form class="pppc-form"><label class="full">Nome do plano<input name="name" required value="${esc(planName(plan||{}))}"></label><label>Download (Mbps)<input name="download" type="number" min="1" required value="${down||''}"></label><label>Upload (Mbps)<input name="upload" type="number" min="0" value="${up||''}"></label><label>Mensalidade (R$)<input name="price" type="number" min="0.01" step="0.01" required value="${price||''}"></label><label>Taxa de instalação (R$)<input name="installation" type="number" min="0" step="0.01" value="${installation.toFixed(2)}"></label><label class="full">Perfil de acesso / MikroTik<input name="profile" value="${esc(profileName(plan||{}))}"></label><div class="pppc-switches"><label><input name="active" type="checkbox" ${!plan||active(plan)?'checked':''}> Plano ativo</label><label><input name="portal" type="checkbox" ${plan?.portal_visible===true?'checked':''}> Mostrar na Área do Cliente</label></div></form><div class="pppc-modal-actions"><button type="button" data-close>Cancelar</button><button type="button" class="primary" data-save>Salvar plano</button></div></div>`;
     document.body.appendChild(modal);
     modal.addEventListener('click',async event=>{
       if(event.target===modal||event.target.closest('[data-close]')){closeModal();return}
       if(!event.target.closest('[data-save]'))return;
-      const form=modal.querySelector('form'),data=new FormData(form),name=String(data.get('name')||'').trim(),download=Math.round(Number(data.get('download'))||0),upload=Math.round(Number(data.get('upload'))||0),priceValue=Number(data.get('price'))||0,profile=String(data.get('profile')||'').trim();
-      if(!name||download<=0||priceValue<=0){window.alert('Informe nome, download e mensalidade.');return}
-      const rows=[...plans],seq=Number(state?.seq?.plans)||0,numericIds=plans.map(item=>Number(item?.id)||0),id=plan?.id??Math.max(seq,...numericIds,0)+1,nextPlan={...(plan||{}),id,name,title:name,download_mbps:download,download,upload_mbps:upload,upload,speed:speedLabel(download),bandwidth:speedLabel(download),price_cents:Math.round(priceValue*100),value_cents:Math.round(priceValue*100),price:priceValue,amount:priceValue,profile_name:profile,profile,active:Boolean(form.elements.active.checked),enabled:Boolean(form.elements.active.checked),portal_visible:Boolean(form.elements.portal.checked),updated_at:new Date().toISOString()};
+      const form=modal.querySelector('form'),data=new FormData(form),name=String(data.get('name')||'').trim(),download=Math.round(Number(data.get('download'))||0),upload=Math.round(Number(data.get('upload'))||0),priceValue=Number(data.get('price'))||0,installationValue=Number(data.get('installation')),profile=String(data.get('profile')||'').trim();
+      if(!name||download<=0||priceValue<=0||!Number.isFinite(installationValue)||installationValue<0){window.alert('Informe nome, download, mensalidade e uma taxa de instalação válida.');return}
+      const rows=[...plans],seq=Number(state?.seq?.plans)||0,numericIds=plans.map(item=>Number(item?.id)||0),id=plan?.id??Math.max(seq,...numericIds,0)+1;
+      let nextPlan={...(plan||{}),id,name,title:name,download_mbps:download,download,upload_mbps:upload,upload,speed:speedLabel(download),bandwidth:speedLabel(download),price_cents:Math.round(priceValue*100),value_cents:Math.round(priceValue*100),price:priceValue,amount:priceValue,installation_fee_cents:Math.round(installationValue*100),installationFeeCents:Math.round(installationValue*100),installation_fee:installationValue,installationFee:installationValue,profile_name:profile,profile,active:Boolean(form.elements.active.checked),enabled:Boolean(form.elements.active.checked),portal_visible:Boolean(form.elements.portal.checked),updated_at:new Date().toISOString()};
+      nextPlan=normalizePortalPlan(nextPlan);
       if(index===null)rows.push(nextPlan);else rows[index]=nextPlan;
       await saveState({...state,plans:rows,seq:{...(state.seq||{}),plans:Math.max(seq,Number(id)||0)}});closeModal();await render();
     });
@@ -125,13 +165,12 @@
       const ready=ensureLayer(navButton);if(!ready)return;
       const visible=new Set([...ready.layer.querySelectorAll('.pppc-card')].filter(node=>node.querySelector('[data-portal]')?.checked).map(node=>Number(node.dataset.index)));
       const clients=await readClients(),counts=plans.map(plan=>usage(plan,clients)),maxUse=Math.max(0,...counts);
-      const next=plans.map((plan,i)=>({
+      const next=plans.map((plan,i)=>normalizePortalPlan({
         ...plan,
         portal_visible:active(plan)&&visible.has(i),
-        description:[String(plan?.description||'').replace(/\s*(?:·\s*)?Upload\s+[\d.,]+\s*Mbps\s*$/i,'').trim(),`Upload ${uploadMbps(plan)} Mbps`].filter(Boolean).join(' · '),
         highlight:maxUse>0&&counts[i]===maxUse&&active(plan)
       }));
-      await saveState({...state,plans:next});window.alert('Área do Cliente atualizada. Somente os planos marcados serão exibidos como oferta.');await render();return;
+      await saveState({...state,plans:next});window.alert('Área do Cliente atualizada. Download, upload e taxa de instalação foram sincronizados com as ofertas.');await render();return;
     }
     if(event.target.closest('[data-delete-selected]')){if(!selected.size){window.alert('Selecione pelo menos um plano para excluir.');return}const clients=await readClients(),allowed=[],blocked=[];for(const i of selected){const plan=plans[i];if(!plan)continue;(usage(plan,clients)>0?blocked:allowed).push(i)}if(!allowed.length){window.alert('Os planos selecionados estão vinculados a clientes e não podem ser excluídos.');return}const note=blocked.length?`\n\n${blocked.length} plano(s) em uso serão preservados.`:'';if(!window.confirm(`Excluir ${allowed.length} plano(s)?${note}`))return;const remove=new Set(allowed);await saveState({...state,plans:plans.filter((_,i)=>!remove.has(i))});selected=new Set();await render();return}
   }

@@ -177,6 +177,8 @@
 
   function openPlans(button=navButton){
     if(!button)return;opened=true;navButton=button;const ready=ensureLayer(button);if(!ready)return;
+    ready.content.classList.remove('pp-dashboard-root-active','pp-client-hub-active','pp-integration-hub-active','pp-new-plans-active','pp-route-overlay-active','pp-route-billing-active','pp-route-ticket-active','pp-route-staff-active','pp-nav-loading-active');
+    ready.content.querySelector(':scope > .pp-nav-loading-layer')?.remove();
     button.closest('nav')?.querySelectorAll('button.active').forEach(item=>{if(item!==button)item.classList.remove('active')});button.classList.add('active');ready.content.classList.add('pp-plans-cloud-active');
     if(!ready.layer.dataset.bound){ready.layer.dataset.bound='1';ready.layer.addEventListener('click',event=>handleLayerClick(event).catch(error=>{console.error(error);window.alert(error?.message||'Não foi possível concluir a operação.') }))}
     render().catch(error=>{console.error(error);window.alert('Não foi possível carregar Planos & Ofertas.')});

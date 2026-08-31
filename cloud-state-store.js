@@ -12,6 +12,7 @@
   let latestRaw=null;
   let lastSyncedRaw=null;
   let retryDelay=1200;
+  let prepareGeneration=0;
 
   const parse=raw=>{try{return raw?JSON.parse(raw):null}catch{return null}};
 
@@ -122,37 +123,37 @@
   }
 
   async function prepare(){
-    installHook();
-    const local=localRaw();
-    let remote;
-    try{remote=await cloud('state.get')}catch(error){
-      throw new Error(`Não foi possível conectar ao banco da nuvem: ${error?.message||error}`);
-    }
-
-    if(remote?.state&&typeof remote.state==='object'){
-      const raw=JSON.stringify(remote.state);
-      nativeSet.call(window.localStorage,KEY,raw);
-      restoreAux(remote.state);
-      latestRaw=raw;
-      lastSyncedRaw=raw;
-      return {source:'cloud',updatedAt:remote.updated_at||null};
-    }
-
-    if(local){
-      let state=parse(local);
-      if(state&&typeof state==='object'){
-        state=collectAux(state);
-        const saved=await cloud('state.save',{state});
-        const raw=JSON.stringify(saved?.state||state);
-        nativeSet.call(window.localStorage,KEY,raw);
-        latestRaw=raw;
-        lastSyncedRaw=raw;
-        return {source:'local-migrated',updatedAt:saved?.updated_at||null};
-      }
-    }
-
-    return {source:'empty',updatedAt:null};
+  installHook();
+  const generation=++prepareGeneration;
+  const local=localRaw();
+  let remote;
+  try{remote=await cloud('state.get')}catch(error){
+    if(generation!==prepareGeneration)return {source:'stale-ignored',updatedAt:null};
+    throw new Error(`Não foi possível conectar ao banco da nuvem: ${error?.message||error}`);
   }
+  if(generation!==prepareGeneration)return {source:'stale-ignored',updatedAt:null};
+  if(remote?.state&&typeof remote.state==='object'){
+    const raw=JSON.stringify(remote.state);
+    if(generation!==prepareGeneration)return {source:'stale-ignored',updatedAt:null};
+    nativeSet.call(window.localStorage,KEY,raw);restoreAux(remote.state);latestRaw=raw;lastSyncedRaw=raw;
+    return {source:'cloud',updatedAt:remote.updated_at||null};
+  }
+  if(local){
+    let state=parse(local);
+    if(state&&typeof state==='object'){
+      if(generation!==prepareGeneration)return {source:'stale-ignored',updatedAt:null};
+      state=collectAux(state);
+      const saved=await cloud('state.save',{state});
+      if(generation!==prepareGeneration)return {source:'stale-ignored',updatedAt:null};
+      const raw=JSON.stringify(saved?.state||state);
+      nativeSet.call(window.localStorage,KEY,raw);latestRaw=raw;lastSyncedRaw=raw;
+      return {source:'local-migrated',updatedAt:saved?.updated_at||null};
+    }
+  }
+  return {source:'empty',updatedAt:null};
+}
+
+function cancelPrepare(){prepareGeneration++}
 
   async function forceSync(){
     clearTimeout(timer);
@@ -190,5 +191,5 @@
   }
 
   window.addEventListener('beforeunload',()=>{if(latestRaw&&latestRaw!==lastSyncedRaw)flush().catch(()=>{})});
-  window.ProvedorPlusCloudState={prepare,forceSync,wrapApi,getState:()=>parse(localRaw())};
+  window.ProvedorPlusCloudState={prepare,cancelPrepare,forceSync,wrapApi,getState:()=>parse(localRaw())};
 })();

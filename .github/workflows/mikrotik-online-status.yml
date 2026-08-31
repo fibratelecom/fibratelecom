@@ -1,0 +1,62 @@
+name: MikroTik Online Status
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: ['.github/workflows/mikrotik-online-status.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+          fetch-depth: 0
+      - name: Mostrar status real do MikroTik
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('dashboard-transition-guard.js')
+          s=p.read_text(encoding='utf-8')
+          old="""<span class=\"pp-bank-status ${r.has_password?'ok':''}\">${r.has_password?'Credencial salva':'Informe a senha'}</span>"""
+          new="""<span class=\"pp-bank-status ${r.has_password?'':'error'}\" data-router-live-status=\"${Number(r.id)||0}\">${r.has_password?'Verificando...':'Offline'}</span>"""
+          if old not in s:
+              raise SystemExit('badge atual do servidor MikroTik não encontrado')
+          s=s.replace(old,new,1)
+          marker="""      const form=h.querySelector('#pp-mt-form'),title=h.querySelector('#pp-mt-form-title'),output=h.querySelector('#pp-mt-output');"""
+          inject="""      const refreshRouterStatus=async r=>{const badge=h.querySelector(`[data-router-live-status=\"${Number(r.id)||0}\"]`);if(!badge)return;if(!r.has_password){badge.classList.remove('ok');badge.classList.add('error');badge.textContent='Offline';badge.title='Credencial do MikroTik não disponível.';return}try{const live=await api.mikrotik.sync(Number(r.id));if(!badge.isConnected)return;badge.classList.remove('error');badge.classList.add('ok');badge.textContent='Conectado · Online';const identity=live?.identity||live?.routerName||r.name||'MikroTik',version=live?.version||live?.routerVersion||'';badge.title=[identity,version?`RouterOS ${version}`:''].filter(Boolean).join(' · ')}catch(error){if(!badge.isConnected)return;badge.classList.remove('ok');badge.classList.add('error');badge.textContent='Offline';badge.title=error?.message||String(error)}};
+      list.forEach(r=>{refreshRouterStatus(r)});
+      const form=h.querySelector('#pp-mt-form'),title=h.querySelector('#pp-mt-form-title'),output=h.querySelector('#pp-mt-output');"""
+          if marker not in s:
+              raise SystemExit('ponto de atualização de status não encontrado')
+          s=s.replace(marker,inject,1)
+          p.write_text(s,encoding='utf-8')
+
+          b=Path('bootstrap.js')
+          x=b.read_text(encoding='utf-8')
+          oldtok='20260831-mikrotik-api1';newtok='20260831-mikrotik-status2'
+          if oldtok not in x: raise SystemExit('token atual do bootstrap não encontrado')
+          b.write_text(x.replace(oldtok,newtok,1),encoding='utf-8')
+          i=Path('index.html')
+          x=i.read_text(encoding='utf-8')
+          if oldtok not in x: raise SystemExit('token atual do index não encontrado')
+          i.write_text(x.replace(oldtok,newtok,1),encoding='utf-8')
+          PY
+          node --check dashboard-transition-guard.js
+          node --check bootstrap.js
+          grep -Fq 'Conectado · Online' dashboard-transition-guard.js
+          grep -Fq "badge.textContent='Offline'" dashboard-transition-guard.js
+          grep -Fq '20260831-mikrotik-status2' bootstrap.js index.html
+      - name: Publicar e remover workflow temporário
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/mikrotik-online-status.yml
+          git add dashboard-transition-guard.js bootstrap.js index.html
+          git commit -m 'Mostra status online real dos servidores MikroTik'
+          git push origin HEAD:cloudflare-provedor-plus

@@ -8,7 +8,7 @@
       if(!nav)return;
       const item=[...nav.querySelectorAll('button,a,[role="button"]')].find(node=>{
         const label=normalizeLabel(node.textContent);
-        return label==='cliente'||label==='clientes'||label.includes(' clientes')||label.startsWith('clientes ')||label.startsWith('cliente ');
+        return label.includes('clientes')||label==='cliente';
       });
       if(item)item.dataset.ppClientHub='1';
     };

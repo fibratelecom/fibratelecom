@@ -10,8 +10,9 @@
 <title>Provedor Plus</title>
 <!-- Provedor Plus cloud17: clientes, status, credenciais e tráfego centralizados na nuvem -->
 <link rel="stylesheet" href="/client-status-loader-cover.css?v=1017-status-loader3" />
+<script defer src="/startup-loader.js?v=20260831-startup-only2"></script>
 <script defer src="/plans.js?v=20260831-planos-open1"></script>
-<script defer src="/bootstrap.js?v=20260831-startup-loader1"></script>
+<script defer src="/bootstrap.js?v=20260831-startup-only2"></script>
 </head>
 <body>
 <style id="pp-startup-style">
@@ -25,12 +26,10 @@
   .pp-startup-screen::before{width:620px;height:620px;left:-250px;top:-290px;box-shadow:0 0 100px rgba(16,143,119,.08)}
   .pp-startup-screen::after{width:760px;height:760px;right:-360px;bottom:-420px}
   .pp-startup-screen.is-leaving{opacity:0;visibility:hidden;pointer-events:none}
-  .pp-startup-card{position:relative;width:min(430px,calc(100vw - 42px));box-sizing:border-box;padding:32px 34px 28px;border:1px solid rgba(185,240,226,.14);border-radius:22px;background:linear-gradient(180deg,rgba(255,255,255,.085),rgba(255,255,255,.035));box-shadow:0 28px 80px rgba(0,0,0,.32);backdrop-filter:blur(18px)}
-  .pp-startup-brand{display:flex;align-items:center;gap:13px;margin-bottom:28px}
-  .pp-startup-mark{display:flex;align-items:flex-end;justify-content:center;gap:3px;width:42px;height:42px;padding:9px;box-sizing:border-box;border-radius:12px;background:linear-gradient(145deg,#1bc6a6,#0b8f79);box-shadow:0 10px 30px rgba(16,178,145,.28)}
+  .pp-startup-card{position:relative;width:min(430px,calc(100vw - 42px));box-sizing:border-box;padding:34px 34px 28px;border:1px solid rgba(185,240,226,.14);border-radius:22px;background:linear-gradient(180deg,rgba(255,255,255,.085),rgba(255,255,255,.035));box-shadow:0 28px 80px rgba(0,0,0,.32);backdrop-filter:blur(18px)}
+  .pp-startup-mark{display:flex;align-items:flex-end;justify-content:center;gap:3px;width:48px;height:48px;margin-bottom:24px;padding:10px;box-sizing:border-box;border-radius:14px;background:linear-gradient(145deg,#1bc6a6,#0b8f79);box-shadow:0 10px 30px rgba(16,178,145,.28)}
   .pp-startup-mark i{display:block;width:4px;border-radius:4px;background:#fff;animation:ppStartBars 1.05s ease-in-out infinite}
-  .pp-startup-mark i:nth-child(1){height:8px;animation-delay:-.3s}.pp-startup-mark i:nth-child(2){height:15px;animation-delay:-.15s}.pp-startup-mark i:nth-child(3){height:22px}.pp-startup-mark i:nth-child(4){height:13px;animation-delay:-.45s}
-  .pp-startup-brand-text small{display:block;color:#87cfc0;font-size:9px;font-weight:900;letter-spacing:.18em}.pp-startup-brand-text strong{display:block;margin-top:2px;font-size:18px;letter-spacing:-.02em}.pp-startup-brand-text strong b{color:#37d4b5}
+  .pp-startup-mark i:nth-child(1){height:9px;animation-delay:-.3s}.pp-startup-mark i:nth-child(2){height:17px;animation-delay:-.15s}.pp-startup-mark i:nth-child(3){height:24px}.pp-startup-mark i:nth-child(4){height:14px;animation-delay:-.45s}
   .pp-startup-card h1{margin:0;font-size:27px;line-height:1.08;letter-spacing:-.035em}.pp-startup-card p{margin:10px 0 0;color:#a9c3bc;font-size:11px;line-height:1.5}
   .pp-startup-progress{position:relative;height:5px;margin:24px 0 14px;overflow:hidden;border-radius:999px;background:rgba(255,255,255,.09)}
   .pp-startup-progress span{position:absolute;inset:0 auto 0 0;width:38%;border-radius:inherit;background:linear-gradient(90deg,#16a98e,#5ee2c8,#16a98e);animation:ppStartMove 1.15s ease-in-out infinite}
@@ -40,20 +39,17 @@
   .pp-startup-retry:hover{background:rgba(20,158,131,.3)}
   .pp-startup-screen.is-error .pp-startup-progress span{width:100%;animation:none;background:#d58c5a}.pp-startup-screen.is-error .pp-startup-live::before{background:#f59e0b}.pp-startup-screen.is-error .pp-startup-retry{display:block}
   @keyframes ppStartBars{0%,100%{opacity:.52;transform:scaleY(.7)}50%{opacity:1;transform:scaleY(1.08)}}@keyframes ppStartMove{0%{transform:translateX(-105%)}100%{transform:translateX(285%)}}@keyframes ppStartPulse{0%,100%{opacity:.55}50%{opacity:1}}
-  @media(max-width:520px){.pp-startup-card{padding:26px 24px 24px;border-radius:18px}.pp-startup-card h1{font-size:24px}}
+  @media(max-width:520px){.pp-startup-card{padding:28px 24px 24px;border-radius:18px}.pp-startup-card h1{font-size:24px}}
   @media(prefers-reduced-motion:reduce){.pp-startup-mark i,.pp-startup-progress span,.pp-startup-live::before{animation:none}}
 </style>
-<div id="pp-startup-screen" class="pp-startup-screen" role="status" aria-live="polite">
+<div id="pp-startup-screen-new" class="pp-startup-screen" role="status" aria-live="polite">
   <section class="pp-startup-card">
-    <div class="pp-startup-brand">
-      <span class="pp-startup-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
-      <span class="pp-startup-brand-text"><small>GESTÃO DE PROVEDOR</small><strong>Provedor <b>Plus</b></strong></span>
-    </div>
+    <span class="pp-startup-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
     <h1>Preparando seu painel</h1>
-    <p id="pp-startup-status">Conectando dados, rede e serviços do provedor...</p>
+    <p id="pp-startup-status-new">Conectando dados, rede e serviços...</p>
     <div class="pp-startup-progress" aria-hidden="true"><span></span></div>
-    <div class="pp-startup-foot"><span class="pp-startup-live">Inicialização segura</span><span id="pp-startup-stage">Carregando módulos</span></div>
-    <button id="pp-startup-retry" class="pp-startup-retry" type="button">Recarregar painel</button>
+    <div class="pp-startup-foot"><span class="pp-startup-live">Inicialização segura</span><span id="pp-startup-stage-new">Carregando módulos</span></div>
+    <button id="pp-startup-retry-new" class="pp-startup-retry" type="button">Recarregar painel</button>
   </section>
 </div>
 <div id="root"></div>

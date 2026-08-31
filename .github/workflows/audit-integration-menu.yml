@@ -1,0 +1,49 @@
+name: Audit Integration Menu
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: [.github/workflows/audit-integration-menu.yml]
+permissions:
+  contents: write
+jobs:
+  audit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+          fetch-depth: 0
+      - name: Localizar origem real do menu Integração
+        run: |
+          set -euo pipefail
+          cat packed/appgz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/app.js
+          node --check /tmp/app.js
+          echo '=== OCORRENCIAS INTEGRACAO ==='
+          grep -n -i -C 8 -E 'Integra(c|ç)(a|ã)o|Integra(c|ç)(o|õ)es|MikroTik|Mercado Pago|Ef[ií]' /tmp/app.js | head -n 500 || true
+          echo '=== TRECHOS MENU/NAVEGACAO ==='
+          node <<'NODE'
+          const fs=require('fs');
+          const s=fs.readFileSync('/tmp/app.js','utf8');
+          const terms=['Integração','Integrações','integracao','integracoes'];
+          const seen=new Set();
+          for(const term of terms){
+            let p=0;
+            while((p=s.indexOf(term,p))>=0){
+              const a=Math.max(0,p-1800),b=Math.min(s.length,p+2600),key=`${a}:${b}`;
+              if(!seen.has(key)){
+                seen.add(key);
+                console.log(`\n--- ${term} @ ${p} ---\n${s.slice(a,b)}\n--- FIM ---`);
+              }
+              p+=term.length;
+            }
+          }
+          NODE
+      - name: Remover auditoria temporária
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/audit-integration-menu.yml
+          git commit -m "Remove auditoria temporária do menu Integração"
+          git push

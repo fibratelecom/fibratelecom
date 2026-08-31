@@ -26,7 +26,7 @@ const __ppStartup={
 window.addEventListener('provedor-plus-react-error',__ppReactErrorListener);
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260831-uiatomic3';
+  const BUILD_TOKEN='20260831-uiatomic4';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');
@@ -249,8 +249,8 @@ if(prepareOutcome.kind==='timeout'){
   try{await import(appUrl)}finally{setTimeout(()=>URL.revokeObjectURL(appUrl),1500)}
   if(__ppReactBootError||window.__PP_REACT_BOOT_ERROR__)throw (__ppReactBootError||window.__PP_REACT_BOOT_ERROR__);
   await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-  await loadScript('/dashboard-transition-guard.js?v=20260831-uiatomic3');
-  await loadScriptStable('/dashboard-enhancements.js?v=20260831-uiatomic1',{dropCharacterData:true,observerTargetSelector:'.app-shell',ignoreWithin:['.pp-dashboard-root-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-new-plans-layer']});
+  await loadScript('/dashboard-transition-guard.js?v=20260831-uiatomic4');
+  await loadScriptStable('/dashboard-enhancements.js?v=20260831-uiatomic4',{dropCharacterData:true,observerTargetSelector:'.app-shell',ignoreWithin:['.pp-dashboard-root-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-new-plans-layer']});
   const coreUiDeadline=Date.now()+12000;
   const adminNeedsIntegration=String(auth?.user?.role||'').toLowerCase()==='admin';
   let coreUiReady=false;

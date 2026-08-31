@@ -21,7 +21,7 @@
   const isBlockedClient=c=>['bloqueado','bloqueada','blocked','suspenso','suspensa','inactive','inativo','inativa'].includes(norm(c?.status||c?.connection_status));
   let button=null,layer=null,opening=false,loadedOnce=false,observer=null,ensureTimer=null;
   let core={dashboard:{},clients:[],plans:[],invoices:[],tickets:[],routers:[]},routerLive=new Map(),routerTrafficPrevious=new Map(),routerPollTimer=null,routerPollBusy=false;
-  const navRoot=()=>document.querySelector('aside.sidebar nav[aria-label="Menu principal"],aside.sidebar nav'),contentRoot=()=>document.querySelector('.app-shell>.content')||document.querySelector('.content');
+  const navRoot=()=>document.querySelector('.app-shell .sidebar nav[aria-label="Menu principal"],.app-shell .sidebar nav,.app-shell aside nav[aria-label="Menu principal"],.app-shell aside nav,.sidebar nav,aside nav'),contentRoot=()=>document.querySelector('.app-shell>.content')||document.querySelector('.content');
   function setActive(on){const nav=navRoot();if(on){nav?.querySelectorAll('button.active').forEach(item=>item.classList.remove('active'));button?.classList.add('active')}else button?.classList.remove('active')}
   function stopRouterPolling(){if(routerPollTimer){clearInterval(routerPollTimer);routerPollTimer=null}}
   function closeDashboard(){stopRouterPolling();const content=contentRoot();content?.classList.remove('pp-dashboard-root-active');layer?.remove();layer=null;opening=false;setActive(false)}
@@ -86,7 +86,7 @@
   let dashboardObservedSidebar=null,dashboardShellObserver=null,dashboardRootObserver=null,dashboardObservedShell=null;
   function scheduleDashboardEnsure(){clearTimeout(ensureTimer);ensureTimer=setTimeout(()=>{ensureButton();bindDashboardObservers()},30)}
   function bindDashboardObservers(){
-    const root=document.getElementById('root'),shell=document.querySelector('.app-shell'),sidebar=document.querySelector('aside.sidebar')||document.querySelector('aside');
+    const root=document.getElementById('root'),shell=document.querySelector('.app-shell'),sidebar=document.querySelector('.app-shell .sidebar,.app-shell aside,.sidebar,aside');
     if(sidebar!==dashboardObservedSidebar){observer?.disconnect();observer=null;dashboardObservedSidebar=sidebar||null;if(sidebar){observer=new MutationObserver(()=>scheduleDashboardEnsure());observer.observe(sidebar,{childList:true,subtree:true})}}
     if(shell!==dashboardObservedShell){dashboardShellObserver?.disconnect();dashboardShellObserver=null;dashboardObservedShell=shell||null;if(shell){dashboardShellObserver=new MutationObserver(()=>scheduleDashboardEnsure());dashboardShellObserver.observe(shell,{childList:true})}}
     if(root&&!dashboardRootObserver){dashboardRootObserver=new MutationObserver(()=>scheduleDashboardEnsure());dashboardRootObserver.observe(root,{childList:true})}

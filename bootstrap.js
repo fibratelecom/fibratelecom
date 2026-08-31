@@ -2,7 +2,7 @@ const __ppStartup={done(){},fail(error){console.error(error)}};
 window.addEventListener('provedor-plus-react-error',event=>{const message=event?.detail?.message||'Falha ao montar o painel.';console.error(new Error(message))});
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260831-integration-system2';
+  const BUILD_TOKEN='20260831-step1-menu1';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');
@@ -276,7 +276,7 @@ window.addEventListener('provedor-plus-react-error',event=>{const message=event?
   const app=await gunzipB64(appB64),appUrl=URL.createObjectURL(new Blob([app],{type:'text/javascript'}));
   try{await import(appUrl)}finally{setTimeout(()=>URL.revokeObjectURL(appUrl),1500)}
   await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-  await loadScript('/dashboard-transition-guard.js?v=20260831-integration-system2').catch(error=>console.error('Provedor Plus: os hubs de navegação não foram carregados.',error));
+  await loadScript('/dashboard-transition-guard.js?v=20260831-step1-menu1').catch(error=>console.error('Provedor Plus: os hubs de navegação não foram carregados.',error));
 
   try{installNewPlansModule()}catch(error){console.error('Provedor Plus: Planos nao impediu os demais modulos de carregar.',error)}
   await loadScript('/ui-runtime-fixes.js?v=1017-fix18-plans-observer').catch(error=>console.error('Provedor Plus: correcoes de interface nao impediram os demais modulos de carregar.',error));

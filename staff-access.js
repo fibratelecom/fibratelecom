@@ -40,6 +40,19 @@
     modal.querySelector('form').addEventListener('submit',async ev=>{ev.preventDefault();const fd=new FormData(ev.currentTarget),payload={id:employee?.id||undefined,name:String(fd.get('name')||''),login:String(fd.get('login')||''),phone:String(fd.get('phone')||''),role:String(fd.get('role')||'atendente'),password:String(fd.get('password')||''),active:Number(employee?.id)===Number(auth?.user?.id)?true:fd.get('active')==='on',permissions:fd.getAll('permission')};const button=ev.currentTarget.querySelector('[type=submit]');button.disabled=true;button.textContent='Salvando...';try{await api('employees.save',payload);closeForm();toast(employee?'Funcionário atualizado.':'Funcionário cadastrado e liberado para acesso.');await openLayer()}catch(error){if(button.isConnected){button.disabled=false;button.textContent='Salvar funcionário'}toast(error.message,'bad')}})
   }
 
-  async function start(){try{auth=await window.ProvedorPlusAuth?.status?.();}catch{return}if(!auth?.authenticated||!auth.user)return;installNav();applyPermissions();const observer=new MutationObserver(()=>{clearTimeout(mutationTimer);mutationTimer=setTimeout(()=>{installNav();applyPermissions()},60)});observer.observe(document.body,{childList:true,subtree:true});document.addEventListener('click',e=>{const b=e.target.closest('.sidebar nav button,nav button');if(b&&b!==navButton&&(layer||formLayer))closeLayer()},true)}
+  async function start(){
+    try{auth=await window.ProvedorPlusAuth?.status?.()}catch{return}
+    if(!auth?.authenticated||!auth.user)return;
+    let staffSidebarObserver=null,staffShellObserver=null,staffRootObserver=null,staffObservedSidebar=null,staffObservedShell=null,staffEnsureTimer=null;
+    const scheduleStaffEnsure=()=>{clearTimeout(staffEnsureTimer);staffEnsureTimer=setTimeout(()=>{installNav();applyPermissions();bindStaffObservers()},60)};
+    const bindStaffObservers=()=>{
+      const root=document.getElementById('root'),shell=document.querySelector('.app-shell'),sidebar=document.querySelector('.sidebar')||document.querySelector('aside');
+      if(sidebar!==staffObservedSidebar){staffSidebarObserver?.disconnect();staffSidebarObserver=null;staffObservedSidebar=sidebar||null;if(sidebar){staffSidebarObserver=new MutationObserver(()=>scheduleStaffEnsure());staffSidebarObserver.observe(sidebar,{childList:true,subtree:true})}}
+      if(shell!==staffObservedShell){staffShellObserver?.disconnect();staffShellObserver=null;staffObservedShell=shell||null;if(shell){staffShellObserver=new MutationObserver(()=>scheduleStaffEnsure());staffShellObserver.observe(shell,{childList:true})}}
+      if(root&&!staffRootObserver){staffRootObserver=new MutationObserver(()=>scheduleStaffEnsure());staffRootObserver.observe(root,{childList:true})}
+    };
+    installNav();applyPermissions();bindStaffObservers();
+    document.addEventListener('click',e=>{const b=e.target.closest('.sidebar nav button,nav button');if(b&&b!==navButton&&(layer||formLayer))closeLayer()},true);
+  }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(start,50),{once:true});else setTimeout(start,50);
 })();

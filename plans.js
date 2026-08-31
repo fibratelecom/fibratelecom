@@ -197,14 +197,17 @@
     if(opened){custom.classList.add('active');const ready=ensureLayer(custom);ready?.content.classList.add('pp-plans-cloud-active')}
   }
 
-  function installNavObserver(){
-    const root=document.querySelector('.sidebar')||document.querySelector('aside');if(!root)return false;
-    navObserver?.disconnect();navObserver=new MutationObserver(()=>ensureNav());navObserver.observe(root,{childList:true,subtree:true});ensureNav();return true;
+  let plansRootObserver=null,plansShellObserver=null,plansObservedSidebar=null,plansObservedShell=null,plansEnsureTimer=null;
+  function schedulePlansEnsure(){clearTimeout(plansEnsureTimer);plansEnsureTimer=setTimeout(()=>{ensureNav();bindPlansObservers()},30)}
+  function bindPlansObservers(){
+    const root=document.getElementById('root'),shell=document.querySelector('.app-shell'),sidebar=document.querySelector('.sidebar')||document.querySelector('aside');
+    if(sidebar!==plansObservedSidebar){navObserver?.disconnect();navObserver=null;plansObservedSidebar=sidebar||null;if(sidebar){navObserver=new MutationObserver(()=>schedulePlansEnsure());navObserver.observe(sidebar,{childList:true,subtree:true})}}
+    if(shell!==plansObservedShell){plansShellObserver?.disconnect();plansShellObserver=null;plansObservedShell=shell||null;if(shell){plansShellObserver=new MutationObserver(()=>schedulePlansEnsure());plansShellObserver.observe(shell,{childList:true})}}
+    if(root&&!plansRootObserver){plansRootObserver=new MutationObserver(()=>schedulePlansEnsure());plansRootObserver.observe(root,{childList:true})}
   }
 
   ensureStyle();
-  const bootObserver=new MutationObserver(()=>{if(installNavObserver()){bootObserver.disconnect()}});bootObserver.observe(document.documentElement,{childList:true,subtree:true});
-  if(!installNavObserver())setTimeout(()=>installNavObserver(),100);
+  schedulePlansEnsure();
 
   document.addEventListener('click',event=>{
     const button=event.target.closest?.('.sidebar nav button,aside nav button');if(!button)return;

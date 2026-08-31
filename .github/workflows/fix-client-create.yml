@@ -1,0 +1,39 @@
+name: fix-client-create
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths:
+      - '.github/workflows/fix-client-create.yml'
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+          fetch-depth: 0
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Apply client create visual
+        run: python3 .github/scripts/apply-client-create-visual.py
+      - name: Validate
+        run: |
+          node --check dashboard-transition-guard.js
+          node --check bootstrap.js
+          grep -q "ppc-create-layout" dashboard-transition-guard.js
+          grep -q "20260831-client-create1" bootstrap.js
+          grep -q "20260831-client-create1" index.html
+      - name: Commit functional change
+        run: |
+          git add dashboard-transition-guard.js bootstrap.js index.html
+          git commit -m "Atualiza visual do cadastro de clientes"
+          git push origin cloudflare-provedor-plus
+      - name: Cleanup temporaries
+        run: |
+          git rm -f .github/scripts/apply-client-create-visual.py .github/workflows/fix-client-create.yml
+          git commit -m "Remove temporarios do cadastro de clientes"
+          git push origin cloudflare-provedor-plus

@@ -1,0 +1,31 @@
+name: Fix Auth Preboot 2
+on:
+  push:
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply fix
+        run: python3 .github/fix-auth-preboot.py
+      - name: Validate
+        run: |
+          node --check auth-gate.js
+          node --check bootstrap.js
+          grep -Fq "Tempo limite ao validar a sessão" auth-gate.js
+          grep -Fq "Não foi possível abrir o painel" bootstrap.js
+          grep -Fq "20260831-boot-unblock2" bootstrap.js index.html
+          ! grep -Fq "pp-startup-screen" index.html
+      - name: Publish
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add auth-gate.js bootstrap.js index.html
+          git commit -m 'Fecha autenticacao na abertura do painel'
+          git rm -f .github/fix-auth-preboot.py .github/workflows/fix-auth-preboot2.yml
+          git commit -m 'Remove aplicador temporario de autenticacao'
+          git push origin HEAD:cloudflare-provedor-plus

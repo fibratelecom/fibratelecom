@@ -82,6 +82,7 @@
   window.__ProvedorPlusIntegrationHubInstalled=true;
   const norm=v=>String(v??'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
   const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const MASK='••••••••••';
   let hubButton=null,popup=null,layer=null,timer=null,navObserver=null;
   const navRoot=()=>document.querySelector('aside.sidebar nav[aria-label="Menu principal"],aside.sidebar nav');
   const contentRoot=()=>document.querySelector('.app-shell>.content')||document.querySelector('.content');

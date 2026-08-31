@@ -28,8 +28,9 @@
   function panelReady(){
     const shell=document.querySelector('.app-shell');
     const nav=document.querySelector('aside.sidebar nav,.sidebar nav,aside nav');
-    const content=document.querySelector('.app-shell>.content,.content');
-    return Boolean(shell&&nav&&content&&nav.querySelector('button'));
+    const dashboardButton=document.querySelector('button[data-pp-dashboard-root="1"]');
+    const dashboard=document.querySelector('.pp-dashboard-root-layer .ppd-head,.pp-dashboard-root-layer .ppd-error');
+    return Boolean(shell&&nav&&dashboardButton&&dashboard);
   }
 
   function finish(){

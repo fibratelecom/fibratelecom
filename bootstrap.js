@@ -1,6 +1,6 @@
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260831-dashboard-mikrotik1';
+  const BUILD_TOKEN='20260831-dashboard-mikrotik2';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');
@@ -276,7 +276,7 @@
 
   installNewPlansModule();
   await loadScript('/ui-runtime-fixes.js?v=1017-fix18-plans-observer');
-  await loadScriptStable('/dashboard-enhancements.js?v=20260831-dashboard-mikrotik1',{dropCharacterData:true,observerTargetSelector:'.app-shell',ignoreWithin:['.pp-dashboard-root-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-new-plans-layer']}).catch(error=>console.error('Provedor Plus: o Dashboard gerencial não foi carregado.',error));
+  await loadScriptStable('/dashboard-enhancements.js?v=20260831-dashboard-mikrotik2',{dropCharacterData:true,observerTargetSelector:'.app-shell',ignoreWithin:['.pp-dashboard-root-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-new-plans-layer']}).catch(error=>console.error('Provedor Plus: o Dashboard gerencial não foi carregado.',error));
   await loadScriptStable('/billing-bank-selector.js?v=1017-billingbank3',{ignoreWithin:['.pp-dashboard-root-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.pp-new-plans-layer']}).catch(error=>console.error('Provedor Plus: a seleção do banco emissor não foi carregada.',error));
   await loadScript('/billing-automation.js?v=1017-billingauto1').catch(error=>console.error('Provedor Plus: a automação de mensalidades não foi carregada.',error));
   await loadScriptStable('/staff-access.js?v=1017-staff1',{observerTargetSelector:'.sidebar',ignoreWithin:['.pp-dashboard-root-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.pp-new-plans-layer']}).catch(error=>console.error('Provedor Plus: a gestão de funcionários não foi carregada.',error));

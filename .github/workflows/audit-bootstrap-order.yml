@@ -1,0 +1,27 @@
+name: Audit Bootstrap Order
+on: push
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Auditar ordem bootstrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('bootstrap.js').read_text()
+          needles=['window.provedor','ProvedorPlusInstallCloudAdapter','ProvedorPlusCloudState','packed/appgz','createRoot','loadScript','eval(','Function(']
+          for n in needles:
+              print('\n###',n)
+              start=0;c=0
+              while True:
+                  i=s.find(n,start)
+                  if i<0 or c>=20: break
+                  print('INDEX',i)
+                  print(s[max(0,i-700):min(len(s),i+1500)])
+                  start=i+1;c+=1
+          PY

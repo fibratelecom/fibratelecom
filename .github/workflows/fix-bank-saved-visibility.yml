@@ -1,0 +1,61 @@
+name: Fix Bank Saved Visibility
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: ['.github/workflows/fix-bank-saved-visibility.yml']
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+          fetch-depth: 0
+      - name: Ajustar campos salvos da API Bancos
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('dashboard-transition-guard.js')
+          s=p.read_text()
+          s=s.replace("  const esc=v=>String(v??'').replace(/[&<>\\\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\\\"':'&quot;',\"'\":'&#39;'}[c]));", "  const esc=v=>String(v??'').replace(/[&<>\\\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\\\"':'&quot;',\"'\":'&#39;'}[c]));\n  const MASK='••••••••••';")
+          replacements={
+            '<label>Client ID<input name="clientId" placeholder="${efi.clientIdConfigured?\'Salvo · deixe vazio para manter\':\'Client ID\'}"></label>':'<label>Client ID<input name="clientId" value="${efi.clientIdConfigured?MASK:\'\'}" data-saved="${efi.clientIdConfigured?\'1\':\'0\'}" placeholder="Client ID"></label>',
+            '<label>Client Secret<input name="clientSecret" type="password" placeholder="${efi.clientSecretConfigured?\'Salvo · deixe vazio para manter\':\'Client Secret\'}"></label>':'<label>Client Secret<input name="clientSecret" type="password" value="${efi.clientSecretConfigured?MASK:\'\'}" data-saved="${efi.clientSecretConfigured?\'1\':\'0\'}" placeholder="Client Secret"></label>',
+            '<label>Senha do certificado<input name="certificatePassword" type="password" placeholder="${efi.certificatePasswordConfigured?\'Salva · deixe vazio para manter\':\'Se houver\'}"></label>':'<label>Senha do certificado<input name="certificatePassword" type="password" value="${efi.certificatePasswordConfigured?MASK:\'\'}" data-saved="${efi.certificatePasswordConfigured?\'1\':\'0\'}" placeholder="Se houver"></label>',
+            '<label class="full">Access Token<input name="accessToken" type="password" placeholder="${mp.accessTokenConfigured?\'Salvo · deixe vazio para manter\':\'APP_USR-...\'}"></label>':'<label class="full">Access Token<input name="accessToken" type="password" value="${mp.accessTokenConfigured?MASK:\'\'}" data-saved="${mp.accessTokenConfigured?\'1\':\'0\'}" placeholder="APP_USR-..."></label>'
+          }
+          for old,new in replacements.items():
+              if old not in s:
+                  raise SystemExit('Campo bancário esperado não localizado')
+              s=s.replace(old,new,1)
+          marker="    const ef=h.querySelector('#pp-efi');"
+          insert="    h.querySelectorAll('input[data-saved=\\\"1\\\"]').forEach(input=>{input.title='Credencial salva com segurança';input.addEventListener('focus',()=>{if(input.value===MASK){input.value='';input.dataset.saved='0'}})});\n    const savedValue=value=>String(value||'')===MASK?'':String(value||'');\n"
+          if marker not in s: raise SystemExit('Formulário Efí não localizado')
+          s=s.replace(marker,insert+marker,1)
+          s=s.replace("clientId:String(d.get('clientId')||''),clientSecret:String(d.get('clientSecret')||''),certificatePassword:String(d.get('certificatePassword')||'')", "clientId:savedValue(d.get('clientId')),clientSecret:savedValue(d.get('clientSecret')),certificatePassword:savedValue(d.get('certificatePassword'))",1)
+          s=s.replace("accessToken:String(d.get('accessToken')||'')", "accessToken:savedValue(d.get('accessToken'))",1)
+          p.write_text(s)
+
+          b=Path('bootstrap.js')
+          x=b.read_text().replace("const BUILD_TOKEN='20260831-bankapi1';","const BUILD_TOKEN='20260831-bankapi2';",1).replace("/dashboard-transition-guard.js?v=20260831-bankapi1","/dashboard-transition-guard.js?v=20260831-bankapi2",1)
+          b.write_text(x)
+          i=Path('index.html')
+          y=i.read_text().replace('/bootstrap.js?v=20260831-bankapi1','/bootstrap.js?v=20260831-bankapi2',1)
+          i.write_text(y)
+          PY
+          node --check dashboard-transition-guard.js
+          node --check bootstrap.js
+      - name: Publicar ajuste e remover workflow temporário
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/fix-bank-saved-visibility.yml
+          git add dashboard-transition-guard.js bootstrap.js index.html
+          git commit -m 'Melhora visualização das credenciais bancárias salvas'
+          git push origin HEAD:cloudflare-provedor-plus

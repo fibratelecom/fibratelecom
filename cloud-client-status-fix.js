@@ -6,14 +6,14 @@
     const markLegacyClient=()=>{
       const nav=document.querySelector('.app-shell .sidebar nav[aria-label="Menu principal"],.app-shell .sidebar nav,.app-shell aside nav[aria-label="Menu principal"],.app-shell aside nav,.sidebar nav,aside nav');
       if(!nav)return;
-      const button=[...nav.querySelectorAll('button')].find(item=>{
-        const label=normalizeLabel(item.textContent);
-        return label==='cliente'||label==='clientes';
+      const item=[...nav.querySelectorAll('button,a,[role="button"]')].find(node=>{
+        const label=normalizeLabel(node.textContent);
+        return label==='cliente'||label==='clientes'||label.includes(' clientes')||label.startsWith('clientes ')||label.startsWith('cliente ');
       });
-      if(button)button.dataset.ppClientHub='1';
+      if(item)item.dataset.ppClientHub='1';
     };
     const observer=new MutationObserver(markLegacyClient);
-    observer.observe(document.documentElement,{childList:true,subtree:true});
+    observer.observe(document.documentElement,{childList:true,subtree:true,characterData:true});
     window.addEventListener('DOMContentLoaded',markLegacyClient,{once:true});
     markLegacyClient();
   }

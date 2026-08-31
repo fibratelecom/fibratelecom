@@ -26,7 +26,7 @@ const __ppStartup={
 window.addEventListener('provedor-plus-react-error',__ppReactErrorListener);
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260831-step10-startup1';
+  const BUILD_TOKEN='20260831-client-consult1';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');

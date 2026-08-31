@@ -1,0 +1,76 @@
+name: Fix Startup Database Hang
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/fix-startup-database-hang.yml'
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Corrigir timeouts e abertura parcial
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p=Path(path); s=p.read_text()
+              if old not in s:
+                  raise SystemExit(f'Padrao nao encontrado em {path}')
+              p.write_text(s.replace(old,new,1))
+
+          replace_once('cloud-client-store-v2.js',
+          """  async function request(url,action,data={}){\n    const response=await fetch(url,{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data})});\n    let body={};try{body=await response.json()}catch{}\n    if(!response.ok||!body.ok)throw new Error(body.error||`Falha na sincronização com a nuvem (HTTP ${response.status}).`);\n    return body.data;\n  }""",
+          """  async function request(url,action,data={}){\n    const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),8000);\n    try{\n      const response=await fetch(url,{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data}),signal:ctl.signal});\n      let body={};try{body=await response.json()}catch{}\n      if(!response.ok||!body.ok)throw new Error(body.error||`Falha na sincronização com a nuvem (HTTP ${response.status}).`);\n      return body.data;\n    }catch(error){\n      if(error?.name==='AbortError')throw new Error(`Tempo limite ao consultar ${action}.`);\n      throw error;\n    }finally{clearTimeout(timer)}\n  }""")
+
+          replace_once('cloud-router-store-v2.js',
+          """  async function cloud(action,data={}){\n    const response=await fetch('/api/cloud-data',{\n      method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data})\n    });\n    let body={};try{body=await response.json()}catch{}\n    if(!response.ok||!body.ok)throw new Error(body.error||`Falha na sincronização com a nuvem (HTTP ${response.status}).`);\n    return body.data;\n  }""",
+          """  async function cloud(action,data={}){\n    const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),8000);\n    try{\n      const response=await fetch('/api/cloud-data',{\n        method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data}),signal:ctl.signal\n      });\n      let body={};try{body=await response.json()}catch{}\n      if(!response.ok||!body.ok)throw new Error(body.error||`Falha na sincronização com a nuvem (HTTP ${response.status}).`);\n      return body.data;\n    }catch(error){\n      if(error?.name==='AbortError')throw new Error(`Tempo limite ao consultar ${action}.`);\n      throw error;\n    }finally{clearTimeout(timer)}\n  }""")
+
+          replace_once('cloud-adapter.js',
+          """  async function dataCall(action,data={}){\n    const response=await fetch('/api/cloud-data',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data})});\n    let body={};try{body=await response.json()}catch{}\n    if(!response.ok||!body.ok)throw Error(body.error||`Falha no banco da nuvem (HTTP ${response.status}).`);\n    return body.data;\n  }""",
+          """  async function dataCall(action,data={}){\n    const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),8000);\n    try{\n      const response=await fetch('/api/cloud-data',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data}),signal:ctl.signal});\n      let body={};try{body=await response.json()}catch{}\n      if(!response.ok||!body.ok)throw Error(body.error||`Falha no banco da nuvem (HTTP ${response.status}).`);\n      return body.data;\n    }catch(error){\n      if(error?.name==='AbortError')throw Error(`Tempo limite ao consultar ${action}.`);\n      throw error;\n    }finally{clearTimeout(timer)}\n  }""")
+
+          # Reconstrói o app e torna a abertura tolerante a uma fonte travada.
+          import base64,gzip,math
+          files=[Path(f'packed/appgz-{i:02d}.txt') for i in range(1,34)]
+          encoded=''.join(p.read_text().strip() for p in files)
+          app=gzip.decompress(base64.b64decode(encoded)).decode()
+          old="""async function Se(){try{let e=g(),[t,n,r,i,a,o,s,c,u]=await Promise.all([e.dashboard.get(),e.clients.list(),e.plans.list(),e.invoices.list(),e.tickets.list(),e.stock.list(),e.settings.get(),e.app.info(),e.routers.list()]);y(t),x(n),C(r),te(i),T(a),A(o),me(s),ge(c),ve(u),l(``)}catch(e){l(e instanceof Error?e.message:`Não foi possível abrir o banco local.`)}finally{a(!1)}}"""
+          new="""async function Se(){let e=g(),q=async(e,t,n)=>{let r;try{return await Promise.race([t,new Promise((t,i)=>{r=setTimeout(()=>i(Error(`${e} demorou para responder.`)),7000)})])}catch(t){console.error(`Provedor Plus: ${e} não respondeu durante a abertura.`,t);return n}finally{clearTimeout(r)}};try{let[t,n,r,i,o,s,c,u,d]=await Promise.all([q(`Dashboard`,e.dashboard.get(),h),q(`Clientes`,e.clients.list(),[]),q(`Planos`,e.plans.list(),[]),q(`Faturas`,e.invoices.list(),[]),q(`Chamados`,e.tickets.list(),[]),q(`Estoque`,e.stock.list(),[]),q(`Configurações`,e.settings.get(),{}),q(`Informações`,e.app.info(),null),q(`Roteadores`,e.routers.list(),[])]);y(t||h),x(Array.isArray(n)?n:[]),C(Array.isArray(r)?r:[]),te(Array.isArray(i)?i:[]),T(Array.isArray(o)?o:[]),A(Array.isArray(s)?s:[]),me(c||{}),ge(u||null),ve(Array.isArray(d)?d:[]),l(``)}catch(e){l(e instanceof Error?e.message:`Não foi possível abrir o banco local.`)}finally{a(!1)}}"""
+          if old not in app:
+              raise SystemExit('Função Se de abertura não encontrada')
+          app=app.replace(old,new,1)
+          compile(app,'<app>','exec') if False else None
+          packed=base64.b64encode(gzip.compress(app.encode(),compresslevel=9)).decode()
+          chunk=math.ceil(len(packed)/len(files))
+          if chunk>3500: raise SystemExit(f'Chunk muito grande: {chunk}')
+          for idx,p in enumerate(files): p.write_text(packed[idx*chunk:(idx+1)*chunk]+'\n')
+
+          replace_once('bootstrap.js',"const BUILD_TOKEN='20260831-startup-loader1';","const BUILD_TOKEN='20260831-startup-dbfix1';")
+          replace_once('index.html','/bootstrap.js?v=20260831-startup-only2','/bootstrap.js?v=20260831-startup-dbfix1')
+          PY
+          node --check cloud-client-store-v2.js
+          node --check cloud-router-store-v2.js
+          node --check cloud-adapter.js
+          node --check bootstrap.js
+          cat packed/appgz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/app-after.js
+          node --check /tmp/app-after.js
+          grep -Fq 'demorou para responder' /tmp/app-after.js
+          grep -Fq "20260831-startup-dbfix1" bootstrap.js index.html
+      - name: Publicar e limpar temporarios
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-client-store-v2.js cloud-router-store-v2.js cloud-adapter.js bootstrap.js index.html packed/appgz-*.txt
+          git commit -m 'Evita travamento ao abrir dados do painel'
+          git rm .github/workflows/fix-startup-database-hang.yml .github/workflows/audit-stuck-database-loader.yml
+          git commit -m 'Remove auditorias temporarias da abertura'
+          git push origin HEAD:cloudflare-provedor-plus

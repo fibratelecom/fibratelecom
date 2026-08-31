@@ -1,0 +1,62 @@
+name: Remove Legacy React Boot
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/remove-legacy-react-boot.yml'
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Remover boot interno antigo
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64,gzip,math
+          files=[Path(f'packed/appgz-{i:02d}.txt') for i in range(1,34)]
+          encoded=''.join(p.read_text().strip() for p in files)
+          app=gzip.decompress(base64.b64decode(encoded)).decode()
+          old="return i?(0,p.jsxs)(`main`,{className:`boot-screen`,children:[(0,p.jsxs)(`span`,{className:`brand-mark`,children:[(0,p.jsx)(`i`,{}),(0,p.jsx)(`i`,{}),(0,p.jsx)(`i`,{})]}),(0,p.jsx)(`h1`,{children:`Provedor Plus`}),(0,p.jsx)(`p`,{children:`Abrindo banco de dados...`})]}):c?"
+          if old not in app:
+              raise SystemExit('Boot interno antigo nao encontrado exatamente uma vez')
+          if app.count(old)!=1:
+              raise SystemExit(f'Boot interno encontrado {app.count(old)} vezes')
+          app=app.replace(old,'return c?',1)
+          if 'Abrindo banco de dados...' in app:
+              raise SystemExit('Texto legado ainda presente no bundle')
+          packed=base64.b64encode(gzip.compress(app.encode(),compresslevel=9)).decode()
+          chunk=math.ceil(len(packed)/len(files))
+          if chunk>3500: raise SystemExit(f'Chunk muito grande: {chunk}')
+          for idx,p in enumerate(files): p.write_text(packed[idx*chunk:(idx+1)*chunk]+'\n')
+
+          b=Path('bootstrap.js'); s=b.read_text();
+          if "const BUILD_TOKEN='20260831-startup-dbfix1';" not in s: raise SystemExit('BUILD_TOKEN esperado nao encontrado')
+          b.write_text(s.replace("const BUILD_TOKEN='20260831-startup-dbfix1';","const BUILD_TOKEN='20260831-startup-nolegacy1';",1))
+          i=Path('index.html'); h=i.read_text();
+          if '/bootstrap.js?v=20260831-startup-dbfix1' not in h: raise SystemExit('bootstrap query esperado nao encontrado')
+          i.write_text(h.replace('/bootstrap.js?v=20260831-startup-dbfix1','/bootstrap.js?v=20260831-startup-nolegacy1',1))
+          PY
+          cat packed/appgz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/app-after.js
+          node --check /tmp/app-after.js
+          node --check bootstrap.js
+          ! grep -Fq 'Abrindo banco de dados...' /tmp/app-after.js
+          grep -Fq 'className:`app-shell`' /tmp/app-after.js
+          grep -Fq '20260831-startup-nolegacy1' bootstrap.js index.html
+      - name: Publicar e limpar workflow temporario
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add packed/appgz-*.txt bootstrap.js index.html
+          git commit -m 'Remove carregamento interno que bloqueava o painel'
+          git rm .github/workflows/remove-legacy-react-boot.yml .github/workflows/audit-react-boot-state.yml
+          git commit -m 'Remove auditoria temporaria do boot'
+          git push origin HEAD:cloudflare-provedor-plus

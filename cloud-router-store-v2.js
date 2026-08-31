@@ -13,12 +13,18 @@
   const clearLegacy=()=>{try{localStorage.removeItem(LEGACY_KEY);localStorage.removeItem(LEGACY_DELETED)}catch{}};
 
   async function cloud(action,data={}){
-    const response=await fetch('/api/cloud-data',{
-      method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data})
-    });
-    let body={};try{body=await response.json()}catch{}
-    if(!response.ok||!body.ok)throw new Error(body.error||`Falha na sincronização com a nuvem (HTTP ${response.status}).`);
-    return body.data;
+    const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),8000);
+    try{
+      const response=await fetch('/api/cloud-data',{
+        method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data}),signal:ctl.signal
+      });
+      let body={};try{body=await response.json()}catch{}
+      if(!response.ok||!body.ok)throw new Error(body.error||`Falha na sincronização com a nuvem (HTTP ${response.status}).`);
+      return body.data;
+    }catch(error){
+      if(error?.name==='AbortError')throw new Error(`Tempo limite ao consultar ${action}.`);
+      throw error;
+    }finally{clearTimeout(timer)}
   }
 
   function cacheRouters(rows,{markMigrated=true}={}){

@@ -6,10 +6,16 @@
   const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
   async function dataCall(action,data={}){
-    const response=await fetch('/api/cloud-data',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data})});
-    let body={};try{body=await response.json()}catch{}
-    if(!response.ok||!body.ok)throw Error(body.error||`Falha no banco da nuvem (HTTP ${response.status}).`);
-    return body.data;
+    const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),8000);
+    try{
+      const response=await fetch('/api/cloud-data',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data}),signal:ctl.signal});
+      let body={};try{body=await response.json()}catch{}
+      if(!response.ok||!body.ok)throw Error(body.error||`Falha no banco da nuvem (HTTP ${response.status}).`);
+      return body.data;
+    }catch(error){
+      if(error?.name==='AbortError')throw Error(`Tempo limite ao consultar ${action}.`);
+      throw error;
+    }finally{clearTimeout(timer)}
   }
   async function bankSettingsCall(action,data={}){
     const response=await fetch('/api/bank-settings',{method:'POST',cache:'no-store',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data})});

@@ -1,0 +1,61 @@
+name: Integration System
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths:
+      - '.github/workflows/integration-system.yml'
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+          fetch-depth: 0
+      - name: Posicionar Integracao em Sistema
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          guard = Path('dashboard-transition-guard.js')
+          text = guard.read_text(encoding='utf-8')
+          pattern = r"  function ensureButton\(\)\{.*?hubButton=b;buildPopup\(\)\}"
+          replacement = """  function ensureButton(){styles();const nav=navRoot();if(!nav)return;const systemLabel=[...nav.querySelectorAll('.nav-label,small')].find(x=>norm(x.textContent)==='sistema'),systemRow=systemLabel?[...nav.children].find(x=>x===systemLabel||x.contains(systemLabel)):null;if(!systemRow)return;let b=nav.querySelector('[data-pp-integration-hub=\"1\"]');const template=[...nav.querySelectorAll('button')].find(x=>x!==b);if(!b){b=document.createElement('button');b.type='button';b.dataset.ppIntegrationHub='1';b.innerHTML='<span>⌁</span>Integração<span class=\"pp-integration-chevron\">›</span>'}b.className=String(template?.className||b.className||'');b.classList.remove('active');b.classList.add('pp-integration-hub-button');b.setAttribute('aria-haspopup','menu');b.setAttribute('aria-expanded',popup&&!popup.hidden?'true':'false');b.onmouseenter=showPopup;b.onmouseleave=()=>timer=setTimeout(closePopup,150);b.onclick=e=>{e.preventDefault();e.stopPropagation();popup&&!popup.hidden?closePopup():showPopup()};const target=systemRow.nextSibling;if(target!==b)nav.insertBefore(b,target);hubButton=b;buildPopup()}"""
+          updated, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+          if count != 1:
+              raise SystemExit('ensureButton da Integracao nao localizado de forma unica')
+          guard.write_text(updated, encoding='utf-8')
+
+          bootstrap = Path('bootstrap.js')
+          b = bootstrap.read_text(encoding='utf-8')
+          b = re.sub(r"const BUILD_TOKEN='[^']*';", "const BUILD_TOKEN='20260831-integration-system1';", b, count=1)
+          b = b.replace("/dashboard-transition-guard.js?v=20260831-hubs-rootfix1", "/dashboard-transition-guard.js?v=20260831-integration-system1")
+          bootstrap.write_text(b, encoding='utf-8')
+
+          index = Path('index.html')
+          i = index.read_text(encoding='utf-8')
+          i = re.sub(r'/bootstrap\.js\?v=[^\"\']+', '/bootstrap.js?v=20260831-integration-system1', i, count=1)
+          index.write_text(i, encoding='utf-8')
+          PY
+
+          node --check dashboard-transition-guard.js
+          node --check bootstrap.js
+          grep -Fq "systemRow.nextSibling" dashboard-transition-guard.js
+          grep -Fq "20260831-integration-system1" bootstrap.js index.html
+          test "$(git diff --name-only | sort | tr '\n' ' ')" = "bootstrap.js dashboard-transition-guard.js index.html "
+      - name: Publicar
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add bootstrap.js dashboard-transition-guard.js index.html
+          git commit -m 'Recoloca Integracao dentro de Sistema'
+          git rm -f .github/workflows/integration-system.yml
+          git commit -m 'Remove aplicador temporario da Integracao'
+          git push origin HEAD:cloudflare-provedor-plus

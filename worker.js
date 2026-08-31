@@ -103,6 +103,13 @@ async function requirePanelUser(request,env){
   return body.data.user||{};
 }
 
+async function requirePanelPermission(request,env,permission){
+  const user=await requirePanelUser(request,env);
+  const role=text(user?.role).toLowerCase(),permissions=Array.isArray(user?.permissions)?user.permissions.map(text):[];
+  if(role==='admin'||permissions.includes(text(permission)))return user;
+  throw Object.assign(new Error('Seu usuário não possui permissão para esta integração.'),{statusCode:403});
+}
+
 async function requireBankAdmin(request,env){
   const user=await requirePanelUser(request,env);
   if(text(user?.role).toLowerCase()!=='admin')throw Object.assign(new Error('Somente o administrador pode alterar as credenciais bancárias.'),{statusCode:403});
@@ -285,20 +292,36 @@ async function handleProtocols(request,env){
   }
 }
 
-async function proxySpecializedApi(request){
-  const incoming=new URL(request.url);
-  const target=new URL(incoming.pathname+incoming.search,SPECIALIZED_UPSTREAM);
-  const headers=copyHeaders(request.headers);
+async function proxySpecializedApi(request,env){
+  const incoming=new URL(request.url),path=incoming.pathname;
+  if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-specialized-integration'});
+  try{
+    if(path==='/api/bank-proxy')await requirePanelPermission(request,env,'billing');
+    else await requirePanelPermission(request,env,'network');
+  }catch(error){
+    return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||401,{'x-provedor-plus-edge':'cloudflare-specialized-integration'});
+  }
+  const target=new URL(path+incoming.search,SPECIALIZED_UPSTREAM),headers=copyHeaders(request.headers);
   headers.set('x-forwarded-host',incoming.host);
   headers.set('x-forwarded-proto','https');
-  const init={method:request.method,headers,redirect:'manual'};
-  if(request.method!=='GET'&&request.method!=='HEAD')init.body=request.body;
-  const response=await fetch(target.toString(),init);
-  const responseHeaders=new Headers(response.headers);
-  const location=responseHeaders.get('location');
-  if(location&&location.startsWith(SPECIALIZED_UPSTREAM))responseHeaders.set('location',location.replace(SPECIALIZED_UPSTREAM,incoming.origin));
-  responseHeaders.set('x-provedor-plus-edge','cloudflare-specialized-integration');
-  return new Response(response.body,{status:response.status,statusText:response.statusText,headers:responseHeaders});
+  headers.set('x-provedor-plus-proxy','cloudflare');
+  const timeoutMs=path==='/api/bank-proxy'?30000:22000,ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),timeoutMs);
+  try{
+    const init={method:request.method,headers,redirect:'manual',signal:ctl.signal};
+    if(request.method!=='GET'&&request.method!=='HEAD')init.body=request.body;
+    const response=await fetch(target.toString(),init),responseHeaders=new Headers(response.headers),location=responseHeaders.get('location');
+    if(location&&location.startsWith(SPECIALIZED_UPSTREAM))responseHeaders.set('location',location.replace(SPECIALIZED_UPSTREAM,incoming.origin));
+    responseHeaders.set('x-provedor-plus-edge','cloudflare-specialized-integration');
+    const contentType=text(responseHeaders.get('content-type')).toLowerCase();
+    if(!response.ok&&!contentType.includes('application/json')){
+      return json({ok:false,error:`A integração especializada respondeu com erro HTTP ${response.status}. Tente novamente.`},response.status>=500?502:response.status,{'x-provedor-plus-edge':'cloudflare-specialized-integration'});
+    }
+    return new Response(response.body,{status:response.status,statusText:response.statusText,headers:responseHeaders});
+  }catch(error){
+    const timedOut=error?.name==='AbortError';
+    console.error('Provedor Plus: proxy especializado indisponível.',{path,timedOut,error:error?.message||String(error)});
+    return json({ok:false,error:timedOut?'A integração demorou mais que o limite de segurança. Tente novamente.':'A integração especializada está temporariamente indisponível. Tente novamente.'},timedOut?504:502,{'x-provedor-plus-edge':'cloudflare-specialized-integration'});
+  }finally{clearTimeout(timer)}
 }
 
 function formatDate(value){
@@ -695,14 +718,19 @@ function serviceToken(){const bytes=new Uint8Array(32);crypto.getRandomValues(by
 async function bankProxyAsService(env,sql,payload){
   const admins=await sql`SELECT id FROM pp_users WHERE role='admin' ORDER BY id ASC LIMIT 1`,adminId=Number(admins?.[0]?.id)||0;
   if(!adminId)throw Object.assign(new Error('Administrador do Provedor Plus não encontrado para autorizar a emissão bancária.'),{statusCode:503});
-  const token=serviceToken(),tokenHash=await sha256Hex(token),expires=new Date(Date.now()+2*60*1000).toISOString();
+  const token=serviceToken(),tokenHash=await sha256Hex(token),expires=new Date(Date.now()+2*60*1000).toISOString(),ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),30000);
   await sql`INSERT INTO pp_sessions (user_id,token_hash,expires_at) VALUES (${adminId},${tokenHash},${expires})`;
   try{
-    const response=await fetch(`${SPECIALIZED_UPSTREAM}/api/bank-proxy`,{method:'POST',headers:{'Content-Type':'application/json','Cookie':`pp_session=${encodeURIComponent(token)}`},body:JSON.stringify(payload)});
+    const response=await fetch(`${SPECIALIZED_UPSTREAM}/api/bank-proxy`,{method:'POST',headers:{'Content-Type':'application/json','Cookie':`pp_session=${encodeURIComponent(token)}`,'x-provedor-plus-proxy':'cloudflare-service'},body:JSON.stringify(payload),signal:ctl.signal});
     let body={};try{body=await response.json()}catch{}
     if(!response.ok||!body.ok)throw Object.assign(new Error(body?.error||`Falha na integração bancária (HTTP ${response.status}).`),{statusCode:response.status>=400&&response.status<500?409:502});
     return body.data||{};
+  }catch(error){
+    if(error?.name==='AbortError')throw Object.assign(new Error('A integração bancária demorou mais que o limite de segurança. Tente novamente.'),{statusCode:504});
+    if(error?.statusCode)throw error;
+    throw Object.assign(new Error('A integração bancária está temporariamente indisponível. Tente novamente.'),{statusCode:502});
   }finally{
+    clearTimeout(timer);
     try{await sql`DELETE FROM pp_sessions WHERE token_hash=${tokenHash}`}catch{}
   }
 }
@@ -916,7 +944,7 @@ export default {
     if(url.pathname==='/api/bank-settings')return handleBankSettings(request,env);
     if(url.pathname===PROTOCOLS_PATH)return handleProtocols(request,env);
     if(url.pathname===CUSTOMER_PORTAL_PATH)return handleNativeCustomerPortal(request,env);
-    if(SPECIALIZED_PROXY_PATHS.has(url.pathname))return proxySpecializedApi(request);
+    if(SPECIALIZED_PROXY_PATHS.has(url.pathname))return proxySpecializedApi(request,env);
     if(url.pathname.startsWith('/api/'))return json({ok:false,error:'API não encontrada no Provedor Plus Cloudflare.'},404,{'x-provedor-plus-edge':'cloudflare-native-routing'});
     return env.ASSETS.fetch(request);
   }

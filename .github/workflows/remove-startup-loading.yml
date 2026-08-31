@@ -1,0 +1,79 @@
+name: Remove Startup Loading
+on: push
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Remover carregamento visual e liberar painel direto
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64,gzip,math,re
+
+          # Index: remove totalmente a tela/estilo de carregamento.
+          p=Path('index.html')
+          s=p.read_text()
+          start=s.find('<style id="pp-startup-style">')
+          end=s.find('<div id="root"></div>')
+          if start < 0 or end < 0:
+              raise SystemExit('Tela de carregamento atual não encontrada no index')
+          s=s[:start] + '<div id="root"></div>\n' + s[end+len('<div id="root"></div>\n'):]
+          s=s.replace('/bootstrap.js?v=20260831-startup-rootfix1','/bootstrap.js?v=20260831-no-loading1')
+          p.write_text(s)
+
+          # Bootstrap: controlador vira apenas tratamento silencioso de erro, sem DOM, timeout ou overlay.
+          p=Path('bootstrap.js')
+          s=p.read_text()
+          marker='(async()=>{\n  window.__PROVEDOR_PLUS_CLOUD__=true;'
+          pos=s.find(marker)
+          if pos < 0:
+              raise SystemExit('Início do bootstrap não encontrado')
+          prefix="const __ppStartup={done(){},fail(error){console.error(error)}};\nwindow.addEventListener('provedor-plus-react-error',event=>{const message=event?.detail?.message||'Falha ao montar o painel.';console.error(new Error(message))});\n"
+          s=prefix+s[pos:]
+          s=s.replace("const BUILD_TOKEN='20260831-startup-rootfix1';","const BUILD_TOKEN='20260831-no-loading1';",1)
+          p.write_text(s)
+
+          # React: não bloqueia mais a tela inteira enquanto os dados iniciais chegam.
+          files=[Path(f'packed/appgz-{i:02d}.txt') for i in range(1,34)]
+          encoded=''.join(x.read_text().strip() for x in files)
+          app=gzip.decompress(base64.b64decode(encoded)).decode()
+          old=';return i?null:c?(0,p.jsxs)(`main`,{className:`boot-screen error-screen`'
+          new=';return c?(0,p.jsxs)(`main`,{className:`boot-screen error-screen`'
+          if old not in app:
+              raise SystemExit('Trava visual de carregamento do React não encontrada')
+          app=app.replace(old,new,1)
+
+          packed=base64.b64encode(gzip.compress(app.encode(),compresslevel=9)).decode()
+          chunk=math.ceil(len(packed)/len(files))
+          if chunk>3500:
+              raise SystemExit(f'Chunk muito grande: {chunk}')
+          for idx,x in enumerate(files):
+              x.write_text(packed[idx*chunk:(idx+1)*chunk]+'\n')
+          PY
+
+          node --check bootstrap.js
+          cat packed/appgz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/app.js
+          node --check /tmp/app.js
+          ! grep -Fq 'pp-startup-screen' index.html
+          ! grep -Fq 'Preparando seu painel' index.html
+          ! grep -Fq 'return i?null:c?' /tmp/app.js
+          grep -Fq '20260831-no-loading1' bootstrap.js index.html
+
+      - name: Publicar e limpar workflow temporario
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html bootstrap.js packed/appgz-*.txt
+          git commit -m 'Remove carregamento da abertura'
+          git rm -f .github/workflows/remove-startup-loading.yml
+          git commit -m 'Remove workflow temporario do carregamento'
+          git push origin HEAD:cloudflare-provedor-plus

@@ -1,0 +1,48 @@
+name: finish-cloudflare-health-cleanup
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+permissions:
+  contents: write
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+          fetch-depth: 0
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Corrige diagnostico Cloudflare
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const file='worker.js';
+          let src=fs.readFileSync(file,'utf8');
+          const old="specializedIntegrationProxy:'bank-and-mikrotik-only'";
+          const next="specializedIntegrationProxy:false,bankRuntime:'cloudflare-native',mikrotikRuntime:'cloudflare-native'";
+          if(!src.includes(old)) throw new Error('Indicador antigo nao encontrado; nenhuma alteracao foi aplicada.');
+          src=src.replace(old,next);
+          fs.writeFileSync(file,src);
+          NODE
+          node --check worker.js
+      - name: Audita referencias runtime Vercel
+        run: |
+          if git grep -n -E 'fibratelecom\.vercel\.app|SPECIALIZED_UPSTREAM' -- ':!vercel.json' ':!.github/*'; then
+            echo 'Referencia runtime da Vercel ainda encontrada.'
+            exit 1
+          fi
+          echo 'Runtime sem upstream Vercel.'
+      - name: Commit limpeza
+        run: |
+          git add worker.js
+          git commit -m "Finaliza diagnostico Cloudflare nativo"
+          git push origin HEAD:cloudflare-provedor-plus
+      - name: Remove workflow temporario
+        run: |
+          git rm .github/workflows/finish-cloudflare-health-cleanup.yml
+          git commit -m "Remove limpador temporario do diagnostico"
+          git push origin HEAD:cloudflare-provedor-plus

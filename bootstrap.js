@@ -1,6 +1,6 @@
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260830-2125-planos-novo1';
+  const BUILD_TOKEN='20260830-bancos-persistencia2';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');
@@ -137,7 +137,7 @@
     const KEY='provedor_plus_web_1_0_17';
     const norm=value=>String(value??'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
     const money=cents=>Number(cents||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
-    const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[ch]));
+    const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#039;'}[ch]));
     let opened=false,navButton=null,layer=null,modal=null,selected=new Set();
     const getState=()=>window.ProvedorPlusCloudState?.getState?.()||{};
     const saveState=async state=>{localStorage.setItem(KEY,JSON.stringify(state));if(window.ProvedorPlusCloudState?.forceSync)await window.ProvedorPlusCloudState.forceSync()};

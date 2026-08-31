@@ -1,0 +1,38 @@
+name: Audit Hubs Runtime
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: [.github/workflows/audit-hubs-runtime.yml]
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+      - name: Auditar hubs e menu
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check dashboard-transition-guard.js
+          cat packed/appgz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/app.js
+          node --check /tmp/app.js
+          node <<'NODE'
+          const fs=require('fs');
+          const g=fs.readFileSync('dashboard-transition-guard.js','utf8');
+          const app=fs.readFileSync('/tmp/app.js','utf8');
+          const show=(label,s,needle,r=1200)=>{const i=s.indexOf(needle);console.log('\n### '+label+' index='+i);if(i>=0)console.log(s.slice(Math.max(0,i-r),Math.min(s.length,i+r)))};
+          show('INTEGRATION ENSURE',g,'function ensureButton()');
+          show('INTEGRATION DOCUMENT CLICK',g,"document.addEventListener('click',e=>{const nav=navRoot(),b=e.target.closest?.('button');if(b&&nav?.contains(b)&&b!==hubButton)");
+          show('CLIENT ENSURE',g,'function ensureClientButton()');
+          show('CLIENT DOCUMENT CLICK',g,"document.addEventListener('click',e=>{const nav=navRoot(),b=e.target.closest?.('button');if(b&&nav?.contains(b)&&b!==clientButton)");
+          show('CLIENT POPUP',g,'function buildClientPopup()');
+          show('INTEGRATION POPUP',g,'function buildPopup()');
+          for(const needle of ['Gestão','Sistema','m=[[','Financeiro`,`R$`','Chamados`,`✦`'])show('BUNDLE '+needle,app,needle,1800);
+          console.log('\nCOUNTS',{
+            integrationClick:(g.match(/b!==hubButton/g)||[]).length,
+            clientClick:(g.match(/b!==clientButton/g)||[]).length,
+            clientHub:(g.match(/__ProvedorPlusClientHubInstalled/g)||[]).length,
+            integrationHub:(g.match(/__ProvedorPlusIntegrationHubInstalled/g)||[]).length
+          });
+          NODE

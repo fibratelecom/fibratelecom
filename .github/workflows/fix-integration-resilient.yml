@@ -1,8 +1,10 @@
 name: Fix Integration Resilient
 on:
   push:
-    branches: [cloudflare-provedor-plus]
-    paths: [.github/workflows/fix-integration-resilient.yml]
+    branches:
+      - cloudflare-provedor-plus
+    paths:
+      - ".github/workflows/fix-integration-resilient.yml"
 permissions:
   contents: write
 jobs:
@@ -13,53 +15,18 @@ jobs:
         with:
           ref: cloudflare-provedor-plus
           fetch-depth: 0
-      - name: Corrigir persistência da Integração
+      - name: Apply integration fix
         shell: bash
         run: |
-          set -euo pipefail
-          python3 <<'PY'
-          from pathlib import Path
-
-          path=Path('dashboard-transition-guard.js')
-          s=path.read_text()
-          old="""  styles();ensureButton();
-  const integrationSidebar=document.querySelector('aside.sidebar')||document.querySelector('aside');
-  if(integrationSidebar){
-    const integrationObserver=new MutationObserver(()=>ensureButton());
-    integrationObserver.observe(integrationSidebar,{childList:true,subtree:true});
-  }
-})();"""
-          new="""  let integrationSidebarObserver=null,integrationShellObserver=null,integrationRootObserver=null,integrationObservedSidebar=null,integrationObservedShell=null,integrationEnsureTimer=null;
-  function scheduleIntegrationEnsure(){clearTimeout(integrationEnsureTimer);integrationEnsureTimer=setTimeout(()=>{ensureButton();bindIntegrationObservers()},30)}
-  function bindIntegrationObservers(){
-    const root=document.getElementById('root'),shell=document.querySelector('.app-shell'),sidebar=document.querySelector('aside.sidebar')||document.querySelector('aside');
-    if(sidebar!==integrationObservedSidebar){integrationSidebarObserver?.disconnect();integrationSidebarObserver=null;integrationObservedSidebar=sidebar||null;if(sidebar){integrationSidebarObserver=new MutationObserver(()=>scheduleIntegrationEnsure());integrationSidebarObserver.observe(sidebar,{childList:true,subtree:true})}}
-    if(shell!==integrationObservedShell){integrationShellObserver?.disconnect();integrationShellObserver=null;integrationObservedShell=shell||null;if(shell){integrationShellObserver=new MutationObserver(()=>scheduleIntegrationEnsure());integrationShellObserver.observe(shell,{childList:true})}}
-    if(root&&!integrationRootObserver){integrationRootObserver=new MutationObserver(()=>scheduleIntegrationEnsure());integrationRootObserver.observe(root,{childList:true})}
-  }
-  styles();scheduleIntegrationEnsure();
-})();"""
-          if old not in s:
-              raise SystemExit('Trecho antigo do observer de Integracao nao encontrado')
-          s=s.replace(old,new,1)
-          path.write_text(s)
-
-          b=Path('bootstrap.js'); t=b.read_text()
-          t=t.replace("const BUILD_TOKEN='20260831-integration-system1';","const BUILD_TOKEN='20260831-integration-system2';",1)
-          t=t.replace('/dashboard-transition-guard.js?v=20260831-integration-system1','/dashboard-transition-guard.js?v=20260831-integration-system2',1)
-          b.write_text(t)
-
-          i=Path('index.html'); h=i.read_text()
-          h=h.replace('/bootstrap.js?v=20260831-integration-system1','/bootstrap.js?v=20260831-integration-system2',1)
-          i.write_text(h)
-          PY
+          echo 'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCgpwYXRoPVBhdGgoImRhc2hib2FyZC10cmFuc2l0aW9uLWd1YXJkLmpzIikKcz1wYXRoLnJlYWRfdGV4dCgpCm9sZD0iIiIgIHN0eWxlcygpO2Vuc3VyZUJ1dHRvbigpOwogIGNvbnN0IGludGVncmF0aW9uU2lkZWJhcj1kb2N1bWVudC5xdWVyeVNlbGVjdG9yKCdhc2lkZS5zaWRlYmFyJyl8fGRvY3VtZW50LnF1ZXJ5U2VsZWN0b3IoJ2FzaWRlJyk7CiAgaWYoaW50ZWdyYXRpb25TaWRlYmFyKXsKICAgIGNvbnN0IGludGVncmF0aW9uT2JzZXJ2ZXI9bmV3IE11dGF0aW9uT2JzZXJ2ZXIoKCk9PmVuc3VyZUJ1dHRvbigpKTsKICAgIGludGVncmF0aW9uT2JzZXJ2ZXIub2JzZXJ2ZShpbnRlZ3JhdGlvblNpZGViYXIse2NoaWxkTGlzdDp0cnVlLHN1YnRyZWU6dHJ1ZX0pOwogIH0KKCkoKTsiIiIKbmV3PSIiIiAgbGV0IGludGVncmF0aW9uU2lkZWJhck9ic2VydmVyPW51bGwsaW50ZWdyYXRpb25TaGVsbE9ic2VydmVyPW51bGwsaW50ZWdyYXRpb25Sb290T2JzZXJ2ZXI9bnVsbCxpbnRlZ3JhdGlvbk9ic2VydmVkU2lkZWJhcj1udWxsLGludGVncmF0aW9uT2JzZXJ2ZWRTaGVsbD1udWxsLGludGVncmF0aW9uRW5zdXJlVGltZXI9bnVsbDsKICBmdW5jdGlvbiBzY2hlZHVsZUludGVncmF0aW9uRW5zdXJlKCl7Y2xlYXJUaW1lb3V0KGludGVncmF0aW9uRW5zdXJlVGltZXIpO2ludGVncmF0aW9uRW5zdXJlVGltZXI9c2V0VGltZW91dCgoKT0+e2Vuc3VyZUJ1dHRvbigpO2JpbmRJbnRlZ3JhdGlvbk9ic2VydmVycygpfSwzMCl9CiAgZnVuY3Rpb24gYmluZEludGVncmF0aW9uT2JzZXJ2ZXJzKCl7CiAgICBjb25zdCByb290PWRvY3VtZW50LmdldEVsZW1lbnRCeUlkKCdyb290Jyksc2hlbGw9ZG9jdW1lbnQucXVlcnlTZWxlY3RvcignLmFwcC1zaGVsbCcpLHNpZGViYXI9ZG9jdW1lbnQucXVlcnlTZWxlY3RvcignYXNpZGUuc2lkZWJhcicpfHxkb2N1bWVudC5xdWVyeVNlbGVjdG9yKCdhc2lkZScpOwogICAgaWYoc2lkZWJhciE9PWludGVncmF0aW9uT2JzZXJ2ZWRTaWRlYmFyKXtpbnRlZ3JhdGlvblNpZGViYXJPYnNlcnZlcj8uZGlzY29ubmVjdCgpO2ludGVncmF0aW9uU2lkZWJhck9ic2VydmVyPW51bGw7aW50ZWdyYXRpb25PYnNlcnZlZFNpZGViYXI9c2lkZWJhcnx8bnVsbDtpZihzaWRlYmFyKXtpbnRlZ3JhdGlvblNpZGViYXJPYnNlcnZlcj1uZXcgTXV0YXRpb25PYnNlcnZlcigoKT0+c2NoZWR1bGVJbnRlZ3JhdGlvbkVuc3VyZSgpKTtpbnRlZ3JhdGlvblNpZGViYXJPYnNlcnZlci5vYnNlcnZlKHNpZGViYXIse2NoaWxkTGlzdDp0cnVlLHN1YnRyZWU6dHJ1ZX0pfX0KICAgIGlmKHNoZWxsIT09aW50ZWdyYXRpb25PYnNlcnZlZFNoZWxsKXtpbnRlZ3JhdGlvblNoZWxsT2JzZXJ2ZXI/LmRpc2Nvbm5lY3QoKTtpbnRlZ3JhdGlvblNoZWxsT2JzZXJ2ZXI9bnVsbDtpbnRlZ3JhdGlvbk9ic2VydmVkU2hlbGw9c2hlbGx8fG51bGw7aWYoc2hlbGwpe2ludGVncmF0aW9uU2hlbGxPYnNlcnZlcj1uZXcgTXV0YXRpb25PYnNlcnZlcigoKT0+c2NoZWR1bGVJbnRlZ3JhdGlvbkVuc3VyZSgpKTtpbnRlZ3JhdGlvblNoZWxsT2JzZXJ2ZXIub2JzZXJ2ZShzaGVsbCx7Y2hpbGRMaXN0OnRydWV9KX19CiAgICBpZihyb290JiYhaW50ZWdyYXRpb25Sb290T2JzZXJ2ZXIpe2ludGVncmF0aW9uUm9vdE9ic2VydmVyPW5ldyBNdXRhdGlvbk9ic2VydmVyKCgpPT5zY2hlZHVsZUludGVncmF0aW9uRW5zdXJlKCkpO2ludGVncmF0aW9uUm9vdE9ic2VydmVyLm9ic2VydmUocm9vdCx7Y2hpbGRMaXN0OnRydWV9KX0KICB9CiAgc3R5bGVzKCk7c2NoZWR1bGVJbnRlZ3JhdGlvbkVuc3VyZSgpOwopKCk7IiIiCmlmIG9sZCBub3QgaW4gczoKICAgIHJhaXNlIFN5c3RlbUV4aXQoIlRyZWNobyBhbnRpZ28gZG8gb2JzZXJ2ZXIgZGUgSW50ZWdyYWNhbyBuYW8gZW5jb250cmFkbyIpCnBhdGgud3JpdGVfdGV4dChzLnJlcGxhY2Uob2xkLG5ldywxKSkKCmI9UGF0aCgiYm9vdHN0cmFwLmpzIikKdD1iLnJlYWRfdGV4dCgpCmE9ImNvbnN0IEJVSUxEX1RPS0VOPSMyMDI2MDgzMS1pbnRlZ3JhdGlvbi1zeXN0ZW0xJzsiCmM9ImNvbnN0IEJVSUxEX1RPS0VOPSMyMDI2MDgzMS1pbnRlZ3JhdGlvbi1zeXN0ZW0yJzsiCmlmIGEgbm90IGluIHQ6CiAgICByYWlzZSBTeXN0ZW1FeGl0KCJCVUlMRF9UT0tFTiBhbnRlcmlvciBuYW8gZW5jb250cmFkbyIpCnQ9dC5yZXBsYWNlKGEsYywxKQpvbGRzcmM9Ii9kYXNoYm9hcmQtdHJhbnNpdGlvbi1ndWFyZC5qcz92PTIwMjYwODMxLWludGVncmF0aW9uLXN5c3RlbTEiCm5ld3NyYz0iL2Rhc2hib2FyZC10cmFuc2l0aW9uLWd1YXJkLmpzP3Y9MjAyNjA4MzEtaW50ZWdyYXRpb24tc3lzdGVtMiIKaWYgb2xkc3JjIG5vdCBpbiB0OgogICAgcmFpc2UgU3lzdGVtRXhpdCgiUmVmZXJlbmNpYSBhbnRpZ2EgZG8gaHViIG5hbyBlbmNvbnRyYWRhIikKYi53cml0ZV90ZXh0KHQucmVwbGFjZShvbGRzcmMsbmV3c3JjLDEpKQoKaT1QYXRoKCJpbmRleC5odG1sIikKaD1pLnJlYWRfdGV4dCgpCm9sZGlkeD0iL2Jvb3RzdHJhcC5qcz92PTIwMjYwODMxLWludGVncmF0aW9uLXN5c3RlbTEiCm5ld2lkeD0iL2Jvb3RzdHJhcC5qcz92PTIwMjYwODMxLWludGVncmF0aW9uLXN5c3RlbTIiCmlmIG9sZGlkeCBub3QgaW4gaDoKICAgIHJhaXNlIFN5c3RlbUV4aXQoIlJlZmVyZW5jaWEgYW50aWdhIGRvIGJvb3RzdHJhcCBuYW8gZW5jb250cmFkYSIpCmkud3JpdGVfdGV4dChoLnJlcGxhY2Uob2xkaWR4LG5ld2lkeCwxKSkK' | base64 -d > /tmp/fix.py
+          python3 /tmp/fix.py
           node --check dashboard-transition-guard.js
           node --check bootstrap.js
           grep -q 'integrationShellObserver' dashboard-transition-guard.js
           grep -q "BUILD_TOKEN='20260831-integration-system2'" bootstrap.js
           grep -q 'dashboard-transition-guard.js?v=20260831-integration-system2' bootstrap.js
           grep -q 'bootstrap.js?v=20260831-integration-system2' index.html
-      - name: Publicar correção isolada
+      - name: Publish integration fix
         shell: bash
         run: |
           set -euo pipefail

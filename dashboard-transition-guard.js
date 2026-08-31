@@ -80,177 +80,30 @@
 (()=>{
   if(window.__ProvedorPlusIntegrationHubInstalled)return;
   window.__ProvedorPlusIntegrationHubInstalled=true;
-
-  const norm=value=>String(value??'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
-  let hubButton=null,popup=null,layer=null,hideTimer=null,navObserver=null,observedNav=null;
-
-  function mainNav(){
-    return document.querySelector('aside.sidebar nav[aria-label="Menu principal"],aside.sidebar nav');
-  }
-
-  function ensureStyles(){
-    if(document.getElementById('pp-integration-hub-style'))return;
-    const style=document.createElement('style');
-    style.id='pp-integration-hub-style';
-    style.textContent=`
-      .pp-integration-hub-button{position:relative!important}
-      .pp-integration-hub-button .pp-integration-chevron{margin-left:auto!important;font-size:16px!important;line-height:1!important;opacity:.62!important}
-      .pp-integration-menu{position:fixed;z-index:11050;width:230px;padding:7px;background:#fff;border:1px solid #dce7e4;border-radius:11px;box-shadow:0 14px 38px rgba(18,52,45,.18);box-sizing:border-box}
-      .pp-integration-menu[hidden]{display:none!important}
-      .pp-integration-menu button{display:flex;width:100%;align-items:center;gap:10px;padding:10px 11px;border:0;border-radius:8px;background:transparent;color:#294b44;text-align:left;font:700 11px/1.3 Segoe UI,Arial,sans-serif;cursor:pointer}
-      .pp-integration-menu button:hover{background:#edf8f5;color:#087866}
-      .pp-integration-menu svg{width:18px;height:18px;flex:0 0 18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-      .content.pp-integration-hub-active{position:relative!important;overflow:auto!important;background:#f4f7f6!important}
-      .content.pp-integration-hub-active>:not(.pp-integration-hub-layer){display:none!important}
-      .content.pp-integration-hub-active>.pp-integration-hub-layer{display:block!important}
-      .pp-integration-hub-layer{display:none;min-height:100%;padding:30px 28px 44px;box-sizing:border-box;background:linear-gradient(180deg,#f7faf9 0,#f2f6f5 100%);font-family:Segoe UI,Arial,sans-serif;color:#173d36}
-      .pp-integration-hub-head{max-width:820px;padding:24px;background:#fff;border:1px solid #dce7e4;border-radius:14px;box-shadow:0 4px 16px rgba(30,72,63,.05)}
-      .pp-integration-hub-eyebrow{margin-bottom:7px;color:#0b8f7c;font-size:10px;font-weight:850;letter-spacing:.13em;text-transform:uppercase}
-      .pp-integration-hub-head h1{margin:0 0 7px;font-size:28px;line-height:1.12;color:#173d36}
-      .pp-integration-hub-head p{margin:0;color:#71827e;font-size:12px;line-height:1.5}
-      @media(max-width:900px){.pp-integration-menu{width:210px}.pp-integration-hub-layer{padding:20px 14px 35px}}
-    `;
-    document.head.appendChild(style);
-  }
-
-  function contentRoot(){
-    const shell=document.querySelector('.app-shell');
-    return shell?.querySelector(':scope > .content')||shell?.querySelector('.content')||document.querySelector('.content');
-  }
-
-  function closePopup(){
-    clearTimeout(hideTimer);hideTimer=null;
-    if(popup)popup.hidden=true;
-    hubButton?.setAttribute('aria-expanded','false');
-  }
-
-  function scheduleClose(){
-    clearTimeout(hideTimer);
-    hideTimer=setTimeout(closePopup,150);
-  }
-
-  function positionPopup(){
-    if(!hubButton||!popup||popup.hidden)return;
-    const rect=hubButton.getBoundingClientRect(),gap=8,width=popup.offsetWidth||230;
-    let left=rect.right+gap,top=rect.top;
-    if(left+width>innerWidth-10)left=Math.max(10,rect.left-width-gap);
-    top=Math.min(Math.max(10,top),Math.max(10,innerHeight-(popup.offsetHeight||110)-10));
-    popup.style.left=`${Math.round(left)}px`;
-    popup.style.top=`${Math.round(top)}px`;
-  }
-
-  function showPopup(){
-    ensureButton();
-    if(!hubButton||!popup)return;
-    clearTimeout(hideTimer);hideTimer=null;
-    popup.hidden=false;
-    hubButton.setAttribute('aria-expanded','true');
-    requestAnimationFrame(positionPopup);
-  }
-
-  function closeLayer(){
-    document.querySelectorAll('.content.pp-integration-hub-active').forEach(content=>content.classList.remove('pp-integration-hub-active'));
-    document.querySelectorAll('.pp-integration-hub-layer').forEach(node=>node.remove());
-    layer=null;
-    hubButton?.classList.remove('active');
-  }
-
-  function openSection(kind){
-    closePopup();
-    const content=contentRoot();if(!content)return;
-    content.classList.add('pp-integration-hub-active');
-    layer=content.querySelector(':scope > .pp-integration-hub-layer');
-    if(!layer){layer=document.createElement('section');layer.className='pp-integration-hub-layer';content.appendChild(layer)}
-    const bank=kind==='banks';
-    const title=bank?'API Bancos':'Servidor MikroTik';
-    const description=bank?'Área exclusiva para configurar as APIs bancárias.':'Área exclusiva para configurar a integração com o servidor MikroTik.';
-    layer.innerHTML=`<div class="pp-integration-hub-head"><div class="pp-integration-hub-eyebrow">Integração</div><h1>${title}</h1><p>${description}</p></div>`;
-    const nav=mainNav();
-    nav?.querySelectorAll('button.active').forEach(button=>{if(button!==hubButton)button.classList.remove('active')});
-    hubButton?.classList.add('active');
-  }
-
-  function buildPopup(){
-    if(popup?.isConnected)return popup;
-    popup=document.createElement('div');
-    popup.className='pp-integration-menu';
-    popup.hidden=true;
-    popup.setAttribute('role','menu');
-    popup.innerHTML=`
-      <button type="button" role="menuitem" data-pp-integration-option="banks"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="13" rx="2"></rect><path d="M3 10h18M7 15h3"></path></svg><span>API Bancos</span></button>
-      <button type="button" role="menuitem" data-pp-integration-option="mikrotik"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="6" rx="2"></rect><rect x="4" y="14" width="16" height="6" rx="2"></rect><path d="M8 7h.01M8 17h.01M12 7h4M12 17h4"></path></svg><span>Servidor MikroTik</span></button>`;
-    popup.addEventListener('mouseenter',()=>{clearTimeout(hideTimer);hideTimer=null});
-    popup.addEventListener('mouseleave',scheduleClose);
-    popup.addEventListener('click',event=>{
-      const option=event.target.closest?.('[data-pp-integration-option]');if(!option)return;
-      event.preventDefault();event.stopPropagation();
-      openSection(option.dataset.ppIntegrationOption);
-    });
-    document.body.appendChild(popup);
-    return popup;
-  }
-
-  function ensureNavObserver(nav){
-    if(!nav||observedNav===nav)return;
-    navObserver?.disconnect();observedNav=nav;
-    navObserver=new MutationObserver(()=>ensureButton());
-    navObserver.observe(nav,{childList:true,subtree:true});
-  }
-
-  function makeHubButton(reference){
-    const button=document.createElement('button');
-    button.type='button';
-    button.dataset.ppIntegrationHub='1';
-    button.className=String(reference?.className||'');
-    button.classList.remove('active');
-    button.classList.add('pp-integration-hub-button');
-    button.setAttribute('aria-haspopup','menu');
-    button.setAttribute('aria-expanded','false');
-    button.innerHTML='<span>⌁</span>Integração<span class="pp-integration-chevron">›</span>';
-    button.addEventListener('mouseenter',showPopup);
-    button.addEventListener('mouseleave',scheduleClose);
-    button.addEventListener('click',event=>{
-      event.preventDefault();event.stopPropagation();
-      if(popup&&!popup.hidden)closePopup();else showPopup();
-    });
-    return button;
-  }
-
-  function ensureButton(){
-    ensureStyles();
-    const nav=mainNav();if(!nav)return;
-    ensureNavObserver(nav);
-
-    for(const duplicate of [...nav.querySelectorAll('button[data-pp-integration-hub="1"]')].slice(1))duplicate.remove();
-    let current=nav.querySelector('button[data-pp-integration-hub="1"]');
-    const buttons=[...nav.querySelectorAll('button')];
-    const chamados=buttons.find(button=>norm(button.textContent).startsWith('chamados'))||null;
-    const financeiro=buttons.find(button=>norm(button.textContent)==='financeiro')||null;
-
-    if(!current){
-      current=makeHubButton(chamados||financeiro||buttons[0]);
-      if(chamados)nav.insertBefore(current,chamados);
-      else if(financeiro?.nextSibling)nav.insertBefore(current,financeiro.nextSibling);
-      else nav.appendChild(current);
-    }else if(chamados&&current.nextSibling!==chamados){
-      nav.insertBefore(current,chamados);
-    }
-
-    hubButton=current;
-    buildPopup();
-  }
-
-  document.addEventListener('click',event=>{
-    const nav=mainNav();
-    const navButton=event.target.closest?.('button');
-    if(navButton&&nav?.contains(navButton)&&navButton!==hubButton){closePopup();closeLayer();return}
-    if(popup&&!popup.hidden&&!event.target.closest('.pp-integration-menu')&&!hubButton?.contains(event.target))closePopup();
-  },true);
-
-  addEventListener('resize',positionPopup);
-  addEventListener('scroll',positionPopup,true);
-
-  const rootObserver=new MutationObserver(()=>ensureButton());
-  rootObserver.observe(document.documentElement,{childList:true,subtree:true});
-  ensureButton();
+  const norm=v=>String(v??'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
+  const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  let hubButton=null,popup=null,layer=null,timer=null,navObserver=null;
+  const navRoot=()=>document.querySelector('aside.sidebar nav[aria-label="Menu principal"],aside.sidebar nav');
+  const contentRoot=()=>document.querySelector('.app-shell>.content')||document.querySelector('.content');
+  function styles(){if(document.getElementById('pp-integration-hub-style'))return;const e=document.createElement('style');e.id='pp-integration-hub-style';e.textContent=`
+    .pp-integration-hub-button{position:relative!important}.pp-integration-chevron{margin-left:auto!important;opacity:.62}.pp-integration-menu{position:fixed;z-index:11050;width:230px;padding:7px;background:#fff;border:1px solid #dce7e4;border-radius:11px;box-shadow:0 14px 38px rgba(18,52,45,.18)}.pp-integration-menu[hidden]{display:none!important}.pp-integration-menu button{display:flex;width:100%;align-items:center;gap:10px;padding:10px 11px;border:0;border-radius:8px;background:transparent;color:#294b44;text-align:left;font:700 11px Segoe UI,Arial;cursor:pointer}.pp-integration-menu button:hover{background:#edf8f5;color:#087866}.content.pp-integration-hub-active>:not(.pp-integration-hub-layer){display:none!important}.content.pp-integration-hub-active>.pp-integration-hub-layer{display:block!important}.pp-integration-hub-layer{display:none;min-height:100%;padding:28px;background:#f4f7f6;box-sizing:border-box;font-family:Segoe UI,Arial;color:#173d36}.pp-bank-head{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;margin-bottom:16px}.pp-bank-head h1{margin:4px 0 7px;font-size:27px}.pp-bank-head p{margin:0;color:#6e807b;font-size:12px}.pp-bank-kicker{font-size:10px;font-weight:900;letter-spacing:.12em;color:#07806e}.pp-bank-default{display:flex;align-items:center;gap:8px;font-size:10px;font-weight:800;color:#5c706b}.pp-bank-default select,.pp-bank-fields input,.pp-bank-fields select{height:38px;border:1px solid #cfe0dc;border-radius:9px;background:#fff;padding:0 10px;color:#294b44;box-sizing:border-box}.pp-bank-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:11px;margin-bottom:14px}.pp-bank-summary article,.pp-bank-card{background:#fff;border:1px solid #dce7e4;border-radius:13px;box-shadow:0 4px 16px rgba(30,72,63,.04)}.pp-bank-summary article{padding:14px}.pp-bank-summary small{display:block;font-size:9px;font-weight:850;color:#788984}.pp-bank-summary strong{display:block;margin-top:5px;font-size:13px}.pp-bank-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.pp-bank-card{padding:18px}.pp-bank-card-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px}.pp-bank-title{display:flex;align-items:center;gap:10px}.pp-bank-logo{display:grid;place-items:center;width:36px;height:36px;border-radius:10px;background:#e9f8f2;color:#087866;font-weight:900}.pp-bank-logo.mp{background:#edf5ff;color:#176db5}.pp-bank-title strong{display:block;font-size:14px}.pp-bank-title small{display:block;margin-top:2px;color:#7a8a86;font-size:9px}.pp-bank-status{padding:5px 8px;border-radius:999px;background:#f0f4f3;color:#6b7b77;font-size:9px;font-weight:850}.pp-bank-status.ok{background:#e8f8f1;color:#08735d}.pp-bank-status.error{background:#fff0ed;color:#ae4935}.pp-bank-fields{display:grid;grid-template-columns:1fr 1fr;gap:9px}.pp-bank-fields label{display:grid;gap:5px;font-size:10px;font-weight:750;color:#4d625d}.pp-bank-fields .full{grid-column:1/-1}.pp-bank-switch{display:flex!important;align-items:center;justify-content:space-between;grid-column:1/-1;padding:9px 10px;border:1px solid #e0e9e7;border-radius:9px;background:#fafcfb}.pp-bank-switch input{width:17px;height:17px}.pp-bank-note{margin:10px 0 0;color:#778884;font-size:9px;line-height:1.45}.pp-bank-cert{grid-column:1/-1;font-size:9px;color:#6d7e79}.pp-bank-cert.ok{color:#087866;font-weight:850}.pp-bank-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.pp-bank-actions button{height:36px;padding:0 12px;border:1px solid #cfe0dc;border-radius:9px;background:#fff;color:#31534c;font-size:10px;font-weight:850;cursor:pointer}.pp-bank-actions .primary{border-color:#087866;background:#087866;color:#fff}.pp-bank-message{margin-bottom:14px;padding:11px 13px;border-radius:9px;background:#eaf7f3;color:#126c5a;font-size:10px}.pp-bank-message.error{background:#fff0ed;color:#a64130}.pp-bank-loading{padding:18px;background:#fff;border:1px solid #dce7e4;border-radius:12px}.pp-bank-secure{display:flex;align-items:center;gap:6px;margin-top:10px;color:#61736e;font-size:9px}@media(max-width:980px){.pp-bank-grid,.pp-bank-summary{grid-template-columns:1fr}.pp-bank-fields{grid-template-columns:1fr}.pp-bank-fields .full,.pp-bank-switch,.pp-bank-cert{grid-column:1}.pp-bank-head{display:block}.pp-bank-default{margin-top:12px}.pp-integration-hub-layer{padding:18px 12px}}
+  `;document.head.appendChild(e)}
+  async function bankCall(action,data={}){const r=await fetch('/api/bank-settings',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',cache:'no-store',body:JSON.stringify({action,data})});let b={};try{b=await r.json()}catch{}if(!r.ok||!b.ok)throw new Error(b.error||`Falha bancária (${r.status})`);return b.data}
+  function closePopup(){clearTimeout(timer);timer=null;if(popup)popup.hidden=true;hubButton?.setAttribute('aria-expanded','false')}
+  function position(){if(!popup||popup.hidden||!hubButton)return;const r=hubButton.getBoundingClientRect(),w=popup.offsetWidth||230;let left=r.right+8;if(left+w>innerWidth-10)left=Math.max(10,r.left-w-8);popup.style.left=`${Math.round(left)}px`;popup.style.top=`${Math.max(10,Math.min(r.top,innerHeight-(popup.offsetHeight||110)-10))}px`}
+  function showPopup(){ensureButton();if(!popup||!hubButton)return;clearTimeout(timer);popup.hidden=false;hubButton.setAttribute('aria-expanded','true');requestAnimationFrame(position)}
+  function buildPopup(){if(popup?.isConnected)return;popup=document.createElement('div');popup.className='pp-integration-menu';popup.hidden=true;popup.innerHTML='<button type="button" data-kind="banks"><span>▰</span><span>API Bancos</span></button><button type="button" data-kind="mikrotik"><span>▣</span><span>Servidor MikroTik</span></button>';popup.onmouseenter=()=>clearTimeout(timer);popup.onmouseleave=()=>timer=setTimeout(closePopup,150);popup.onclick=e=>{const b=e.target.closest('[data-kind]');if(!b)return;e.preventDefault();e.stopPropagation();openSection(b.dataset.kind)};document.body.appendChild(popup)}
+  function openHost(){closePopup();const c=contentRoot();if(!c)return null;c.classList.add('pp-integration-hub-active');layer=c.querySelector(':scope>.pp-integration-hub-layer');if(!layer){layer=document.createElement('section');layer.className='pp-integration-hub-layer';c.appendChild(layer)}navRoot()?.querySelectorAll('button.active').forEach(b=>b.classList.remove('active'));hubButton?.classList.add('active');return layer}
+  function statusClass(v){return v==='success'?'ok':v==='error'?'error':''}function statusText(v){return v?.lastTestStatus==='success'?'Conectado':v?.lastTestStatus==='error'?'Falha no teste':v?.enabled?'Configurado':'Desativado'}
+  function fileBase64(file){return new Promise((ok,fail)=>{if(!file||!file.size)return ok('');const r=new FileReader;r.onload=()=>ok(String(r.result||'').split(',').pop()||'');r.onerror=()=>fail(new Error('Não foi possível ler o certificado.'));r.readAsDataURL(file)})}
+  async function renderBanks(message='',isError=false){const h=openHost();if(!h)return;h.innerHTML='<div class="pp-bank-loading">Carregando API Bancos...</div>';try{const cfg=await bankCall('get-safe'),efi=cfg.efi||{},mp=cfg.mercadoPago||{};let selected='';try{selected=String((await window.provedor?.banks?.get?.())?.defaultProvider||'')}catch{}h.innerHTML=`<div class="pp-bank-head"><div><div class="pp-bank-kicker">INTEGRAÇÃO · API BANCOS</div><h1>Mercado Pago e Efí Bank</h1><p>Configure uma vez. Financeiro e Área do Cliente usam as mesmas faturas e a mesma baixa de pagamento.</p></div><label class="pp-bank-default">Banco padrão<select id="pp-bank-default"><option value="">Automático</option><option value="efi">Efí Bank</option><option value="mercadoPago">Mercado Pago</option></select></label></div>${message?`<div class="pp-bank-message ${isError?'error':''}">${esc(message)}</div>`:''}<div class="pp-bank-summary"><article><small>PIX NA ÁREA DO CLIENTE</small><strong>${efi.enabled&&efi.certificateConfigured&&efi.pixKey?'Efí pronto':mp.enabled&&mp.accessTokenConfigured?'Mercado Pago pronto':'Aguardando banco'}</strong></article><article><small>CARTÃO</small><strong>${mp.enabled&&mp.publicKey&&mp.accessTokenConfigured?'Mercado Pago pronto':'Aguardando Mercado Pago'}</strong></article><article><small>PROTEÇÃO</small><strong>Segredos criptografados</strong></article></div><div class="pp-bank-grid"><article class="pp-bank-card"><div class="pp-bank-card-head"><div class="pp-bank-title"><span class="pp-bank-logo">E</span><span><strong>Efí Bank</strong><small>Boleto, Pix, carnê e Pix Automático</small></span></div><span class="pp-bank-status ${statusClass(efi.lastTestStatus)}">${statusText(efi)}</span></div><form id="pp-efi"><div class="pp-bank-fields"><label class="pp-bank-switch"><span>Ativar Efí Bank</span><input name="enabled" type="checkbox" ${efi.enabled?'checked':''}></label><label>Ambiente<select name="environment"><option value="sandbox">Homologação</option><option value="production">Produção</option></select></label><label>Chave Pix<input name="pixKey" value="${esc(efi.pixKey||'')}" placeholder="Chave cadastrada na Efí"></label><label>Client ID<input name="clientId" placeholder="${efi.clientIdConfigured?'Salvo · deixe vazio para manter':'Client ID'}"></label><label>Client Secret<input name="clientSecret" type="password" placeholder="${efi.clientSecretConfigured?'Salvo · deixe vazio para manter':'Client Secret'}"></label><label>Certificado P12/PFX<input name="certificate" type="file" accept=".p12,.pfx,application/x-pkcs12"></label><label>Senha do certificado<input name="certificatePassword" type="password" placeholder="${efi.certificatePasswordConfigured?'Salva · deixe vazio para manter':'Se houver'}"></label><div class="pp-bank-cert ${efi.certificateConfigured?'ok':''}">${efi.certificateConfigured?`✓ Certificado protegido${efi.certificateName?` · ${esc(efi.certificateName)}`:''}`:'Certificado necessário para Pix Efí no cloud.'}</div><label class="full">URL pública do webhook<input name="webhookUrl" value="${esc(efi.webhookUrl||'')}" placeholder="https://.../webhook/efi"></label><label>Agência · Pix Automático<input name="agency" value="${esc(efi.pixAutoReceiverAgency||'')}"></label><label>Conta · Pix Automático<input name="account" value="${esc(efi.pixAutoReceiverAccount||'')}"></label></div><div class="pp-bank-secure">◆ A Área do Cliente nunca recebe Client Secret nem certificado.</div><div class="pp-bank-actions"><button class="primary" type="submit">Salvar e testar</button><button name="save" type="button">Somente salvar</button><button name="webhook" type="button">Configurar webhook</button></div></form></article><article class="pp-bank-card"><div class="pp-bank-card-head"><div class="pp-bank-title"><span class="pp-bank-logo mp">MP</span><span><strong>Mercado Pago</strong><small>Pix e cartão na Área do Cliente</small></span></div><span class="pp-bank-status ${statusClass(mp.lastTestStatus)}">${statusText(mp)}</span></div><form id="pp-mp"><div class="pp-bank-fields"><label class="pp-bank-switch"><span>Ativar Mercado Pago</span><input name="enabled" type="checkbox" ${mp.enabled?'checked':''}></label><label>Ambiente<select name="environment"><option value="sandbox">Teste</option><option value="production">Produção</option></select></label><label>Public Key<input name="publicKey" value="${esc(mp.publicKey||'')}" placeholder="APP_USR-..."></label><label class="full">Access Token<input name="accessToken" type="password" placeholder="${mp.accessTokenConfigured?'Salvo · deixe vazio para manter':'APP_USR-...'}"></label></div><div class="pp-bank-secure">◆ Access Token fica somente no servidor; o cliente recebe apenas a Public Key.</div><div class="pp-bank-actions"><button class="primary" type="submit">Salvar e testar</button><button name="save" type="button">Somente salvar</button></div></form></article></div>`;
+    const def=h.querySelector('#pp-bank-default');def.value=['efi','mercadoPago'].includes(selected)?selected:'';def.onchange=async()=>{try{await bankCall('save-default',{provider:def.value});await renderBanks('Banco padrão atualizado.')}catch(e){await renderBanks(e.message,true)}};
+    const ef=h.querySelector('#pp-efi');ef.elements.environment.value=efi.environment||'sandbox';const saveEfi=async(test)=>{const d=new FormData(ef),file=d.get('certificate'),payload={enabled:d.get('enabled')==='on',environment:String(d.get('environment')),clientId:String(d.get('clientId')||''),clientSecret:String(d.get('clientSecret')||''),certificatePassword:String(d.get('certificatePassword')||''),pixKey:String(d.get('pixKey')||''),pixAutoReceiverAgency:String(d.get('agency')||''),pixAutoReceiverAccount:String(d.get('account')||''),webhookUrl:String(d.get('webhookUrl')||'')};if(file&&file.size){payload.certificateBase64=await fileBase64(file);payload.certificateName=file.name}await bankCall('save-efi',payload);if(test)await bankCall('test-efi');await renderBanks(test?'Efí salva e conexão testada.':'Configuração Efí salva.')};ef.onsubmit=e=>{e.preventDefault();saveEfi(true).catch(x=>renderBanks(x.message,true))};ef.elements.save.onclick=()=>saveEfi(false).catch(x=>renderBanks(x.message,true));ef.elements.webhook.onclick=async()=>{try{await saveEfi(false);await bankCall('configure-efi-webhooks');await renderBanks('Webhook Efí configurado.')}catch(x){await renderBanks(x.message,true)}};
+    const mf=h.querySelector('#pp-mp');mf.elements.environment.value=mp.environment||'sandbox';const saveMp=async(test)=>{const d=new FormData(mf);await bankCall('save-mercado-pago',{enabled:d.get('enabled')==='on',environment:String(d.get('environment')),publicKey:String(d.get('publicKey')||''),accessToken:String(d.get('accessToken')||'')});if(test)await bankCall('test-mercado-pago');await renderBanks(test?'Mercado Pago salvo e conexão testada.':'Configuração Mercado Pago salva.')};mf.onsubmit=e=>{e.preventDefault();saveMp(true).catch(x=>renderBanks(x.message,true))};mf.elements.save.onclick=()=>saveMp(false).catch(x=>renderBanks(x.message,true));
+  }catch(e){h.innerHTML=`<div class="pp-bank-message error">${esc(e.message||e)}</div>`}}
+  function renderMikrotik(){const h=openHost();if(!h)return;h.innerHTML='<div class="pp-bank-head"><div><div class="pp-bank-kicker">INTEGRAÇÃO</div><h1>Servidor MikroTik</h1><p>Área exclusiva para a integração do servidor MikroTik.</p></div></div>'}
+  function openSection(kind){closePopup();kind==='banks'?renderBanks():renderMikrotik()}
+  function ensureButton(){styles();const nav=navRoot();if(!nav)return;let b=nav.querySelector('[data-pp-integration-hub="1"]'),buttons=[...nav.querySelectorAll('button')],chamados=buttons.find(x=>norm(x.textContent).startsWith('chamados'));if(!b){b=document.createElement('button');b.type='button';b.dataset.ppIntegrationHub='1';b.className=String(chamados?.className||'');b.classList.remove('active');b.classList.add('pp-integration-hub-button');b.innerHTML='<span>⌁</span>Integração<span class="pp-integration-chevron">›</span>';b.setAttribute('aria-haspopup','menu');b.setAttribute('aria-expanded','false');b.onmouseenter=showPopup;b.onmouseleave=()=>timer=setTimeout(closePopup,150);b.onclick=e=>{e.preventDefault();e.stopPropagation();popup&&!popup.hidden?closePopup():showPopup()};nav.insertBefore(b,chamados||null)}else if(chamados&&b.nextSibling!==chamados)nav.insertBefore(b,chamados);hubButton=b;buildPopup();if(!navObserver){navObserver=new MutationObserver(()=>ensureButton());navObserver.observe(nav,{childList:true})}}
+  function closeLayer(){contentRoot()?.classList.remove('pp-integration-hub-active');layer?.remove();layer=null;hubButton?.classList.remove('active')}
+  document.addEventListener('click',e=>{const nav=navRoot(),b=e.target.closest?.('button');if(b&&nav?.contains(b)&&b!==hubButton){closePopup();closeLayer();return}if(popup&&!popup.hidden&&!e.target.closest('.pp-integration-menu')&&!hubButton?.contains(e.target))closePopup()},true);addEventListener('resize',position);addEventListener('scroll',position,true);styles();ensureButton();
 })();

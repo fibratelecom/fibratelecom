@@ -1,6 +1,6 @@
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260830-integracao-raiz1';
+  const BUILD_TOKEN='20260831-bankapi1';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');
@@ -265,7 +265,7 @@
 
   await loadScript('/client-status-enhancements.js?v=1017-status7-stable').catch(error=>console.error('Provedor Plus: os indicadores avançados do cliente não foram carregados.',error));
   await loadScript('/client-status-layout-cleanup.js?v=1017-statuslayout6-freshdata').catch(error=>console.error('Provedor Plus: a organização visual do status do cliente não foi carregada.',error));
-  await loadScript('/dashboard-transition-guard.js?v=20260830-integracao-raiz1').catch(error=>console.error('Provedor Plus: a proteção de transição do Dashboard não foi carregada.',error));
+  await loadScript('/dashboard-transition-guard.js?v=20260831-bankapi1').catch(error=>console.error('Provedor Plus: a proteção de transição do Dashboard não foi carregada.',error));
 
   const root=document.getElementById('root');
   if(root)root.style.visibility='hidden';

@@ -2,7 +2,7 @@ const __ppStartup={done(){},fail(error){console.error(error)}};
 window.addEventListener('provedor-plus-react-error',event=>{const message=event?.detail?.message||'Falha ao montar o painel.';console.error(new Error(message))});
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260831-ui-restore1';
+  const BUILD_TOKEN='20260831-restore-good-bundle1';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');

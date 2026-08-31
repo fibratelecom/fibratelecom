@@ -1,0 +1,43 @@
+name: cut-vercel-cloudflare
+on:
+  push:
+    paths:
+      - '.github/workflows/cut-vercel-cloudflare.yml'
+permissions:
+  contents: write
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Configure Git
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+      - name: Migrate Vercel runtime to Cloudflare
+        run: python tools/cut_vercel_cloudflare.py
+      - name: Validate Cloudflare-only runtime
+        run: |
+          node --check worker.js
+          node --check worker-bank-native.js
+          node --check worker-mikrotik-native.js
+          ! grep -nE 'vercel\.app|SPECIALIZED_UPSTREAM|proxySpecializedApi' worker.js worker-bank-native.js worker-mikrotik-native.js
+          python - <<'PY'
+          import json
+          p=json.load(open('vercel.json'))
+          assert p['git']['deploymentEnabled'] is False
+          assert p['github']['enabled'] is False
+          PY
+          npm install --ignore-scripts --no-package-lock
+          npx wrangler deploy --dry-run --outdir /tmp/cloudflare-only-build
+      - name: Commit Cloudflare-only runtime
+        run: |
+          git add worker.js worker-bank-native.js worker-mikrotik-native.js package.json vercel.json
+          git commit -m 'Move Banco e MikroTik para Cloudflare e corta Vercel'
+      - name: Cleanup temporary migrator
+        run: |
+          git rm tools/cut_vercel_cloudflare.py .github/workflows/cut-vercel-cloudflare.yml
+          git commit -m 'Remove migrador temporario do corte Vercel'
+          git push origin HEAD:cloudflare-provedor-plus

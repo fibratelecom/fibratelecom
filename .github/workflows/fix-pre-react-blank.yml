@@ -1,0 +1,92 @@
+name: Fix Pre React Blank
+on: push
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Corrigir bloqueios antes do React
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def repl(path, old, new):
+              p=Path(path); s=p.read_text()
+              if old not in s:
+                  raise SystemExit(f'Padrao nao encontrado: {path}: {old[:100]}')
+              p.write_text(s.replace(old,new,1))
+
+          # Estado da nuvem: nenhuma requisicao pode ficar pendurada indefinidamente.
+          repl('cloud-state-store.js', """  async function cloud(action,data={}){
+    const response=await fetch('/api/cloud-state',{
+      method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data})
+    });
+    let body={};try{body=await response.json()}catch{}
+    if(!response.ok||!body.ok)throw new Error(body.error||`Falha no banco da nuvem (HTTP ${response.status}).`);
+    return body.data;
+  }""", """  async function cloud(action,data={}){
+    const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),8000);
+    try{
+      const response=await fetch('/api/cloud-state',{
+        method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data}),signal:ctl.signal
+      });
+      let body={};try{body=await response.json()}catch{}
+      if(!response.ok||!body.ok)throw new Error(body.error||`Falha no banco da nuvem (HTTP ${response.status}).`);
+      return body.data;
+    }catch(error){
+      if(error?.name==='AbortError')throw new Error(`Tempo limite ao consultar ${action}.`);
+      throw error;
+    }finally{clearTimeout(timer)}
+  }""")
+
+          # Hidratar bancos nao pode segurar a instalacao do adaptador nem o React.
+          repl('cloud-adapter.js', '    await hydrateBankSettings();', "    hydrateBankSettings().catch(error=>console.warn('Provedor Plus: hidratação bancária em segundo plano falhou.',error));")
+
+          # Boot: deixa uma janela curta para obter o estado remoto, depois monta o app com estado local.
+          repl('bootstrap.js', """  await window.ProvedorPlusCloudState.prepare();
+  const currentState=window.ProvedorPlusCloudState.getState()||{};
+  currentState.settings={...(currentState.settings||{}),current_user_name:auth?.user?.name||currentState.settings?.current_user_name||'Administrador'};
+  localStorage.setItem('provedor_plus_web_1_0_17',JSON.stringify(currentState));
+  await window.ProvedorPlusCloudState.forceSync();""", """  await Promise.race([
+    window.ProvedorPlusCloudState.prepare().catch(error=>{console.warn('Provedor Plus: estado remoto indisponível na abertura; seguindo com o estado local.',error);return null}),
+    new Promise(resolve=>setTimeout(()=>resolve(null),1200))
+  ]);
+  const currentState=window.ProvedorPlusCloudState.getState()||{};
+  currentState.settings={...(currentState.settings||{}),current_user_name:auth?.user?.name||currentState.settings?.current_user_name||'Administrador'};
+  localStorage.setItem('provedor_plus_web_1_0_17',JSON.stringify(currentState));
+  window.ProvedorPlusCloudState.forceSync().catch(error=>console.warn('Provedor Plus: sincronização inicial continuará depois.',error));""")
+
+          repl('bootstrap.js', "  if(typeof window.provedor?.invoices?.sync==='function')await window.provedor.invoices.sync().catch(error=>console.error('Provedor Plus: falha na conciliação inicial de cobranças.',error));", "  if(typeof window.provedor?.invoices?.sync==='function')window.provedor.invoices.sync().catch(error=>console.error('Provedor Plus: falha na conciliação inicial de cobranças.',error));")
+
+          repl('bootstrap.js', "const BUILD_TOKEN='20260831-no-loading1';", "const BUILD_TOKEN='20260831-boot-unblock1';")
+          repl('index.html', '/bootstrap.js?v=20260831-no-loading1', '/bootstrap.js?v=20260831-boot-unblock1')
+          PY
+
+          node --check bootstrap.js
+          node --check cloud-state-store.js
+          node --check cloud-adapter.js
+          grep -Fq "setTimeout(()=>resolve(null),1200)" bootstrap.js
+          grep -Fq "forceSync().catch" bootstrap.js
+          grep -Fq "invoices.sync().catch" bootstrap.js
+          grep -Fq "signal:ctl.signal" cloud-state-store.js
+          grep -Fq "hydrateBankSettings().catch" cloud-adapter.js
+          grep -Fq "20260831-boot-unblock1" bootstrap.js index.html
+          ! grep -Fq "pp-startup-screen" index.html
+
+      - name: Publicar e remover workflow temporario
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add bootstrap.js index.html cloud-state-store.js cloud-adapter.js
+          git commit -m 'Desbloqueia montagem inicial do painel'
+          git rm -f .github/workflows/fix-pre-react-blank.yml
+          git commit -m 'Remove workflow temporario da abertura'
+          git push origin HEAD:cloudflare-provedor-plus

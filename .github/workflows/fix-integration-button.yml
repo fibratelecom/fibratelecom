@@ -21,16 +21,8 @@ jobs:
           from pathlib import Path
           p=Path('dashboard-transition-guard.js')
           s=p.read_text()
-          old="""  document.addEventListener('click',e=>{const nav=navRoot(),b=e.target.closest?.('button');if(b&&nav?.contains(b)&&b!==hubButton){closePopup();closeLayer();return}if(popup&&!popup.hidden&&!e.target.closest('.pp-integration-menu')&&!hubButton?.contains(e.target))closePopup()},true);addEventListener('resize',position);addEventListener('scroll',position,true);styles();ensureButton();
-})();"""
-          new="""  document.addEventListener('click',e=>{const nav=navRoot(),b=e.target.closest?.('button');if(b&&nav?.contains(b)&&b!==hubButton){closePopup();closeLayer();return}if(popup&&!popup.hidden&&!e.target.closest('.pp-integration-menu')&&!hubButton?.contains(e.target))closePopup()},true);addEventListener('resize',position);addEventListener('scroll',position,true);
-  const rootObserver=new MutationObserver(()=>{
-    ensureButton();
-    if(navRoot()&&hubButton?.isConnected)rootObserver.disconnect();
-  });
-  rootObserver.observe(document.documentElement,{childList:true,subtree:true});
-  styles();ensureButton();
-})();"""
+          old="  document.addEventListener('click',e=>{const nav=navRoot(),b=e.target.closest?.('button');if(b&&nav?.contains(b)&&b!==hubButton){closePopup();closeLayer();return}if(popup&&!popup.hidden&&!e.target.closest('.pp-integration-menu')&&!hubButton?.contains(e.target))closePopup()},true);addEventListener('resize',position);addEventListener('scroll',position,true);styles();ensureButton();\n})();"
+          new="  document.addEventListener('click',e=>{const nav=navRoot(),b=e.target.closest?.('button');if(b&&nav?.contains(b)&&b!==hubButton){closePopup();closeLayer();return}if(popup&&!popup.hidden&&!e.target.closest('.pp-integration-menu')&&!hubButton?.contains(e.target))closePopup()},true);addEventListener('resize',position);addEventListener('scroll',position,true);\n  const rootObserver=new MutationObserver(()=>{\n    ensureButton();\n    if(navRoot()&&hubButton?.isConnected)rootObserver.disconnect();\n  });\n  rootObserver.observe(document.documentElement,{childList:true,subtree:true});\n  styles();ensureButton();\n})();"
           if old not in s:
               raise SystemExit('Ponto do botão Integração não localizado')
           p.write_text(s.replace(old,new,1))

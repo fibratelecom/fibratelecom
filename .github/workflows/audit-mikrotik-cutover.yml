@@ -1,0 +1,31 @@
+name: audit-mikrotik-cutover
+on:
+  push:
+    paths:
+      - '.github/workflows/audit-mikrotik-cutover.yml'
+permissions:
+  contents: write
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Extract current MikroTik engine
+        run: |
+          git fetch origin main
+          git show origin/main:lib/mikrotik-proxy.js > /tmp/mikrotik-proxy-current.js
+          node --check /tmp/mikrotik-proxy-current.js
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mikrotik-proxy-current
+          path: /tmp/mikrotik-proxy-current.js
+          retention-days: 1
+      - name: Cleanup workflow
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/audit-mikrotik-cutover.yml
+          git commit -m 'Remove auditor temporario do motor MikroTik'
+          git push origin HEAD:cloudflare-provedor-plus

@@ -1,6 +1,16 @@
+const __ppStartup=(()=>{
+  const screen=document.getElementById('pp-startup-screen'),status=document.getElementById('pp-startup-status'),stage=document.getElementById('pp-startup-stage'),retry=document.getElementById('pp-startup-retry');
+  if(retry)retry.onclick=()=>location.reload();
+  let finished=false;
+  const watchdog=setTimeout(()=>{if(finished||!screen)return;screen.classList.add('is-error');if(status)status.textContent='O painel está demorando mais do que o esperado.';if(stage)stage.textContent='Verifique a conexão e tente novamente';},15000);
+  return {
+    done(){if(finished)return;finished=true;clearTimeout(watchdog);if(!screen)return;screen.classList.add('is-leaving');setTimeout(()=>screen.remove(),320)},
+    fail(error){finished=true;clearTimeout(watchdog);console.error(error);if(!screen)return;screen.classList.add('is-error');if(status)status.textContent='Não foi possível concluir a inicialização do painel.';if(stage)stage.textContent='Use Recarregar painel para tentar novamente';}
+  };
+})();
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260831-hubs-fix1';
+  const BUILD_TOKEN='20260831-startup-loader1';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');
@@ -269,7 +279,6 @@
   await loadScript('/dashboard-transition-guard.js?v=20260831-dashboard-root1').catch(error=>console.error('Provedor Plus: a proteção de transição do Dashboard não foi carregada.',error));
 
   const root=document.getElementById('root');
-  if(root)root.style.visibility='hidden';
   const appB64=await read(Array.from({length:33},(_,i)=>`/packed/appgz-${String(i+1).padStart(2,'0')}.txt`));
   const app=await gunzipB64(appB64),appUrl=URL.createObjectURL(new Blob([app],{type:'text/javascript'}));
   try{await import(appUrl)}finally{setTimeout(()=>URL.revokeObjectURL(appUrl),1500)}
@@ -284,5 +293,5 @@
   installRouteIsolationGuard();
   await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
   if(typeof window.ProvedorPlusPatchClientViewButtons==='function')window.ProvedorPlusPatchClientViewButtons();
-  if(root)root.style.visibility='';
-})().catch(err=>{console.error(err);const root=document.getElementById('root')||document.body;if(root)root.style.visibility='';const message=String(err&&err.message||err);root.innerHTML='<div style="font-family:Segoe UI,Arial,sans-serif;max-width:760px;margin:60px auto;padding:24px;border:1px solid #e5e7eb;border-radius:14px"><h2>Provedor Plus</h2><p>Não foi possível carregar o painel.</p><pre id="pp-startup-error" style="white-space:pre-wrap;color:#b91c1c"></pre><button id="pp-startup-retry">Tentar novamente</button></div>';const pre=root.querySelector('#pp-startup-error'),button=root.querySelector('#pp-startup-retry');if(pre)pre.textContent=message;if(button)button.addEventListener('click',()=>location.reload())});
+  __ppStartup.done();
+})().catch(err=>{__ppStartup.fail(err)});

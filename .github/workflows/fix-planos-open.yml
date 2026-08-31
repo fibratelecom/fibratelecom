@@ -1,0 +1,55 @@
+name: Fix Planos Open
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: [.github/workflows/fix-planos-open.yml]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+          fetch-depth: 0
+      - name: Corrigir abertura do Planos
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          p=Path('plans.js')
+          s=p.read_text()
+          old="""    button.closest('nav')?.querySelectorAll('button.active').forEach(item=>{if(item!==button)item.classList.remove('active')});button.classList.add('active');ready.content.classList.add('pp-plans-cloud-active');
+"""
+          new="""    ready.content.classList.remove('pp-dashboard-root-active','pp-client-hub-active','pp-integration-hub-active','pp-new-plans-active','pp-route-overlay-active','pp-route-billing-active','pp-route-ticket-active','pp-route-staff-active','pp-nav-loading-active');
+    ready.content.querySelector(':scope > .pp-nav-loading-layer')?.remove();
+    button.closest('nav')?.querySelectorAll('button.active').forEach(item=>{if(item!==button)item.classList.remove('active')});button.classList.add('active');ready.content.classList.add('pp-plans-cloud-active');
+"""
+          if s.count(old)!=1:
+              raise SystemExit(f'Trecho esperado de openPlans encontrado {s.count(old)} vez(es), abortando.')
+          p.write_text(s.replace(old,new))
+
+          i=Path('index.html')
+          h=i.read_text()
+          oldsrc='/plans.js?v=20260830-2210-planos-upload-instalacao1'
+          newsrc='/plans.js?v=20260831-planos-open1'
+          if oldsrc not in h:
+              raise SystemExit('Token atual de plans.js não encontrado.')
+          i.write_text(h.replace(oldsrc,newsrc,1))
+          PY
+          node --check plans.js
+          grep -q "pp-dashboard-root-active.*pp-client-hub-active.*pp-integration-hub-active" plans.js
+          grep -q "plans.js?v=20260831-planos-open1" index.html
+      - name: Publicar e limpar temporário
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add plans.js index.html
+          git commit -m 'Restaura abertura da tela Planos'
+          git rm -f .github/workflows/fix-planos-open.yml
+          git commit -m 'Remove aplicador temporario de Planos'
+          git push origin HEAD:cloudflare-provedor-plus

@@ -1,4 +1,5 @@
 name: fix-sidebar-selector
+# segunda execução: substituição global do seletor antigo
 on:
   push:
     paths:
@@ -25,6 +26,8 @@ jobs:
           grep -q "bootstrap.js?v=20260831-uiatomic4" index.html
           grep -q ".app-shell .sidebar nav" dashboard-transition-guard.js
           grep -q ".app-shell .sidebar nav" dashboard-enhancements.js
+          ! grep -q "aside.sidebar nav\[aria-label=\"Menu principal\"\],aside.sidebar nav" dashboard-transition-guard.js
+          ! grep -q "aside.sidebar nav\[aria-label=\"Menu principal\"\],aside.sidebar nav" dashboard-enhancements.js
           ! grep -q "document.querySelector('aside.sidebar')||document.querySelector('aside')" dashboard-transition-guard.js
           ! grep -q "document.querySelector('aside.sidebar')||document.querySelector('aside')" dashboard-enhancements.js
       - name: Commit correction

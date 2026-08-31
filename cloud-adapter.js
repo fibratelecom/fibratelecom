@@ -190,7 +190,7 @@
     api.routers.delete=async id=>{const r=await base.routers.delete(id);await secretDelete(id);return r};
 
     api.mikrotik.sync=async routerId=>{const r=await routerRecord(routerId),result=await cloudRead('router.sync',{router:await routerAuth(routerId)});return {...result,routerId:Number(routerId),routerName:r.name}};
-    api.mikrotik.metrics=async routerId=>{const r=await routerRecord(routerId),result=await cloudCall('router.metrics',{router:await routerAuth(routerId)},6500);return {...result,routerId:Number(routerId),routerName:r.name}};
+    api.mikrotik.metrics=async routerId=>{const r=await routerRecord(routerId),result=await cloudCall('router.metrics',{router:await routerAuth(routerId)},17500);return {...result,routerId:Number(routerId),routerName:r.name}};
     api.mikrotik.profiles=async routerId=>{const r=await routerRecord(routerId),result=await cloudRead('router.profiles',{router:await routerAuth(routerId)});return {...result,routerId:Number(routerId),routerName:r.name}};
     api.mikrotik.remoteAccess=async routerId=>{const r=await routerRecord(routerId),result=await cloudRead('router.remote',{router:await routerAuth(routerId)});return {...result,routerId:Number(routerId),routerName:r.name}};
     api.mikrotik.savePppoe=async(routerId,data)=>{const r=await routerRecord(routerId),result=await cloudCall('pppoe.save',{router:await routerAuth(routerId),data:clone(data)});return {...result,routerId:Number(routerId),routerName:r.name}};

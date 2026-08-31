@@ -218,7 +218,7 @@ if(prepareOutcome.kind==='timeout'){
 
   await loadScript('/cloud-router-store-v2.js?v=1017-cloud17');
   await loadScript('/cloud-client-store-v2.js?v=1017-cloud17-audit1');
-  await loadScript('/cloud-adapter.js?v=20260831-step8-mikrotik1');
+  await loadScript('/cloud-adapter.js?v=20260831-step8-mikrotik2');
   if(typeof window.ProvedorPlusInstallCloudAdapter!=='function')throw new Error('A ponte HTTPS do MikroTik não foi carregada.');
   await window.ProvedorPlusInstallCloudAdapter();
   await loadScript('/cloud-client-status-fix.js?v=1017-cloud17-audit2');
@@ -226,7 +226,7 @@ if(prepareOutcome.kind==='timeout'){
 
   await loadScript('/cloud-backup-store.js?v=1017-cloud17');
   window.ProvedorPlusCloudState.wrapApi(window.provedor);
-  await loadScript('/mikrotik-read-stability.js?v=1017-mikrotikstable1').catch(error=>console.error('Provedor Plus: a estabilização das leituras MikroTik não foi carregada.',error));
+  await loadScript('/mikrotik-read-stability.js?v=20260831-mikrotikstable2').catch(error=>console.error('Provedor Plus: a estabilização das leituras MikroTik não foi carregada.',error));
 
   await Promise.all([
     loadStyle('/client-status-enhancements.css?v=1017-status6','pp-client-status-enhancements-css'),

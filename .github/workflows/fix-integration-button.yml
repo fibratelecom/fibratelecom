@@ -1,0 +1,48 @@
+name: Fix Integration Button
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: ['.github/workflows/fix-integration-button.yml']
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+          fetch-depth: 0
+      - name: Restaurar criação do botão Integração
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('dashboard-transition-guard.js')
+          s=p.read_text()
+          old="""  document.addEventListener('click',e=>{const nav=navRoot(),b=e.target.closest?.('button');if(b&&nav?.contains(b)&&b!==hubButton){closePopup();closeLayer();return}if(popup&&!popup.hidden&&!e.target.closest('.pp-integration-menu')&&!hubButton?.contains(e.target))closePopup()},true);addEventListener('resize',position);addEventListener('scroll',position,true);styles();ensureButton();
+})();"""
+          new="""  document.addEventListener('click',e=>{const nav=navRoot(),b=e.target.closest?.('button');if(b&&nav?.contains(b)&&b!==hubButton){closePopup();closeLayer();return}if(popup&&!popup.hidden&&!e.target.closest('.pp-integration-menu')&&!hubButton?.contains(e.target))closePopup()},true);addEventListener('resize',position);addEventListener('scroll',position,true);
+  const rootObserver=new MutationObserver(()=>{
+    ensureButton();
+    if(navRoot()&&hubButton?.isConnected)rootObserver.disconnect();
+  });
+  rootObserver.observe(document.documentElement,{childList:true,subtree:true});
+  styles();ensureButton();
+})();"""
+          if old not in s:
+              raise SystemExit('Ponto do botão Integração não localizado')
+          p.write_text(s.replace(old,new,1))
+          PY
+          node --check dashboard-transition-guard.js
+      - name: Publicar correção e remover workflow temporário
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/fix-integration-button.yml
+          git add dashboard-transition-guard.js
+          git commit -m 'Restaura botão Integração após carregar menu'
+          git push origin HEAD:cloudflare-provedor-plus

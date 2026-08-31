@@ -1,0 +1,32 @@
+name: Diagnose Menu Structure
+on:
+  push:
+    branches: [restore/provedor-plus-20260831-30e7544]
+    paths: [.github/workflows/diag-menu-structure.yml]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: restore/provedor-plus-20260831-30e7544
+      - name: Inspect packed menu
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat packed/appgz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/app.js
+          node <<'NODE'
+          const fs=require('fs');
+          const s=fs.readFileSync('/tmp/app.js','utf8');
+          for(const needle of ['SISTEMA','Sistema','Chamados','Usuários','Usuarios','Configurações','Configuracoes','Integração','Integracao']){
+            console.log('\n===',needle,'===');
+            let from=0,count=0;
+            while(count<6){
+              const i=s.indexOf(needle,from); if(i<0)break;
+              console.log(s.slice(Math.max(0,i-900),Math.min(s.length,i+1400)).replace(/\n/g,' '));
+              from=i+needle.length;count++;
+            }
+          }
+          NODE

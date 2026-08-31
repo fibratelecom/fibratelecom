@@ -1,0 +1,41 @@
+name: Audit Bank Proxy
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: ['.github/workflows/audit-bank-proxy.yml']
+permissions:
+  contents: write
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+          fetch-depth: 0
+      - name: Mapear ações do proxy bancário
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat packed/proxygz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/bank-proxy.js
+          node --check /tmp/bank-proxy.js
+          echo '=== ACTIONS ==='
+          grep -n -E "action|issue|cancel|sync|test|webhook|Pix|Mercado|Efi|Efí|payment" /tmp/bank-proxy.js | head -n 500 || true
+          echo '=== ACTION VALUES ==='
+          node <<'NODE'
+          const fs=require('fs');
+          const s=fs.readFileSync('/tmp/bank-proxy.js','utf8');
+          const values=new Set();
+          for(const re of [/action\s*===\s*['\"]([^'\"]+)/g,/case\s+['\"]([^'\"]+)['\"]\s*:/g,/action\s*==\s*['\"]([^'\"]+)/g]){
+            let m; while((m=re.exec(s))) values.add(m[1]);
+          }
+          console.log([...values].sort().join('\n'));
+          NODE
+      - name: Remover auditoria temporária
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/audit-bank-proxy.yml
+          git commit -m "Remove auditoria temporária do proxy bancário"
+          git push

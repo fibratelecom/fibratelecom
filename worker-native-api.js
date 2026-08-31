@@ -105,12 +105,24 @@ export async function handleNativeAuth(request,env){
   }catch(error){return apiJson({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,{'x-provedor-plus-edge':'cloudflare-native-auth'});}
 }
 
+
+function preservePortalState(incoming,existing){
+  const state=incoming&&typeof incoming==='object'&&!Array.isArray(incoming)?{...incoming}:{},remote=existing&&typeof existing==='object'&&!Array.isArray(existing)?existing:{};
+  const localNegotiations=Array.isArray(state.negotiations)?[...state.negotiations]:[],remoteNegotiations=Array.isArray(remote.negotiations)?remote.negotiations:[],known=new Set(localNegotiations.map(item=>String(item?.id||'')).filter(Boolean));
+  for(const item of remoteNegotiations){const id=String(item?.id||'');if(id&&!known.has(id)){localNegotiations.push(item);known.add(id)}}
+  if(localNegotiations.length)state.negotiations=localNegotiations;
+  const localInvoices=Array.isArray(state.invoices)?[...state.invoices]:[],remoteInvoices=Array.isArray(remote.invoices)?remote.invoices:[],index=new Map(localInvoices.map((item,i)=>[String(item?.id??''),i]));
+  for(const remoteInvoice of remoteInvoices){if(!remoteInvoice?.negotiation_id)continue;const key=String(remoteInvoice?.id??''),position=index.get(key);if(position===undefined){index.set(key,localInvoices.length);localInvoices.push(remoteInvoice);continue}const localInvoice=localInvoices[position];if(!localInvoice?.negotiation_id||String(localInvoice.negotiation_id)!==String(remoteInvoice.negotiation_id))localInvoices[position]=remoteInvoice;}
+  if(localInvoices.length)state.invoices=localInvoices;
+  const maxInvoiceId=Math.max(Number(state?.seq?.invoices)||0,...localInvoices.map(item=>Number(item?.id)||0));if(maxInvoiceId)state.seq={...(state.seq||{}),invoices:maxInvoiceId};
+  return state;
+}
 function sanitize(value,depth=0){if(depth>30)return null;if(Array.isArray(value))return value.slice(0,10000).map(v=>sanitize(v,depth+1));if(!value||typeof value!=='object')return value;const blocked=new Set(['password','router_password','mikrotik_password','clientSecret','client_secret','accessToken','access_token','certificatePassword','certificate_password','certificateBase64','certificate_base64','privateKey','private_key']);const out={};for(const [key,val] of Object.entries(value)){if(blocked.has(key))continue;out[key]=sanitize(val,depth+1)}return out;}
 export async function handleNativeCloudState(request,env){
   if(request.method!=='POST')return apiJson({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-native-state'});const sql=sqlFor(env);
   try{await requireAuth(request,sql);const body=await bodyOf(request),action=text(body?.action),data=body?.data||{};let result;
     if(action==='state.get'){const row=await getSetting(sql,STATE_KEY);result=row?{state:row.value||{},updated_at:row.updated_at||null}:{state:null,updated_at:null};}
-    else if(action==='state.save'){if(!data.state||typeof data.state!=='object'||Array.isArray(data.state))throw Object.assign(new Error('Estado do gerenciador inválido.'),{statusCode:400});const clean=sanitize(data.state),row=await setSetting(sql,STATE_KEY,clean);result={state:row?.value||clean,updated_at:row?.updated_at||new Date().toISOString()};}
+    else if(action==='state.save'){if(!data.state||typeof data.state!=='object'||Array.isArray(data.state))throw Object.assign(new Error('Estado do gerenciador inválido.'),{statusCode:400});const previous=await getSetting(sql,STATE_KEY),merged=preservePortalState(data.state,previous?.value),clean=sanitize(merged),row=await setSetting(sql,STATE_KEY,clean);result={state:row?.value||clean,updated_at:row?.updated_at||new Date().toISOString()};}
     else if(action==='health'){const row=await getSetting(sql,STATE_KEY);result={online:true,hasState:Boolean(row?.value),updated_at:row?.updated_at||null};}
     else throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});return apiJson({ok:true,data:result},200,{'x-provedor-plus-edge':'cloudflare-native-state'});
   }catch(error){return apiJson({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,{'x-provedor-plus-edge':'cloudflare-native-state'});}

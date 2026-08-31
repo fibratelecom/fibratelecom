@@ -2,7 +2,7 @@ const __ppStartup={done(){},fail(error){console.error(error)}};
 window.addEventListener('provedor-plus-react-error',event=>{const message=event?.detail?.message||'Falha ao montar o painel.';console.error(new Error(message))});
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260831-step4-sync1';
+  const BUILD_TOKEN='20260831-step5-dedupe1';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');
@@ -170,7 +170,7 @@ window.addEventListener('provedor-plus-react-error',event=>{const message=event?
   if(!window.ProvedorPlusAuth?.ensure)throw new Error('A autenticação do Provedor Plus não foi carregada.');
   const auth=await window.ProvedorPlusAuth.ensure();
 
-  await loadScript('/cloud-state-store.js?v=20260831-step4-sync1');
+  await loadScript('/cloud-state-store.js?v=20260831-step5-dedupe1');
 if(!window.ProvedorPlusCloudState?.prepare)throw new Error('A sincronização com o banco da nuvem não foi carregada.');
 const prepareTask=window.ProvedorPlusCloudState.prepare().then(result=>({kind:'ready',result})).catch(error=>({kind:'error',error}));
 const prepareOutcome=await Promise.race([prepareTask,new Promise(resolve=>setTimeout(()=>resolve({kind:'timeout'}),1200))]);

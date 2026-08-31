@@ -1,4 +1,4 @@
-name: Audit Bank Proxy
+name: Implement Bank API
 on:
   push:
     branches: [cloudflare-provedor-plus]
@@ -6,36 +6,324 @@ on:
 permissions:
   contents: write
 jobs:
-  audit:
+  implement:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: cloudflare-provedor-plus
           fetch-depth: 0
-      - name: Mapear ações do proxy bancário
+      - name: Implementar API Bancos no painel e portal
         shell: bash
         run: |
           set -euo pipefail
-          cat packed/proxygz-*.txt | tr -d '\n\r ' | base64 -d | gzip -dc > /tmp/bank-proxy.js
-          node --check /tmp/bank-proxy.js
-          echo '=== ACTIONS ==='
-          grep -n -E "action|issue|cancel|sync|test|webhook|Pix|Mercado|Efi|Efí|payment" /tmp/bank-proxy.js | head -n 500 || true
-          echo '=== ACTION VALUES ==='
-          node <<'NODE'
-          const fs=require('fs');
-          const s=fs.readFileSync('/tmp/bank-proxy.js','utf8');
-          const values=new Set();
-          for(const re of [/action\s*===\s*['\"]([^'\"]+)/g,/case\s+['\"]([^'\"]+)['\"]\s*:/g,/action\s*==\s*['\"]([^'\"]+)/g]){
-            let m; while((m=re.exec(s))) values.add(m[1]);
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p=Path('worker.js')
+          s=p.read_text()
+
+          old="""function emptyBankSettings(){
+            return {
+              efi:{enabled:false,environment:'sandbox',clientId:'',clientSecret:'',certificatePassword:'',pixKey:'',pixAutoReceiverAgency:'',pixAutoReceiverAccount:'',webhookUrl:''},
+              mercadoPago:{enabled:false,environment:'sandbox',publicKey:'',accessToken:''}
+            };
+          }"""
+          new="""function emptyBankSettings(){
+            return {
+              efi:{enabled:false,environment:'sandbox',clientId:'',clientSecret:'',certificatePassword:'',certificateBase64:'',certificateName:'',pixKey:'',pixAutoReceiverAgency:'',pixAutoReceiverAccount:'',webhookUrl:'',lastTestStatus:'',lastTestMessage:'',lastTestAt:'',webhookConfiguredAt:''},
+              mercadoPago:{enabled:false,environment:'sandbox',publicKey:'',accessToken:'',lastTestStatus:'',lastTestMessage:'',lastTestAt:''}
+            };
+          }"""
+          assert old in s, 'emptyBankSettings não localizado'
+          s=s.replace(old,new,1)
+
+          start=s.index('function mergeEfiBank(current,data={}){')
+          end=s.index('\n\nasync function handleBankSettings',start)
+          replacement="""function mergeEfiBank(current,data={}){
+            const previous=current?.efi||emptyBankSettings().efi;
+            const certBase64=data.removeCertificate===true?'':data.certificateBase64===undefined?String(previous.certificateBase64||''):String(data.certificateBase64||'');
+            if(certBase64.length>2500000)throw Object.assign(new Error('Certificado Efí muito grande. Selecione o arquivo P12/PFX original.'),{statusCode:400});
+            return {
+              enabled:data.enabled===undefined?Boolean(previous.enabled):Boolean(data.enabled),
+              environment:data.environment==='production'?'production':data.environment==='sandbox'?'sandbox':text(previous.environment)||'sandbox',
+              clientId:text(data.clientId)||text(previous.clientId),
+              clientSecret:text(data.clientSecret)||text(previous.clientSecret),
+              certificatePassword:data.certificatePassword===undefined?String(previous.certificatePassword||''):String(data.certificatePassword||''),
+              certificateBase64:certBase64,
+              certificateName:data.removeCertificate===true?'':data.certificateName===undefined?text(previous.certificateName):text(data.certificateName),
+              pixKey:data.pixKey===undefined?text(previous.pixKey):text(data.pixKey),
+              pixAutoReceiverAgency:data.pixAutoReceiverAgency===undefined?text(previous.pixAutoReceiverAgency):digits(data.pixAutoReceiverAgency),
+              pixAutoReceiverAccount:data.pixAutoReceiverAccount===undefined?text(previous.pixAutoReceiverAccount):digits(data.pixAutoReceiverAccount),
+              webhookUrl:data.webhookUrl===undefined?text(previous.webhookUrl):text(data.webhookUrl),
+              lastTestStatus:text(previous.lastTestStatus),lastTestMessage:text(previous.lastTestMessage),lastTestAt:text(previous.lastTestAt),webhookConfiguredAt:text(previous.webhookConfiguredAt)
+            };
           }
-          console.log([...values].sort().join('\n'));
-          NODE
-      - name: Remover auditoria temporária
+
+          function mergeMercadoPagoBank(current,data={}){
+            const previous=current?.mercadoPago||emptyBankSettings().mercadoPago;
+            return {
+              enabled:data.enabled===undefined?Boolean(previous.enabled):Boolean(data.enabled),
+              environment:data.environment==='production'?'production':data.environment==='sandbox'?'sandbox':text(previous.environment)||'sandbox',
+              publicKey:data.publicKey===undefined?text(previous.publicKey):text(data.publicKey),
+              accessToken:text(data.accessToken)||text(previous.accessToken),
+              lastTestStatus:text(previous.lastTestStatus),lastTestMessage:text(previous.lastTestMessage),lastTestAt:text(previous.lastTestAt)
+            };
+          }
+
+          function safeBankSettings(value){
+            const efi=value?.efi||{},mp=value?.mercadoPago||{};
+            return {
+              efi:{enabled:Boolean(efi.enabled),environment:text(efi.environment)||'sandbox',clientIdConfigured:Boolean(text(efi.clientId)),clientSecretConfigured:Boolean(text(efi.clientSecret)),certificatePasswordConfigured:Boolean(String(efi.certificatePassword||'')),certificateConfigured:Boolean(String(efi.certificateBase64||'')),certificateName:text(efi.certificateName),pixKey:text(efi.pixKey),pixAutoReceiverAgency:text(efi.pixAutoReceiverAgency),pixAutoReceiverAccount:text(efi.pixAutoReceiverAccount),webhookUrl:text(efi.webhookUrl),lastTestStatus:text(efi.lastTestStatus),lastTestMessage:text(efi.lastTestMessage),lastTestAt:text(efi.lastTestAt),webhookConfiguredAt:text(efi.webhookConfiguredAt)},
+              mercadoPago:{enabled:Boolean(mp.enabled),environment:text(mp.environment)||'sandbox',publicKey:text(mp.publicKey),accessTokenConfigured:Boolean(text(mp.accessToken)),lastTestStatus:text(mp.lastTestStatus),lastTestMessage:text(mp.lastTestMessage),lastTestAt:text(mp.lastTestAt)}
+            };
+          }
+
+          async function handleBankSettings(request,env){
+            if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-bank-settings'});
+            try{
+              await requireBankAdmin(request,env);
+              let body={};try{body=await request.json()}catch{}
+              const action=text(body?.action),data=body?.data||{};let result;
+              if(action==='get')result=await readBankSettings(env);
+              else if(action==='get-safe')result=safeBankSettings(await readBankSettings(env));
+              else if(action==='save-efi'){
+                const current=await readBankSettings(env),next={...current,efi:mergeEfiBank(current,data)};
+                result=await writeBankSettings(env,next);
+              }else if(action==='save-mercado-pago'){
+                const current=await readBankSettings(env),next={...current,mercadoPago:mergeMercadoPagoBank(current,data)};
+                result=await writeBankSettings(env,next);
+              }else if(action==='save-default'){
+                if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Neon não configurada.'),{statusCode:503});
+                const provider=['efi','mercadoPago'].includes(text(data.provider))?text(data.provider):'';
+                const sql=neon(env.DATABASE_URL),state=await loadState(sql);state.banks={...(state.banks||{}),defaultProvider:provider};await saveState(sql,state);result={defaultProvider:provider};
+              }else if(action==='test-efi'||action==='test-mercado-pago'||action==='configure-efi-webhooks'){
+                if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Neon não configurada.'),{statusCode:503});
+                const sql=neon(env.DATABASE_URL),current=await readBankSettings(env),secrets=bankSecretsFromVault(current),isEfi=action!=='test-mercado-pago';
+                try{
+                  const proxyAction=action==='test-efi'?'efi-test':action==='test-mercado-pago'?'mp-test':'efi-webhooks';
+                  const tested=await bankProxyAsService(env,sql,{action:proxyAction,efi:secrets.efi,mercadoPago:secrets.mercadoPago});
+                  const now=new Date().toISOString();
+                  if(isEfi){current.efi={...current.efi,lastTestStatus:'success',lastTestMessage:text(tested?.message)||'Conexão Efí confirmada.',lastTestAt:now,...(action==='configure-efi-webhooks'?{webhookConfiguredAt:now}:{})};}
+                  else current.mercadoPago={...current.mercadoPago,lastTestStatus:'success',lastTestMessage:text(tested?.message)||'Conexão Mercado Pago confirmada.',lastTestAt:now};
+                  await writeBankSettings(env,current);result={test:tested,settings:safeBankSettings(current)};
+                }catch(error){
+                  const now=new Date().toISOString(),message=error instanceof Error?error.message:String(error);
+                  if(isEfi)current.efi={...current.efi,lastTestStatus:'error',lastTestMessage:message,lastTestAt:now};else current.mercadoPago={...current.mercadoPago,lastTestStatus:'error',lastTestMessage:message,lastTestAt:now};
+                  try{await writeBankSettings(env,current)}catch{}
+                  throw error;
+                }
+              }else throw Object.assign(new Error('Ação bancária não permitida.'),{statusCode:400});
+              return json({ok:true,data:result},200,{'x-provedor-plus-edge':'cloudflare-bank-settings'});
+            }catch(error){
+              return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,{'x-provedor-plus-edge':'cloudflare-bank-settings'});
+            }
+          }"""
+          s=s[:start]+replacement+s[end+2+len('async function handleBankSettings'):]
+          # The slice above intentionally replaced through the old function name marker; repair any accidental leftover signature.
+          s=s.replace("(request,env){\n  if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-bank-settings'});\n  try{\n    await requireBankAdmin(request,env);", "", 1) if s.count("async function handleBankSettings(request,env)")>1 else s
+
+          # Improve invoice mapping with bank-native fields.
+          s=s.replace("pixPaymentUrl:text(row?.pix_payment_url||row?.pixPaymentUrl||row?.pix_url||row?.pixUrl),", "pixPaymentUrl:text(row?.pix_payment_url||row?.pixPaymentUrl||row?.pix_url||row?.pixUrl||row?.bank_ticket_url),",1)
+          s=s.replace("pixCopyPaste:text(row?.pix_copy_paste||row?.pixCopyPaste||row?.pix_payload||row?.pixPayload),", "pixCopyPaste:text(row?.pix_copy_paste||row?.pixCopyPaste||row?.pix_payload||row?.pixPayload||row?.bank_pix_code),",1)
+          s=s.replace("pdfUrl:text(row?.pdf_url||row?.invoice_pdf_url||row?.boleto_pdf_url||row?.bank_slip_pdf_url),", "pdfUrl:text(row?.pdf_url||row?.invoice_pdf_url||row?.boleto_pdf_url||row?.bank_slip_pdf_url||row?.bank_pdf_url),",1)
+          s=s.replace("digitableLine:text(row?.digitable_line||row?.linha_digitavel),", "digitableLine:text(row?.digitable_line||row?.linha_digitavel||row?.bank_digitable_line||row?.bank_barcode),",1)
+          s=s.replace("installmentTotal:number(row?.installment_total)??null", "installmentTotal:number(row?.installment_total)??null,\n    bankProvider:text(row?.bank_provider),\n    bankStatus:text(row?.bank_status),\n    paymentMethod:text(row?.payment_method),\n    paidAt:text(row?.paid_at)",1)
+
+          payment_code=r'''function portalPaymentInactiveStatus(value){
+            const status=text(value).toLowerCase();
+            return ['pago','paid','baixado','cancelado','canceled','renegociado','renegotiated','substituido','substituida'].some(item=>status.includes(item));
+          }
+
+          function portalPaymentInvoice(state,client,invoiceId){
+            const row=(Array.isArray(state?.invoices)?state.invoices:[]).find(item=>String(item?.id)===String(invoiceId)&&Number(item?.client_id)===Number(client.id));
+            if(!row)throw Object.assign(new Error('Fatura não encontrada para este cliente.'),{statusCode:404});
+            if(portalPaymentInactiveStatus(row.status))throw Object.assign(new Error('Esta fatura não está disponível para pagamento.'),{statusCode:409});
+            if(invoiceCents(row)<=0)throw Object.assign(new Error('A fatura não possui valor válido para pagamento.'),{statusCode:409});
+            return row;
+          }
+
+          function portalBankAvailability(state,client,vault){
+            const local=stateClient(state,client),efi=vault?.efi||{},mp=vault?.mercadoPago||{};
+            const ready={
+              efi:Boolean(efi.enabled&&text(efi.clientId)&&text(efi.clientSecret)),
+              efiPix:Boolean(efi.enabled&&text(efi.clientId)&&text(efi.clientSecret)&&String(efi.certificateBase64||'')&&text(efi.pixKey)),
+              mercadoPago:Boolean(mp.enabled&&text(mp.accessToken)),
+              mercadoPagoCard:Boolean(mp.enabled&&text(mp.accessToken)&&text(mp.publicKey))
+            };
+            const preferred=[text(local.billing_bank_provider),text(state?.banks?.defaultProvider)].find(value=>value==='efi'||value==='mercadoPago')||'';
+            let pixProvider='';
+            if(preferred==='efi'&&ready.efiPix)pixProvider='efi';else if(preferred==='mercadoPago'&&ready.mercadoPago)pixProvider='mercadoPago';else if(ready.efiPix)pixProvider='efi';else if(ready.mercadoPago)pixProvider='mercadoPago';
+            return {ready,preferred,pixProvider,cardProvider:ready.mercadoPagoCard?'mercadoPago':'',secrets:bankSecretsFromVault(vault)};
+          }
+
+          async function portalPaymentContext(env,data){
+            if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão nativa com o Neon não configurada na Cloudflare.'),{statusCode:503});
+            const session=await verifyPortalSession(data?.session,env),sql=neon(env.DATABASE_URL),client=await portalClientById(sql,session.clientId);
+            if(!client)throw Object.assign(new Error('Cliente da sessão não foi encontrado.'),{statusCode:404});
+            const state=await loadState(sql),vault=await readBankSettings(env),banks=portalBankAvailability(state,client,vault);
+            return {session,sql,client,state,vault,banks};
+          }
+
+          async function paymentConfigForSession(env,data){
+            const ctx=await portalPaymentContext(env,data),mp=ctx.vault?.mercadoPago||{};
+            return {pixEnabled:Boolean(ctx.banks.pixProvider),pixProvider:ctx.banks.pixProvider,pixProviderLabel:ctx.banks.pixProvider==='efi'?'Efí Bank':ctx.banks.pixProvider==='mercadoPago'?'Mercado Pago':'',cardEnabled:Boolean(ctx.banks.cardProvider),cardProvider:'mercadoPago',cardProviderLabel:'Mercado Pago',mercadoPagoPublicKey:ctx.banks.cardProvider?text(mp.publicKey):'',defaultProvider:ctx.banks.preferred,efiConfigured:ctx.banks.ready.efiPix,mercadoPagoConfigured:ctx.banks.ready.mercadoPago};
+          }
+
+          async function paymentPrepareForSession(env,data){
+            const ctx=await portalPaymentContext(env,data),invoice=portalPaymentInvoice(ctx.state,ctx.client,data?.invoiceId),amount=invoiceCents(invoice)/100;
+            return {invoiceId:invoice.id,reference:invoiceReference(invoice),dueDate:formatDate(invoice.due_date||invoice.dueDate),amount,payer:{name:text(ctx.client.name),email:text(ctx.client.email),identification:{type:digits(ctx.client.document).length===14?'CNPJ':'CPF',number:digits(ctx.client.document)}}};
+          }
+
+          function mpPaid(value){const s=text(value).toLowerCase();return ['approved','paid','pago','concluido','concluído'].some(item=>s.includes(item));}
+          function mpRejected(value){const s=text(value).toLowerCase();return ['rejected','cancelled','canceled','recusado','cancelado','refunded','charged_back'].some(item=>s.includes(item));}
+          function markPortalInvoicePaid(invoice,method,paidAt=''){
+            invoice.status='Pago';invoice.payment_method=method;invoice.paid_by='Área do Cliente';invoice.paid_at=text(paidAt)||new Date().toISOString();invoice.bank_last_sync_at=new Date().toISOString();
+          }
+
+          async function mercadoPagoRequest(vault,path,{method='GET',body=null,idempotencyKey=''}={}){
+            const token=text(vault?.mercadoPago?.accessToken);if(!token)throw Object.assign(new Error('Mercado Pago não está configurado para este pagamento.'),{statusCode:409});
+            const headers={Authorization:`Bearer ${token}`,Accept:'application/json'};if(body!==null)headers['Content-Type']='application/json';if(idempotencyKey)headers['X-Idempotency-Key']=idempotencyKey;
+            const response=await fetch(`https://api.mercadopago.com${path}`,{method,headers,body:body===null?undefined:JSON.stringify(body)});let result={};try{result=await response.json()}catch{}
+            if(!response.ok)throw Object.assign(new Error(text(result?.message||result?.error)||`Mercado Pago retornou HTTP ${response.status}.`),{statusCode:response.status>=400&&response.status<500?409:502});
+            return result;
+          }
+
+          function mpPaymentFields(remote,detail){
+            const tx=remote?.point_of_interaction?.transaction_data||{};
+            return {bank_provider:'mercadoPago',bank_environment:'production',bank_charge_id:text(remote?.id),bank_order_id:'',bank_payment_id:text(remote?.id),bank_external_reference:text(remote?.external_reference),bank_status:text(remote?.status),bank_status_detail:detail,bank_ticket_url:text(tx?.ticket_url),bank_pix_code:text(tx?.qr_code),bank_last_sync_at:new Date().toISOString(),pix_payment_url:text(tx?.ticket_url),pix_copy_paste:text(tx?.qr_code),pix_qr_image:tx?.qr_code_base64?`data:image/png;base64,${text(tx.qr_code_base64)}`:''};
+          }
+
+          async function paymentPixForSession(env,data){
+            const ctx=await portalPaymentContext(env,data),invoice=portalPaymentInvoice(ctx.state,ctx.client,data?.invoiceId),provider=ctx.banks.pixProvider;
+            if(!provider)throw Object.assign(new Error('Nenhum banco está pronto para gerar Pix. Configure Efí ou Mercado Pago em API Bancos.'),{statusCode:409});
+            let remote={};
+            if(provider==='efi'){
+              if(text(invoice.bank_provider)==='efi'&&text(invoice.bank_status_detail)==='efi_pix_cobv'&&text(invoice.bank_charge_id)){
+                remote=await bankProxyAsService(env,ctx.sql,{action:'sync',invoice:bankInvoice(invoice,ctx.client,ctx.state),efi:ctx.banks.secrets.efi,mercadoPago:ctx.banks.secrets.mercadoPago});Object.assign(invoice,remote||{});
+              }
+              if(!text(invoice.bank_pix_code)){
+                const source={...invoice,billing_type:'Pix com vencimento'};
+                remote=await bankProxyAsService(env,ctx.sql,{action:'issue',provider:'efi',invoice:bankInvoice(source,ctx.client,ctx.state),client:bankClient(ctx.client,ctx.state),efi:ctx.banks.secrets.efi,mercadoPago:ctx.banks.secrets.mercadoPago,pixAutoRecord:null});Object.assign(invoice,remote||{});
+              }
+              invoice.pix_copy_paste=text(invoice.bank_pix_code);invoice.pix_payment_url=text(invoice.bank_ticket_url);invoice.payment_origin='area-cliente';
+            }else{
+              let mp=null;
+              if(text(invoice.bank_provider)==='mercadoPago'&&text(invoice.bank_status_detail)==='mercado_pago_pix'&&text(invoice.bank_payment_id)){
+                try{mp=await mercadoPagoRequest(ctx.vault,`/v1/payments/${encodeURIComponent(invoice.bank_payment_id)}`)}catch{}
+              }
+              if(!mp||mpRejected(mp.status)){
+                const name=text(ctx.client.name),parts=name.split(/\s+/).filter(Boolean),first=parts.shift()||name,last=parts.join(' ')||first;
+                const payload={transaction_amount:invoiceCents(invoice)/100,description:text(invoice.description)||`Fatura ${invoiceReference(invoice)}`,payment_method_id:'pix',external_reference:`PP-INV-${invoice.id}-CLI-${ctx.client.id}`,payer:{email:text(ctx.client.email),first_name:first,last_name:last,identification:{type:digits(ctx.client.document).length===14?'CNPJ':'CPF',number:digits(ctx.client.document)}}};
+                mp=await mercadoPagoRequest(ctx.vault,'/v1/payments',{method:'POST',body:payload,idempotencyKey:crypto.randomUUID()});
+              }
+              Object.assign(invoice,mpPaymentFields(mp,'mercado_pago_pix'));invoice.payment_origin='area-cliente';
+              if(mpPaid(mp.status))markPortalInvoicePaid(invoice,'Pix Mercado Pago',mp.date_approved||mp.date_last_updated);
+            }
+            await saveState(ctx.sql,ctx.state);const portal=await portalSnapshot(ctx.client,ctx.state,env,ctx.session.token);
+            return {provider,providerLabel:provider==='efi'?'Efí Bank':'Mercado Pago',paymentId:text(invoice.bank_payment_id||invoice.bank_charge_id),status:text(invoice.bank_status||invoice.status),qrCode:text(invoice.pix_copy_paste||invoice.bank_pix_code),qrCodeBase64:text(invoice.pix_qr_image).replace(/^data:image\/[^;]+;base64,/,''),paymentUrl:text(invoice.pix_payment_url||invoice.bank_ticket_url),portal};
+          }
+
+          async function paymentCardForSession(env,data){
+            const ctx=await portalPaymentContext(env,data),invoice=portalPaymentInvoice(ctx.state,ctx.client,data?.invoiceId);
+            if(!ctx.banks.cardProvider)throw Object.assign(new Error('Mercado Pago não está pronto para cartão. Configure Public Key e Access Token em API Bancos.'),{statusCode:409});
+            const pd=data?.paymentData&&typeof data.paymentData==='object'?data.paymentData:{};if(!text(pd.token)||!text(pd.payment_method_id))throw Object.assign(new Error('Os dados tokenizados do cartão não foram recebidos.'),{statusCode:400});
+            const payer={...(pd.payer&&typeof pd.payer==='object'?pd.payer:{}),email:text(pd?.payer?.email||ctx.client.email)};
+            if(!payer.identification?.number&&digits(ctx.client.document))payer.identification={type:digits(ctx.client.document).length===14?'CNPJ':'CPF',number:digits(ctx.client.document)};
+            const payload={token:text(pd.token),transaction_amount:invoiceCents(invoice)/100,installments:Math.max(1,Number(pd.installments)||1),payment_method_id:text(pd.payment_method_id),description:text(invoice.description)||`Fatura ${invoiceReference(invoice)}`,external_reference:`PP-INV-${invoice.id}-CLI-${ctx.client.id}`,payer};
+            if(pd.issuer_id)payload.issuer_id=String(pd.issuer_id);
+            const idem=(await sha256Hex(`card|${ctx.client.id}|${invoice.id}|${text(pd.token)}`)).slice(0,64),mp=await mercadoPagoRequest(ctx.vault,'/v1/payments',{method:'POST',body:payload,idempotencyKey:idem});
+            Object.assign(invoice,mpPaymentFields(mp,'mercado_pago_card'));invoice.payment_method='Cartão Mercado Pago';invoice.payment_origin='area-cliente';if(mpPaid(mp.status))markPortalInvoicePaid(invoice,'Cartão Mercado Pago',mp.date_approved||mp.date_last_updated);
+            await saveState(ctx.sql,ctx.state);const portal=await portalSnapshot(ctx.client,ctx.state,env,ctx.session.token);
+            return {provider:'mercadoPago',providerLabel:'Mercado Pago',paymentId:text(mp.id),status:text(mp.status),statusDetail:text(mp.status_detail),message:text(mp.status_detail),portal};
+          }
+
+          async function paymentStatusForSession(env,data){
+            const ctx=await portalPaymentContext(env,data),invoice=portalPaymentInvoice(ctx.state,ctx.client,data?.invoiceId);let changed=false,provider=text(invoice.bank_provider),status=text(invoice.bank_status||invoice.status),paidAt='';
+            if(provider==='mercadoPago'&&text(invoice.bank_payment_id||data?.paymentId)){
+              const mp=await mercadoPagoRequest(ctx.vault,`/v1/payments/${encodeURIComponent(invoice.bank_payment_id||data.paymentId)}`);Object.assign(invoice,mpPaymentFields(mp,text(invoice.bank_status_detail)||'mercado_pago_payment'));status=text(mp.status);paidAt=text(mp.date_approved||mp.date_last_updated);changed=true;if(mpPaid(status))markPortalInvoicePaid(invoice,text(invoice.bank_status_detail)==='mercado_pago_card'?'Cartão Mercado Pago':'Pix Mercado Pago',paidAt);
+            }else if(provider==='efi'&&text(invoice.bank_charge_id)){
+              const remote=await bankProxyAsService(env,ctx.sql,{action:'sync',invoice:bankInvoice(invoice,ctx.client,ctx.state),efi:ctx.banks.secrets.efi,mercadoPago:ctx.banks.secrets.mercadoPago});Object.assign(invoice,remote||{});status=text(remote?.bank_status||invoice.bank_status);paidAt=text(remote?.paidAt);changed=true;const paid=Boolean(paidAt)||['paid','pago','settled','concluida','concluída','concluido','concluído'].some(value=>status.toLowerCase().includes(value));if(paid)markPortalInvoicePaid(invoice,'Pix Efí',paidAt);
+            }
+            if(changed)await saveState(ctx.sql,ctx.state);const portal=await portalSnapshot(ctx.client,ctx.state,env,ctx.session.token);
+            return {provider,status:portalPaymentInactiveStatus(invoice.status)&&text(invoice.status).toLowerCase().includes('pago')?'approved':status,state:text(invoice.status),paymentId:text(invoice.bank_payment_id||invoice.bank_charge_id),portal};
+          }
+
+          async function refreshPortalForSession(env,data){
+            const ctx=await portalPaymentContext(env,data);return portalSnapshot(ctx.client,ctx.state,env,ctx.session.token);
+          }
+
+          '''
+          marker='async function handleNativeCustomerPortal(request,env){'
+          assert marker in s, 'handler customer portal não localizado'
+          s=s.replace(marker,payment_code+marker,1)
+          old_actions="""if(action==='login')result=await nativePortalLogin(env,data);
+              else if(action==='negotiation-options')result=await negotiationOptionsForSession(env,data);
+              else if(action==='negotiate')result=await negotiateForSession(env,data);
+              else throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});"""
+          new_actions="""if(action==='login')result=await nativePortalLogin(env,data);
+              else if(action==='refresh')result=await refreshPortalForSession(env,data);
+              else if(action==='payment-config')result=await paymentConfigForSession(env,data);
+              else if(action==='payment-prepare')result=await paymentPrepareForSession(env,data);
+              else if(action==='payment-pix')result=await paymentPixForSession(env,data);
+              else if(action==='payment-card')result=await paymentCardForSession(env,data);
+              else if(action==='payment-status')result=await paymentStatusForSession(env,data);
+              else if(action==='negotiation-options')result=await negotiationOptionsForSession(env,data);
+              else if(action==='negotiate')result=await negotiateForSession(env,data);
+              else throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});"""
+          assert old_actions in s, 'ações customer portal não localizadas'
+          s=s.replace(old_actions,new_actions,1)
+          p.write_text(s)
+
+          # Replace only the Integration Hub IIFE; leave dashboard transition guard untouched.
+          p=Path('dashboard-transition-guard.js');s=p.read_text();marker="(()=>{\n  if(window.__ProvedorPlusIntegrationHubInstalled)return;";idx=s.find(marker);assert idx>=0,'hub marker não localizado'
+          hub=r'''(()=>{
+            if(window.__ProvedorPlusIntegrationHubInstalled)return;
+            window.__ProvedorPlusIntegrationHubInstalled=true;
+            const norm=value=>String(value??'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
+            const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+            let hubButton=null,popup=null,layer=null,hideTimer=null,observer=null;
+            const navRoot=()=>document.querySelector('aside.sidebar nav[aria-label="Menu principal"]')||document.querySelector('aside.sidebar nav');
+            const contentRoot=()=>document.querySelector('.app-shell>.content')||document.querySelector('.content');
+            function styles(){if(document.getElementById('pp-integration-hub-style'))return;const st=document.createElement('style');st.id='pp-integration-hub-style';st.textContent=`
+              .pp-integration-hub-button{position:relative!important}.pp-integration-chevron{margin-left:auto!important;opacity:.65}.pp-integration-menu{position:fixed;z-index:11050;width:238px;padding:7px;background:#fff;border:1px solid #dce7e4;border-radius:12px;box-shadow:0 14px 38px rgba(18,52,45,.18)}.pp-integration-menu[hidden]{display:none!important}.pp-integration-menu button{display:flex;width:100%;align-items:center;gap:10px;padding:11px;border:0;border-radius:9px;background:transparent;color:#294b44;text-align:left;font:750 11px/1.3 Segoe UI,Arial;cursor:pointer}.pp-integration-menu button:hover{background:#edf8f5;color:#087866}.content.pp-integration-hub-active>:not(.pp-integration-hub-layer){display:none!important}.content.pp-integration-hub-active>.pp-integration-hub-layer{display:block!important}.pp-integration-hub-layer{display:none;min-height:100%;padding:28px;background:#f4f7f6;box-sizing:border-box;color:#173d36;font-family:Segoe UI,Arial}.pp-bank-head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:18px}.pp-bank-head h1{margin:3px 0 6px;font-size:28px}.pp-bank-head p{margin:0;color:#71827e;font-size:12px}.pp-bank-eyebrow{color:#0b8f7c;font-size:10px;font-weight:900;letter-spacing:.12em}.pp-bank-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:0 0 16px}.pp-bank-summary article,.pp-bank-card{background:#fff;border:1px solid #dce7e4;border-radius:14px;box-shadow:0 4px 16px rgba(30,72,63,.045)}.pp-bank-summary article{padding:14px}.pp-bank-summary small{display:block;color:#7b8b87;font-size:9px;font-weight:800}.pp-bank-summary strong{display:block;margin-top:5px;font-size:14px}.pp-bank-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.pp-bank-card{padding:18px}.pp-bank-card-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:14px}.pp-bank-title{display:flex;gap:10px;align-items:center}.pp-bank-logo{display:grid;place-items:center;width:36px;height:36px;border-radius:10px;background:#edf8f5;color:#087866;font-weight:900}.pp-bank-logo.mp{background:#eef6ff;color:#1773c8}.pp-bank-title strong{display:block;font-size:14px}.pp-bank-title small{display:block;color:#7b8b87;font-size:9px}.pp-bank-status{padding:5px 8px;border-radius:999px;background:#f2f5f4;color:#74827f;font-size:9px;font-weight:850}.pp-bank-status.ok{background:#e9f8f2;color:#0a7b60}.pp-bank-status.error{background:#fff0ed;color:#b34a35}.pp-bank-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px}.pp-bank-fields label{display:grid;gap:5px;color:#49605b;font-size:10px;font-weight:750}.pp-bank-fields label.full{grid-column:1/-1}.pp-bank-fields input,.pp-bank-fields select,.pp-bank-default select{height:38px;border:1px solid #cfe0dc;border-radius:9px;padding:0 10px;background:#fff;color:#294b44;font-size:11px;box-sizing:border-box}.pp-bank-switch{display:flex!important;align-items:center;justify-content:space-between;grid-column:1/-1;padding:9px 10px;border:1px solid #e0e9e7;border-radius:9px;background:#fafcfb}.pp-bank-switch input{width:17px;height:17px}.pp-bank-note{margin:10px 0 0;color:#7b8b87;font-size:9px;line-height:1.45}.pp-bank-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.pp-bank-actions button{height:36px;padding:0 12px;border:1px solid #cfe0dc;border-radius:9px;background:#fff;color:#31534c;font-size:10px;font-weight:850;cursor:pointer}.pp-bank-actions button.primary{border-color:#087866;background:#087866;color:#fff}.pp-bank-actions button:disabled{opacity:.55;cursor:not-allowed}.pp-bank-message{margin-bottom:14px;padding:11px 13px;border-radius:10px;background:#eef8f5;color:#146b5b;font-size:11px}.pp-bank-message.error{background:#fff0ed;color:#a74432}.pp-bank-default{display:flex;align-items:center;gap:9px}.pp-bank-default span{font-size:10px;font-weight:800;color:#60736e}.pp-bank-default select{min-width:170px}.pp-cert-state{font-size:9px;color:#60736e}.pp-cert-state.ok{color:#087866;font-weight:800}@media(max-width:980px){.pp-bank-grid,.pp-bank-summary{grid-template-columns:1fr}.pp-bank-fields{grid-template-columns:1fr}.pp-bank-fields label.full,.pp-bank-switch{grid-column:1}.pp-bank-head{display:block}.pp-bank-default{margin-top:12px}.pp-integration-hub-layer{padding:18px 12px}}
+            `;document.head.appendChild(st)}
+            async function bankCall(action,data={}){const r=await fetch('/api/bank-settings',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',cache:'no-store',body:JSON.stringify({action,data})});let b={};try{b=await r.json()}catch{}if(!r.ok||!b.ok)throw new Error(b.error||`Falha bancária (${r.status})`);return b.data}
+            function closePopup(){clearTimeout(hideTimer);if(popup)popup.hidden=true;hubButton?.setAttribute('aria-expanded','false')}
+            function position(){if(!hubButton||!popup||popup.hidden)return;const r=hubButton.getBoundingClientRect(),w=popup.offsetWidth||238;let left=r.right+8;if(left+w>innerWidth-10)left=Math.max(10,r.left-w-8);popup.style.left=`${Math.round(left)}px`;popup.style.top=`${Math.max(10,Math.min(r.top,innerHeight-(popup.offsetHeight||110)-10))}px`}
+            function showPopup(){ensureButton();if(!popup||!hubButton)return;clearTimeout(hideTimer);popup.hidden=false;hubButton.setAttribute('aria-expanded','true');requestAnimationFrame(position)}
+            function buildPopup(){if(popup?.isConnected)return;popup=document.createElement('div');popup.className='pp-integration-menu';popup.hidden=true;popup.innerHTML='<button type="button" data-pp-integration-option="banks"><span>▰</span><b>API Bancos</b></button><button type="button" data-pp-integration-option="mikrotik"><span>▣</span><b>Servidor MikroTik</b></button>';popup.onmouseenter=()=>clearTimeout(hideTimer);popup.onmouseleave=()=>hideTimer=setTimeout(closePopup,160);popup.onclick=e=>{const b=e.target.closest('[data-pp-integration-option]');if(!b)return;e.preventDefault();e.stopPropagation();openSection(b.dataset.ppIntegrationOption)};document.body.appendChild(popup)}
+            function ensureButton(){styles();const nav=navRoot();if(!nav)return;let b=nav.querySelector('[data-pp-integration-hub="1"]');if(!b){b=document.createElement('button');b.type='button';b.dataset.ppIntegrationHub='1';b.className='pp-integration-hub-button';b.innerHTML='<span>⌁</span>Integração<span class="pp-integration-chevron">›</span>';const buttons=[...nav.querySelectorAll('button')],anchor=buttons.find(x=>norm(x.textContent).includes('chamados'));nav.insertBefore(b,anchor||null);b.onmouseenter=showPopup;b.onmouseleave=()=>hideTimer=setTimeout(closePopup,160);b.onclick=e=>{e.preventDefault();e.stopPropagation();popup&&!popup.hidden?closePopup():showPopup()}}hubButton=b;buildPopup();if(!observer){observer=new MutationObserver(()=>ensureButton());observer.observe(nav,{childList:true})}}
+            function openShell(){closePopup();const content=contentRoot();if(!content)return null;content.classList.add('pp-integration-hub-active');layer=content.querySelector(':scope>.pp-integration-hub-layer');if(!layer){layer=document.createElement('section');layer.className='pp-integration-hub-layer';content.appendChild(layer)}navRoot()?.querySelectorAll('button.active').forEach(b=>b.classList.remove('active'));hubButton?.classList.add('active');return layer}
+            function statusClass(s){return s==='success'?'ok':s==='error'?'error':''}function statusText(b){if(b?.lastTestStatus==='success')return'Conectado';if(b?.lastTestStatus==='error')return'Falha';return b?.enabled?'Configurado':'Desativado'}
+            function fileBase64(file){return new Promise((resolve,reject)=>{if(!file)return resolve('');const r=new FileReader();r.onload=()=>resolve(String(r.result||'').split(',').pop()||'');r.onerror=()=>reject(new Error('Não foi possível ler o certificado.'));r.readAsDataURL(file)})}
+            async function renderBanks(message='',error=false){const host=openShell();if(!host)return;host.innerHTML='<div class="pp-bank-message">Carregando configuração bancária...</div>';try{const bank=await bankCall('get-safe'),efi=bank.efi||{},mp=bank.mercadoPago||{};let defaultProvider='';try{defaultProvider=String((await window.provedor?.banks?.get?.())?.defaultProvider||'')}catch{}host.innerHTML=`<div class="pp-bank-head"><div><div class="pp-bank-eyebrow">INTEGRAÇÃO · API BANCOS</div><h1>Mercado Pago e Efí Bank</h1><p>Configure uma vez. O Financeiro e a Área do Cliente usam a mesma integração, sem duplicar cobranças.</p></div><label class="pp-bank-default"><span>Banco padrão</span><select id="pp-bank-default"><option value="">Automático</option><option value="efi">Efí Bank</option><option value="mercadoPago">Mercado Pago</option></select></label></div>${message?`<div class="pp-bank-message ${error?'error':''}">${esc(message)}</div>`:''}<div class="pp-bank-summary"><article><small>PIX NA ÁREA DO CLIENTE</small><strong>${efi.certificateConfigured&&efi.pixKey&&efi.enabled?'Efí pronto':mp.enabled&&mp.accessTokenConfigured?'Mercado Pago pronto':'Aguardando configuração'}</strong></article><article><small>CARTÃO DE CRÉDITO</small><strong>${mp.enabled&&mp.accessTokenConfigured&&mp.publicKey?'Mercado Pago pronto':'Aguardando Mercado Pago'}</strong></article><article><small>SEGURANÇA</small><strong>Credenciais criptografadas</strong></article></div><div class="pp-bank-grid"><article class="pp-bank-card"><div class="pp-bank-card-head"><div class="pp-bank-title"><span class="pp-bank-logo">E</span><span><strong>Efí Bank</strong><small>Boleto, Pix, carnê e Pix Automático</small></span></div><span class="pp-bank-status ${statusClass(efi.lastTestStatus)}">${statusText(efi)}</span></div><form id="pp-efi-form"><div class="pp-bank-fields"><label class="pp-bank-switch"><span>Ativar Efí Bank</span><input name="enabled" type="checkbox" ${efi.enabled?'checked':''}></label><label>Ambiente<select name="environment"><option value="sandbox">Homologação</option><option value="production">Produção</option></select></label><label>Chave Pix<input name="pixKey" value="${esc(efi.pixKey||'')}" placeholder="Chave cadastrada na Efí"></label><label>Client ID<input name="clientId" placeholder="${efi.clientIdConfigured?'Já configurado · deixe vazio para manter':'Client ID da aplicação'}"></label><label>Client Secret<input name="clientSecret" type="password" placeholder="${efi.clientSecretConfigured?'Já configurado · deixe vazio para manter':'Client Secret da aplicação'}"></label><label>Certificado P12/PFX<input name="certificate" type="file" accept=".p12,.pfx,application/x-pkcs12"></label><label>Senha do certificado<input name="certificatePassword" type="password" placeholder="${efi.certificatePasswordConfigured?'Já configurada · deixe vazio para manter':'Normalmente opcional'}"></label><div class="full pp-cert-state ${efi.certificateConfigured?'ok':''}">${efi.certificateConfigured?`✓ Certificado protegido salvo${efi.certificateName?` · ${esc(efi.certificateName)}`:''}`:'Certificado obrigatório para Pix Efí no cloud.'}</div><label class="full">URL do webhook<input name="webhookUrl" value="${esc(efi.webhookUrl||'')}" placeholder="https://seu-endereco-publico/webhook/efi"></label><label>Agência (Pix Automático)<input name="pixAutoReceiverAgency" value="${esc(efi.pixAutoReceiverAgency||'')}"></label><label>Conta (Pix Automático)<input name="pixAutoReceiverAccount" value="${esc(efi.pixAutoReceiverAccount||'')}"></label></div><p class="pp-bank-note">Credenciais e certificado ficam criptografados no Provedor Plus. A Área do Cliente nunca recebe Client Secret ou certificado.</p><div class="pp-bank-actions"><button class="primary" name="saveTest" type="submit">Salvar e testar</button><button name="save" type="button">Somente salvar</button><button name="webhook" type="button">Configurar webhook</button></div></form></article><article class="pp-bank-card"><div class="pp-bank-card-head"><div class="pp-bank-title"><span class="pp-bank-logo mp">MP</span><span><strong>Mercado Pago</strong><small>Pix e cartão de crédito na Área do Cliente</small></span></div><span class="pp-bank-status ${statusClass(mp.lastTestStatus)}">${statusText(mp)}</span></div><form id="pp-mp-form"><div class="pp-bank-fields"><label class="pp-bank-switch"><span>Ativar Mercado Pago</span><input name="enabled" type="checkbox" ${mp.enabled?'checked':''}></label><label>Ambiente<select name="environment"><option value="sandbox">Teste</option><option value="production">Produção</option></select></label><label>Public Key<input name="publicKey" value="${esc(mp.publicKey||'')}" placeholder="APP_USR-..."></label><label class="full">Access Token<input name="accessToken" type="password" placeholder="${mp.accessTokenConfigured?'Já configurado · deixe vazio para manter':'APP_USR-...'}"></label></div><p class="pp-bank-note">O Access Token fica somente no servidor. No navegador do cliente é liberada apenas a Public Key necessária ao formulário seguro do cartão.</p><div class="pp-bank-actions"><button class="primary" name="saveTest" type="submit">Salvar e testar</button><button name="save" type="button">Somente salvar</button></div></form></article></div>`;
+              const def=host.querySelector('#pp-bank-default');def.value=['efi','mercadoPago'].includes(defaultProvider)?defaultProvider:'';def.onchange=async()=>{try{await bankCall('save-default',{provider:def.value});await renderBanks('Banco padrão atualizado.')}catch(e){await renderBanks(e.message,true)}};
+              const ef=host.querySelector('#pp-efi-form');ef.elements.environment.value=efi.environment||'sandbox';const saveEfi=async(test)=>{const d=new FormData(ef),file=d.get('certificate'),payload={enabled:d.get('enabled')==='on',environment:String(d.get('environment')),clientId:String(d.get('clientId')||''),clientSecret:String(d.get('clientSecret')||''),certificatePassword:String(d.get('certificatePassword')||''),pixKey:String(d.get('pixKey')||''),pixAutoReceiverAgency:String(d.get('pixAutoReceiverAgency')||''),pixAutoReceiverAccount:String(d.get('pixAutoReceiverAccount')||''),webhookUrl:String(d.get('webhookUrl')||'')};if(file&&file.size){payload.certificateBase64=await fileBase64(file);payload.certificateName=file.name}await bankCall('save-efi',payload);if(test)await bankCall('test-efi');await renderBanks(test?'Efí salva e conexão testada com sucesso.':'Configuração Efí salva.')};ef.onsubmit=e=>{e.preventDefault();saveEfi(true).catch(x=>renderBanks(x.message,true))};ef.elements.save.onclick=()=>saveEfi(false).catch(x=>renderBanks(x.message,true));ef.elements.webhook.onclick=async()=>{try{await saveEfi(false);await bankCall('configure-efi-webhooks');await renderBanks('Webhooks Efí registrados com sucesso.')}catch(x){await renderBanks(x.message,true)}};
+              const mf=host.querySelector('#pp-mp-form');mf.elements.environment.value=mp.environment||'sandbox';const saveMp=async(test)=>{const d=new FormData(mf);await bankCall('save-mercado-pago',{enabled:d.get('enabled')==='on',environment:String(d.get('environment')),publicKey:String(d.get('publicKey')||''),accessToken:String(d.get('accessToken')||'')});if(test)await bankCall('test-mercado-pago');await renderBanks(test?'Mercado Pago salvo e conexão testada com sucesso.':'Configuração Mercado Pago salva.')};mf.onsubmit=e=>{e.preventDefault();saveMp(true).catch(x=>renderBanks(x.message,true))};mf.elements.save.onclick=()=>saveMp(false).catch(x=>renderBanks(x.message,true));
+              }catch(e){host.innerHTML=`<div class="pp-bank-message error">${esc(e.message||e)}</div>`}}
+            function renderMikrotik(){const host=openShell();if(!host)return;host.innerHTML='<div class="pp-bank-head"><div><div class="pp-bank-eyebrow">INTEGRAÇÃO</div><h1>Servidor MikroTik</h1><p>Área exclusiva para configurar a integração com o servidor MikroTik.</p></div></div>'}
+            function openSection(kind){kind==='banks'?renderBanks():renderMikrotik()}
+            document.addEventListener('click',e=>{const b=e.target.closest?.('aside.sidebar nav button');if(b&&b!==hubButton){closePopup();contentRoot()?.classList.remove('pp-integration-hub-active');layer?.remove();layer=null;hubButton?.classList.remove('active');return}if(popup&&!popup.hidden&&!e.target.closest('.pp-integration-menu')&&!hubButton?.contains(e.target))closePopup()},true);addEventListener('resize',position);addEventListener('scroll',position,true);styles();ensureButton();
+          })();
+          '''
+          p.write_text(s[:idx]+hub)
+
+          p=Path('bootstrap.js');s=p.read_text();s=s.replace("const BUILD_TOKEN='20260830-integracao-raiz1';","const BUILD_TOKEN='20260831-bankapi1';",1).replace('/dashboard-transition-guard.js?v=20260830-integracao-raiz1','/dashboard-transition-guard.js?v=20260831-bankapi1',1);p.write_text(s)
+          p=Path('index.html');s=p.read_text().replace('/bootstrap.js?v=20260830-integracao-raiz1','/bootstrap.js?v=20260831-bankapi1',1);p.write_text(s)
+          PY
+          node --check worker.js
+          node --check dashboard-transition-guard.js
+          node --check bootstrap.js
+          grep -q "payment-pix" worker.js
+          grep -q "get-safe" worker.js
+          grep -q "Salvar e testar" dashboard-transition-guard.js
+      - name: Publicar alteração e remover workflow temporário
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add worker.js dashboard-transition-guard.js bootstrap.js index.html
           git rm .github/workflows/audit-bank-proxy.yml
-          git commit -m "Remove auditoria temporária do proxy bancário"
+          git commit -m "Integra API Bancos com Area do Cliente"
           git push

@@ -4,7 +4,7 @@ on:
     paths:
       - '.github/workflows/diagnose-ui-js.yml'
 permissions:
-  contents: read
+  contents: write
 jobs:
   diagnose:
     runs-on: ubuntu-latest
@@ -12,66 +12,30 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: cloudflare-provedor-plus
-      - name: Check JavaScript syntax
+          fetch-depth: 0
+      - name: Configure git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+      - name: Apply stability correction
+        run: python .github/scripts/fix-base-ui-stability.py
+      - name: Validate correction
         run: |
           node --check bootstrap.js
-          node --check dashboard-transition-guard.js
-          node --check dashboard-enhancements.js
-      - name: Confirm boot references
+          grep -q "const BUILD_TOKEN='20260831-uiatomic5'" bootstrap.js
+          grep -q "baseUiDeadline=Date.now()+8000" bootstrap.js
+          grep -q "Date.now()-baseUiStableSince>=700" bootstrap.js
+          grep -q "dashboard-transition-guard.js?v=20260831-uiatomic5" bootstrap.js
+          grep -q "dashboard-enhancements.js?v=20260831-uiatomic5" bootstrap.js
+          grep -q "bootstrap.js?v=20260831-uiatomic5" index.html
+      - name: Commit correction
         run: |
-          grep -n "dashboard-transition-guard.js" bootstrap.js
-          grep -n "dashboard-enhancements.js" bootstrap.js
-          grep -n "data-pp-dashboard-root" dashboard-enhancements.js
-          grep -n "data-pp-client-hub" dashboard-transition-guard.js
-          grep -n "data-pp-integration-hub" dashboard-transition-guard.js
-      - name: Compare live assets
+          git add bootstrap.js index.html
+          git commit -m 'Aguarda interface base estabilizar antes dos módulos atuais'
+          git push origin HEAD:cloudflare-provedor-plus
+      - name: Remove temporary diagnostics
         run: |
-          set -euxo pipefail
-          for f in bootstrap.js dashboard-transition-guard.js dashboard-enhancements.js; do
-            echo "=== $f ==="
-            dest="/tmp/live-$f"
-            curl -fsS -D "/tmp/$f.headers" "https://painel.fibramais.workers.dev/$f?diag=$(date +%s)" -o "$dest"
-            grep -iE '^(HTTP/|content-type:|content-length:|cf-cache-status:|etag:)' "/tmp/$f.headers" || true
-            printf 'repo sha256: '; sha256sum "$f"
-            printf 'live sha256: '; sha256sum "$dest"
-            cmp "$f" "$dest"
-            node --check "$dest"
-          done
-      - name: Simulate browser DOM
-        run: |
-          npm install --no-save --no-package-lock jsdom@26 >/dev/null 2>&1
-          node <<'NODE'
-          const fs=require('fs');
-          const {JSDOM}=require('jsdom');
-          const dom=new JSDOM(`<!doctype html><html><head></head><body><div id="root"><div class="app-shell"><div class="sidebar"><nav aria-label="Menu principal"><div class="nav-label">Gestão</div><button>Financeiro</button><div class="nav-label">Sistema</div><button>Configurações</button></nav></div><div class="content"></div></div></div></body></html>`,{runScripts:'outside-only',pretendToBeVisual:true,url:'https://painel.fibramais.workers.dev/'});
-          const w=dom.window;
-          w.__PROVEDOR_PLUS_AUTH__={user:{role:'admin',name:'Administrador'}};
-          w.confirm=()=>true;
-          w.fetch=async()=>({ok:true,json:async()=>({ok:true,data:{}})});
-          w.provedor={
-            dashboard:{get:async()=>({})},clients:{list:async()=>[],save:async x=>x},plans:{list:async()=>[]},
-            invoices:{list:async()=>[]},tickets:{list:async()=>[]},routers:{list:async()=>[]},mikrotik:{}
-          };
-          function run(file){try{w.eval(fs.readFileSync(file,'utf8'));console.log('executed',file)}catch(e){console.error('runtime failure',file,e&&e.stack||e);process.exitCode=1}}
-          run('dashboard-transition-guard.js');
-          run('dashboard-enhancements.js');
-          setTimeout(()=>{
-            const nav=w.document.querySelector('.app-shell .sidebar nav');
-            const content=w.document.querySelector('.app-shell .content');
-            const state={
-              integrationFlag:!!w.__ProvedorPlusIntegrationHubInstalled,
-              clientFlag:!!w.__ProvedorPlusClientHubInstalled,
-              dashboardFlag:!!w.__ProvedorPlusDashboardRootInstalled,
-              integration:!!nav?.querySelector('[data-pp-integration-hub="1"]'),
-              client:!!nav?.querySelector('[data-pp-client-hub="1"]'),
-              dashboard:!!nav?.querySelector('[data-pp-dashboard-root="1"]'),
-              dashboardLayer:!!content?.querySelector(':scope>.pp-dashboard-root-layer')
-            };
-            console.log(JSON.stringify(state));
-            if(!state.integration||!state.client||!state.dashboard||!state.dashboardLayer)process.exitCode=2;
-            w.close();
-          },300);
-          setTimeout(()=>process.exit(process.exitCode||0),500);
-          NODE
-      - name: File sizes
-        run: wc -c bootstrap.js dashboard-transition-guard.js dashboard-enhancements.js
+          git pull --rebase origin cloudflare-provedor-plus
+          git rm .github/scripts/fix-base-ui-stability.py .github/workflows/diagnose-ui-js.yml
+          git commit -m 'Remove diagnóstico temporário da montagem inicial'
+          git push origin HEAD:cloudflare-provedor-plus

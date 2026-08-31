@@ -774,7 +774,7 @@ export default {
     const url=new URL(request.url);
     if(url.pathname==='/api/cloudflare-health'){
       const database=await dbHealth(env);
-      return json({ok:database.connected,worker:'painel',databaseConfigured:database.configured,databaseConnected:database.connected,protocolsReady:database.protocolsReady,coreApiMode:'cloudflare-native',customerPortalMode:'cloudflare-native',vercelCoreFallback:false,vercelCustomerPortalFallback:false,specializedIntegrationProxy:'bank-and-mikrotik-only'},database.connected?200:503,{'x-provedor-plus-edge':'cloudflare-health'});
+      return json({ok:database.connected,worker:'painel',databaseConfigured:database.configured,databaseConnected:database.connected,protocolsReady:database.protocolsReady,coreApiMode:'cloudflare-native',customerPortalMode:'cloudflare-native',vercelCoreFallback:false,vercelCustomerPortalFallback:false,specializedIntegrationProxy:false,bankRuntime:'cloudflare-native',mikrotikRuntime:'cloudflare-native'},database.connected?200:503,{'x-provedor-plus-edge':'cloudflare-health'});
     }
     if(url.pathname==='/api/auth')return handleNativeAuth(request,env);
     if(url.pathname==='/api/cloud-state')return handleNativeCloudState(request,env);

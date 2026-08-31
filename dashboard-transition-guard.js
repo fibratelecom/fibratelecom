@@ -84,6 +84,10 @@
   const norm=value=>String(value??'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
   let hubButton=null,popup=null,layer=null,hideTimer=null,navObserver=null,observedNav=null;
 
+  function mainNav(){
+    return document.querySelector('aside.sidebar nav[aria-label="Menu principal"],aside.sidebar nav');
+  }
+
   function ensureStyles(){
     if(document.getElementById('pp-integration-hub-style'))return;
     const style=document.createElement('style');
@@ -109,22 +113,9 @@
     document.head.appendChild(style);
   }
 
-  const navRoot=()=>document.querySelector('.sidebar nav')||document.querySelector('aside nav')||document.querySelector('nav');
-  const isOldIntegration=button=>{
-    if(!button||button.dataset.ppIntegrationHub==='1')return false;
-    const text=norm(button.textContent);
-    return text==='integracao'||text==='integracoes';
-  };
-  const contentRoot=()=>{
+  function contentRoot(){
     const shell=document.querySelector('.app-shell');
     return shell?.querySelector(':scope > .content')||shell?.querySelector('.content')||document.querySelector('.content');
-  };
-
-  function removeOldIntegration(nav=navRoot()){
-    if(!nav)return [];
-    const old=[...nav.querySelectorAll('button')].filter(isOldIntegration);
-    old.forEach(button=>button.remove());
-    return old;
   }
 
   function closePopup(){
@@ -170,9 +161,12 @@
     content.classList.add('pp-integration-hub-active');
     layer=content.querySelector(':scope > .pp-integration-hub-layer');
     if(!layer){layer=document.createElement('section');layer.className='pp-integration-hub-layer';content.appendChild(layer)}
-    const bank=kind==='banks',title=bank?'API Bancos':'Servidor MikroTik',description=bank?'Área exclusiva para configurar as APIs bancárias.':'Área exclusiva para configurar a integração com o servidor MikroTik.';
+    const bank=kind==='banks';
+    const title=bank?'API Bancos':'Servidor MikroTik';
+    const description=bank?'Área exclusiva para configurar as APIs bancárias.':'Área exclusiva para configurar a integração com o servidor MikroTik.';
     layer.innerHTML=`<div class="pp-integration-hub-head"><div class="pp-integration-hub-eyebrow">Integração</div><h1>${title}</h1><p>${description}</p></div>`;
-    const nav=navRoot();nav?.querySelectorAll('button.active').forEach(button=>{if(button!==hubButton)button.classList.remove('active')});
+    const nav=mainNav();
+    nav?.querySelectorAll('button.active').forEach(button=>{if(button!==hubButton)button.classList.remove('active')});
     hubButton?.classList.add('active');
   }
 
@@ -203,39 +197,60 @@
     navObserver.observe(nav,{childList:true,subtree:true});
   }
 
+  function makeHubButton(reference){
+    const button=document.createElement('button');
+    button.type='button';
+    button.dataset.ppIntegrationHub='1';
+    button.className=String(reference?.className||'');
+    button.classList.remove('active');
+    button.classList.add('pp-integration-hub-button');
+    button.setAttribute('aria-haspopup','menu');
+    button.setAttribute('aria-expanded','false');
+    button.innerHTML='<span>⌁</span>Integração<span class="pp-integration-chevron">›</span>';
+    button.addEventListener('mouseenter',showPopup);
+    button.addEventListener('mouseleave',scheduleClose);
+    button.addEventListener('click',event=>{
+      event.preventDefault();event.stopPropagation();
+      if(popup&&!popup.hidden)closePopup();else showPopup();
+    });
+    return button;
+  }
+
   function ensureButton(){
     ensureStyles();
-    const nav=navRoot();if(!nav)return;
+    const nav=mainNav();if(!nav)return;
     ensureNavObserver(nav);
-    const old=[...nav.querySelectorAll('button')].filter(isOldIntegration),anchor=old[0]||null;
+
+    for(const duplicate of [...nav.querySelectorAll('button[data-pp-integration-hub="1"]')].slice(1))duplicate.remove();
     let current=nav.querySelector('button[data-pp-integration-hub="1"]');
-    if(!current&&anchor){
-      current=document.createElement('button');
-      current.type='button';
-      current.dataset.ppIntegrationHub='1';
-      current.className=String(anchor.className||'');
-      current.classList.add('pp-integration-hub-button');
-      current.setAttribute('aria-haspopup','menu');current.setAttribute('aria-expanded','false');
-      current.innerHTML='<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12h8M12 8v8"></path><path d="M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"></path></svg><span>Integração</span><span class="pp-integration-chevron">›</span>';
-      nav.insertBefore(current,anchor);
-      current.addEventListener('mouseenter',showPopup);
-      current.addEventListener('mouseleave',scheduleClose);
-      current.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();if(popup&&!popup.hidden)closePopup();else showPopup()});
+    const buttons=[...nav.querySelectorAll('button')];
+    const chamados=buttons.find(button=>norm(button.textContent).startsWith('chamados'))||null;
+    const financeiro=buttons.find(button=>norm(button.textContent)==='financeiro')||null;
+
+    if(!current){
+      current=makeHubButton(chamados||financeiro||buttons[0]);
+      if(chamados)nav.insertBefore(current,chamados);
+      else if(financeiro?.nextSibling)nav.insertBefore(current,financeiro.nextSibling);
+      else nav.appendChild(current);
+    }else if(chamados&&current.nextSibling!==chamados){
+      nav.insertBefore(current,chamados);
     }
-    hubButton=current||hubButton;
-    removeOldIntegration(nav);
+
+    hubButton=current;
     buildPopup();
   }
 
   document.addEventListener('click',event=>{
-    const navButton=event.target.closest?.('.sidebar nav button,aside nav button,nav button');
-    if(navButton&&navButton!==hubButton){closePopup();closeLayer();return}
-    if(popup&&!popup.hidden&&!event.target.closest('.pp-integration-menu')&&event.target!==hubButton&&!hubButton?.contains(event.target))closePopup();
+    const nav=mainNav();
+    const navButton=event.target.closest?.('button');
+    if(navButton&&nav?.contains(navButton)&&navButton!==hubButton){closePopup();closeLayer();return}
+    if(popup&&!popup.hidden&&!event.target.closest('.pp-integration-menu')&&!hubButton?.contains(event.target))closePopup();
   },true);
+
   addEventListener('resize',positionPopup);
   addEventListener('scroll',positionPopup,true);
 
   const rootObserver=new MutationObserver(()=>ensureButton());
   rootObserver.observe(document.documentElement,{childList:true,subtree:true});
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',ensureButton,{once:true});else ensureButton();
+  ensureButton();
 })();

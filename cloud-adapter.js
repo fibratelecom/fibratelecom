@@ -28,8 +28,8 @@
   async function secretDelete(id){try{return await dataCall('routers.secret.delete',{id:Number(id)})}catch{return {deleted:false,id:Number(id)||0}}}
   async function trafficRecord(clientId,live){return dataCall('traffic.record',{clientId:Number(clientId),month:localMonthKey(),live:clone(live)})}
 
-  async function cloudCall(action,{router=null,data=null}={}){
-    const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),20000);
+  async function cloudCall(action,{router=null,data=null}={},timeoutMs=20000){
+    const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),Math.max(1000,Number(timeoutMs)||20000));
     try{
       const response=await fetch('/api/mikrotik-proxy',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,router,data}),signal:ctl.signal});
       let body={};try{body=await response.json()}catch{}
@@ -190,6 +190,7 @@
     api.routers.delete=async id=>{const r=await base.routers.delete(id);await secretDelete(id);return r};
 
     api.mikrotik.sync=async routerId=>{const r=await routerRecord(routerId),result=await cloudRead('router.sync',{router:await routerAuth(routerId)});return {...result,routerId:Number(routerId),routerName:r.name}};
+    api.mikrotik.metrics=async routerId=>{const r=await routerRecord(routerId),result=await cloudCall('router.metrics',{router:await routerAuth(routerId)},6500);return {...result,routerId:Number(routerId),routerName:r.name}};
     api.mikrotik.profiles=async routerId=>{const r=await routerRecord(routerId),result=await cloudRead('router.profiles',{router:await routerAuth(routerId)});return {...result,routerId:Number(routerId),routerName:r.name}};
     api.mikrotik.remoteAccess=async routerId=>{const r=await routerRecord(routerId),result=await cloudRead('router.remote',{router:await routerAuth(routerId)});return {...result,routerId:Number(routerId),routerName:r.name}};
     api.mikrotik.savePppoe=async(routerId,data)=>{const r=await routerRecord(routerId),result=await cloudCall('pppoe.save',{router:await routerAuth(routerId),data:clone(data)});return {...result,routerId:Number(routerId),routerName:r.name}};

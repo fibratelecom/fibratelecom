@@ -2,7 +2,7 @@ const __ppStartup={done(){},fail(error){console.error(error)}};
 window.addEventListener('provedor-plus-react-error',event=>{const message=event?.detail?.message||'Falha ao montar o painel.';console.error(new Error(message))});
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260831-step7-permissions1';
+  const BUILD_TOKEN='20260831-step8-mikrotik1';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');
@@ -194,7 +194,7 @@ if(prepareOutcome.kind==='timeout'){
 
   await loadScript('/cloud-router-store-v2.js?v=1017-cloud17');
   await loadScript('/cloud-client-store-v2.js?v=1017-cloud17-audit1');
-  await loadScript('/cloud-adapter.js?v=1017-cloud17-stable3');
+  await loadScript('/cloud-adapter.js?v=20260831-step8-mikrotik1');
   if(typeof window.ProvedorPlusInstallCloudAdapter!=='function')throw new Error('A ponte HTTPS do MikroTik não foi carregada.');
   await window.ProvedorPlusInstallCloudAdapter();
   await loadScript('/cloud-client-status-fix.js?v=1017-cloud17-audit2');
@@ -221,7 +221,7 @@ if(prepareOutcome.kind==='timeout'){
   await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
   await loadScript('/dashboard-transition-guard.js?v=20260831-step7-permissions1').catch(error=>console.error('Provedor Plus: os hubs de navegação não foram carregados.',error));
   await loadScript('/ui-runtime-fixes.js?v=20260831-step6-observer1').catch(error=>console.error('Provedor Plus: correcoes de interface nao impediram os demais modulos de carregar.',error));
-  await loadScriptStable('/dashboard-enhancements.js?v=20260831-dashboard-mikrotik2',{dropCharacterData:true,observerTargetSelector:'.app-shell',ignoreWithin:['.pp-dashboard-root-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-new-plans-layer']}).catch(error=>console.error('Provedor Plus: o Dashboard gerencial não foi carregado.',error));
+  await loadScriptStable('/dashboard-enhancements.js?v=20260831-step8-mikrotik1',{dropCharacterData:true,observerTargetSelector:'.app-shell',ignoreWithin:['.pp-dashboard-root-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-new-plans-layer']}).catch(error=>console.error('Provedor Plus: o Dashboard gerencial não foi carregado.',error));
   await loadScriptStable('/billing-bank-selector.js?v=1017-billingbank3',{ignoreWithin:['.pp-dashboard-root-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.pp-new-plans-layer']}).catch(error=>console.error('Provedor Plus: a seleção do banco emissor não foi carregada.',error));
   await loadScript('/billing-automation.js?v=1017-billingauto1').catch(error=>console.error('Provedor Plus: a automação de mensalidades não foi carregada.',error));
   await loadScriptStable('/staff-access.js?v=20260831-step7-permissions1',{observerTargetSelector:'.sidebar',ignoreWithin:['.pp-dashboard-root-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.pp-new-plans-layer']}).catch(error=>console.error('Provedor Plus: a gestão de funcionários não foi carregada.',error));

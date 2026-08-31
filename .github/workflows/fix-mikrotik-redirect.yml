@@ -1,0 +1,39 @@
+name: fix-mikrotik-redirect
+
+on:
+  push:
+    branches:
+      - cloudflare-provedor-plus
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]' && contains(github.event.head_commit.message, 'Prepara correção redirect MikroTik Cloudflare')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+      - name: Corrigir redirect do fetch do MikroTik
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('worker-mikrotik-native.js')
+          s = p.read_text(encoding='utf-8')
+          old = "const response=await fetch(url,{method,cache:'no-store',redirect:'error',headers:{Authorization:`Basic ${auth}`,Accept:'application/json',...(payload!==undefined?{'Content-Type':'application/json'}:{})},body:payload,signal:ctl.signal});\n    const raw=await response.text();"
+          new = "const response=await fetch(url,{method,cache:'no-store',redirect:'manual',headers:{Authorization:`Basic ${auth}`,Accept:'application/json',...(payload!==undefined?{'Content-Type':'application/json'}:{})},body:payload,signal:ctl.signal});\n    if(response.status>=300&&response.status<400)throw Error(`MikroTik respondeu com redirecionamento HTTP inesperado (HTTP ${response.status}).`);\n    const raw=await response.text();"
+          if old not in s:
+              raise SystemExit('Trecho esperado não encontrado; nenhuma alteração foi aplicada.')
+          p.write_text(s.replace(old,new,1), encoding='utf-8')
+      - name: Validar sintaxe
+        run: node --check worker-mikrotik-native.js
+      - name: Publicar correção e remover aplicador
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add worker-mikrotik-native.js
+          git rm .github/workflows/fix-mikrotik-redirect.yml
+          git commit -m "Corrige redirect HTTPS do MikroTik no Cloudflare"
+          git push origin HEAD:cloudflare-provedor-plus

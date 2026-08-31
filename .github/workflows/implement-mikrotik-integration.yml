@@ -1,0 +1,78 @@
+name: Implement MikroTik Integration
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: ['.github/workflows/implement-mikrotik-integration.yml']
+permissions:
+  contents: write
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+      - name: Implementar tela Servidor MikroTik
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('dashboard-transition-guard.js')
+          s=p.read_text(encoding='utf-8')
+          old="""  function renderMikrotik(){const h=openHost();if(!h)return;h.innerHTML='<div class=\"pp-bank-head\"><div><div class=\"pp-bank-kicker\">INTEGRAÇÃO</div><h1>Servidor MikroTik</h1><p>Área exclusiva para a integração do servidor MikroTik.</p></div></div>'}"""
+          new=r'''  async function renderMikrotik(message='',isError=false){
+    const h=openHost();if(!h)return;
+    h.innerHTML='<div class="pp-bank-loading">Carregando servidores MikroTik...</div>';
+    const api=window.provedor;
+    if(!api?.routers?.list||!api?.routers?.save||!api?.mikrotik?.sync){h.innerHTML='<div class="pp-bank-message error">A API MikroTik ainda não foi carregada. Atualize a página e tente novamente.</div>';return}
+    try{
+      const routers=await api.routers.list(),list=Array.isArray(routers)?routers:[];
+      const protectedCount=list.filter(r=>r.has_password).length;
+      h.innerHTML=`<div class="pp-bank-head"><div><div class="pp-bank-kicker">INTEGRAÇÃO · SERVIDOR MIKROTIK</div><h1>API MikroTik · RouterOS 7</h1><p>Conexão real via REST HTTPS. O mesmo servidor é usado em clientes, PPPoE, bloqueio, perfis e tráfego.</p></div><span class="pp-bank-status ${list.length?'ok':''}">${list.length?`${list.length} cadastrado${list.length>1?'s':''}`:'Aguardando servidor'}</span></div>${message?`<div class="pp-bank-message ${isError?'error':''}">${esc(message)}</div>`:''}<div class="pp-bank-summary"><article><small>COMUNICAÇÃO</small><strong>RouterOS REST · HTTPS</strong></article><article><small>CREDENCIAIS</small><strong>${protectedCount?`${protectedCount} protegida${protectedCount>1?'s':''}`:'Aguardando senha'}</strong></article><article><small>INTEGRAÇÃO</small><strong>Clientes + PPPoE + tráfego</strong></article></div><div class="pp-router-grid"><article class="pp-bank-card"><div class="pp-bank-card-head"><div class="pp-bank-title"><span class="pp-bank-logo">MT</span><span><strong id="pp-mt-form-title">Adicionar servidor</strong><small>API REST segura para RouterOS 7</small></span></div><span class="pp-bank-status">HTTPS</span></div><form id="pp-mt-form"><input type="hidden" name="id"><div class="pp-bank-fields"><label class="full">Nome do servidor<input name="name" placeholder="Ex.: MikroTik Principal" required></label><label class="full">DNS público ou IP público<input name="host" placeholder="Ex.: mk.seudominio.com.br ou 200.0.0.10" required></label><label>Porta HTTPS<input name="port" type="number" min="1" max="65535" value="443" required></label><label>Usuário RouterOS<input name="username" autocomplete="username" placeholder="Usuário da API" required></label><label class="full">Senha<input name="password" type="password" autocomplete="new-password" placeholder="Informe a senha"></label><label class="pp-bank-switch"><span>Aceitar certificado HTTPS autoassinado</span><input name="allow_self_signed" type="checkbox"></label></div><p class="pp-bank-note">A senha fica protegida no servidor e não é devolvida ao navegador. Ao editar um servidor, deixe a senha vazia para manter a atual.</p><div class="pp-bank-actions"><button class="primary" type="submit">Salvar e conectar</button><button type="button" name="new">Novo</button></div></form></article><article class="pp-bank-card"><div class="pp-bank-card-head"><div class="pp-bank-title"><span class="pp-bank-logo">↔</span><span><strong>Servidores cadastrados</strong><small>Teste real e ferramentas de rede</small></span></div></div><div class="pp-router-list">${list.length?list.map(r=>`<div class="pp-router-item" data-router-id="${Number(r.id)||0}"><div class="pp-router-main"><div><strong>${esc(r.name||'MikroTik')}</strong><small>${esc(r.host||'Sem endereço')}:${Number(r.port)||443} · ${esc(r.username||'Sem usuário')}</small></div><span class="pp-bank-status ${r.has_password?'ok':''}">${r.has_password?'Credencial salva':'Informe a senha'}</span></div><div class="pp-router-actions"><button type="button" data-action="edit">Editar</button><button type="button" class="primary" data-action="test">Testar agora</button><button type="button" data-action="profiles">Perfis PPPoE</button><button type="button" data-action="remote">Acesso remoto</button><button type="button" class="danger" data-action="delete">Excluir</button></div></div>`).join(''):'<div class="pp-router-empty">Nenhum MikroTik cadastrado. Preencha os dados ao lado e clique em <b>Salvar e conectar</b>.</div>'}</div><div id="pp-mt-output" class="pp-router-output" hidden></div></article></div>`;
+      const form=h.querySelector('#pp-mt-form'),title=h.querySelector('#pp-mt-form-title'),output=h.querySelector('#pp-mt-output');
+      const reset=()=>{form.reset();form.elements.id.value='';form.elements.port.value='443';title.textContent='Adicionar servidor';form.elements.name.focus()};
+      form.elements.new.onclick=reset;
+      form.onsubmit=async e=>{e.preventDefault();const d=new FormData(form),id=Number(d.get('id'))||0,payload={id:id||undefined,name:String(d.get('name')||'').trim(),host:String(d.get('host')||'').trim(),port:Number(d.get('port'))||443,username:String(d.get('username')||'').trim(),password:String(d.get('password')||''),allow_self_signed:d.get('allow_self_signed')==='on'};const submit=form.querySelector('[type="submit"]');submit.disabled=true;submit.textContent='Conectando...';try{const result=await api.routers.save(payload),router=result?.router||result||{};const snap=result?.snapshot||{};const detail=[snap.identity||snap.name||'',snap.version?`RouterOS ${snap.version}`:''].filter(Boolean).join(' · ');await renderMikrotik(`Servidor ${router.name||payload.name} salvo e conectado${detail?` · ${detail}`:''}.`)}catch(x){await renderMikrotik(x?.message||String(x),true)}};
+      h.querySelector('.pp-router-list')?.addEventListener('click',async e=>{const btn=e.target.closest('button[data-action]');if(!btn)return;const row=btn.closest('[data-router-id]'),id=Number(row?.dataset.routerId)||0,r=list.find(x=>Number(x.id)===id);if(!id||!r)return;const action=btn.dataset.action;
+        if(action==='edit'){form.elements.id.value=String(id);form.elements.name.value=r.name||'';form.elements.host.value=r.host||'';form.elements.port.value=String(Number(r.port)||443);form.elements.username.value=r.username||'';form.elements.password.value='';form.elements.allow_self_signed.checked=Boolean(r.allow_self_signed);title.textContent=`Editar · ${r.name||'MikroTik'}`;form.scrollIntoView({behavior:'smooth',block:'start'});return}
+        if(action==='delete'){if(!confirm(`Excluir o servidor ${r.name||'MikroTik'}?`))return;try{await api.routers.delete(id);await renderMikrotik('Servidor MikroTik excluído.')}catch(x){await renderMikrotik(x?.message||String(x),true)}return}
+        btn.disabled=true;const original=btn.textContent;btn.textContent='Consultando...';try{
+          if(action==='test'){const data=await api.mikrotik.sync(id);const identity=data?.identity||data?.routerName||r.name||'MikroTik',version=data?.version||data?.routerVersion||'';await renderMikrotik(`Conexão confirmada com ${identity}${version?` · RouterOS ${version}`:''}.`);return}
+          const data=action==='profiles'?await api.mikrotik.profiles(id):await api.mikrotik.remoteAccess(id);output.hidden=false;output.innerHTML=`<strong>${action==='profiles'?'Perfis PPPoE':'Acesso remoto'} · ${esc(r.name||'MikroTik')}</strong><pre>${esc(JSON.stringify(data,null,2))}</pre>`;output.scrollIntoView({behavior:'smooth',block:'nearest'})
+        }catch(x){await renderMikrotik(x?.message||String(x),true)}finally{if(btn.isConnected){btn.disabled=false;btn.textContent=original}}
+      });
+    }catch(e){h.innerHTML=`<div class="pp-bank-message error">${esc(e?.message||e)}</div>`}
+  }'''
+          if old not in s:
+              raise SystemExit('placeholder renderMikrotik nao encontrado')
+          s=s.replace(old,new,1)
+          css_marker='.pp-bank-secure{display:flex;align-items:center;gap:6px;margin-top:10px;color:#61736e;font-size:9px}'
+          css_add='.pp-router-grid{display:grid;grid-template-columns:minmax(310px,.85fr) minmax(420px,1.15fr);gap:14px}.pp-router-list{display:grid;gap:10px}.pp-router-item{padding:12px;border:1px solid #e0e9e7;border-radius:11px;background:#fbfdfc}.pp-router-main{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.pp-router-main strong{display:block;font-size:12px;color:#1b463e}.pp-router-main small{display:block;margin-top:4px;color:#748681;font-size:9px}.pp-router-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.pp-router-actions button{height:31px;padding:0 9px;border:1px solid #d5e3df;border-radius:8px;background:#fff;color:#49635d;font-size:9px;font-weight:800;cursor:pointer}.pp-router-actions button.primary{background:#087866;border-color:#087866;color:#fff}.pp-router-actions button.danger{color:#ad493e;border-color:#edcec9;background:#fffafa}.pp-router-empty{padding:16px;border:1px dashed #cfdfdb;border-radius:10px;color:#70827d;font-size:10px;line-height:1.5}.pp-router-output{margin-top:12px;padding:12px;border:1px solid #dce7e4;border-radius:10px;background:#f8fbfa}.pp-router-output strong{font-size:10px}.pp-router-output pre{max-height:250px;overflow:auto;margin:9px 0 0;padding:10px;border-radius:8px;background:#102823;color:#d9eee8;font:10px/1.45 Consolas,monospace;white-space:pre-wrap}.pp-bank-secure{display:flex;align-items:center;gap:6px;margin-top:10px;color:#61736e;font-size:9px}'
+          if '.pp-router-grid{' not in s:
+              if css_marker not in s: raise SystemExit('marcador CSS nao encontrado')
+              s=s.replace(css_marker,css_add,1)
+          s=s.replace('@media(max-width:980px){.pp-bank-grid,.pp-bank-summary{grid-template-columns:1fr}', '@media(max-width:980px){.pp-router-grid,.pp-bank-grid,.pp-bank-summary{grid-template-columns:1fr}',1)
+          p.write_text(s,encoding='utf-8')
+
+          bp=Path('bootstrap.js');b=bp.read_text(encoding='utf-8');oldtok='20260831-bankapi4';newtok='20260831-mikrotik-api1';
+          if oldtok not in b: raise SystemExit('BUILD_TOKEN esperado nao encontrado')
+          bp.write_text(b.replace(oldtok,newtok,1),encoding='utf-8')
+          ip=Path('index.html');i=ip.read_text(encoding='utf-8')
+          if oldtok not in i: raise SystemExit('token do bootstrap no index nao encontrado')
+          ip.write_text(i.replace(oldtok,newtok,1),encoding='utf-8')
+          PY
+          node --check dashboard-transition-guard.js
+          node --check bootstrap.js
+          grep -q 'Salvar e conectar' dashboard-transition-guard.js
+          grep -q 'api.mikrotik.sync' dashboard-transition-guard.js
+          grep -q '20260831-mikrotik-api1' bootstrap.js
+          grep -q '20260831-mikrotik-api1' index.html
+      - name: Publicar implementação e remover workflow temporário
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/implement-mikrotik-integration.yml
+          git add dashboard-transition-guard.js bootstrap.js index.html
+          git commit -m 'Ativa API do Servidor MikroTik no novo Integracao'
+          git push origin HEAD:cloudflare-provedor-plus

@@ -26,7 +26,7 @@ const __ppStartup={
 window.addEventListener('provedor-plus-react-error',__ppReactErrorListener);
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260831-uiatomic4';
+  const BUILD_TOKEN='20260831-uiatomic5';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');
@@ -249,8 +249,26 @@ if(prepareOutcome.kind==='timeout'){
   try{await import(appUrl)}finally{setTimeout(()=>URL.revokeObjectURL(appUrl),1500)}
   if(__ppReactBootError||window.__PP_REACT_BOOT_ERROR__)throw (__ppReactBootError||window.__PP_REACT_BOOT_ERROR__);
   await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-  await loadScript('/dashboard-transition-guard.js?v=20260831-uiatomic4');
-  await loadScriptStable('/dashboard-enhancements.js?v=20260831-uiatomic4',{dropCharacterData:true,observerTargetSelector:'.app-shell',ignoreWithin:['.pp-dashboard-root-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-new-plans-layer']});
+  const baseUiDeadline=Date.now()+8000;
+  let baseUiNav=null,baseUiContent=null,baseUiSignature='',baseUiStableSince=0;
+  while(Date.now()<baseUiDeadline){
+    const shell=document.querySelector('.app-shell'),nav=shell?.querySelector('.sidebar nav,aside nav'),content=shell?.querySelector('.content');
+    if(shell&&nav&&content){
+      const signature=`${nav.children.length}|${String(nav.textContent||'').replace(/\s+/g,' ').trim()}`;
+      if(nav===baseUiNav&&content===baseUiContent&&signature===baseUiSignature){
+        if(Date.now()-baseUiStableSince>=700)break;
+      }else{
+        baseUiNav=nav;baseUiContent=content;baseUiSignature=signature;baseUiStableSince=Date.now();
+      }
+    }else{
+      baseUiNav=null;baseUiContent=null;baseUiSignature='';baseUiStableSince=0;
+    }
+    await new Promise(resolve=>setTimeout(resolve,50));
+  }
+  const stableShell=document.querySelector('.app-shell'),stableNav=stableShell?.querySelector('.sidebar nav,aside nav'),stableContent=stableShell?.querySelector('.content');
+  if(!stableShell||!stableNav||!stableContent||!baseUiStableSince||Date.now()-baseUiStableSince<700)throw new Error('A estrutura base do painel não estabilizou antes da montagem da interface atual.');
+  await loadScript('/dashboard-transition-guard.js?v=20260831-uiatomic5');
+  await loadScriptStable('/dashboard-enhancements.js?v=20260831-uiatomic5',{dropCharacterData:true,observerTargetSelector:'.app-shell',ignoreWithin:['.pp-dashboard-root-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-new-plans-layer']});
   const coreUiDeadline=Date.now()+12000;
   const adminNeedsIntegration=String(auth?.user?.role||'').toLowerCase()==='admin';
   let coreUiReady=false;

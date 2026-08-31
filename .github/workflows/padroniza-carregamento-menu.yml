@@ -1,8 +1,5 @@
-name: Padroniza carregamento do menu
-on:
-  push:
-    branches: [cloudflare-provedor-plus]
-    paths: ['.github/workflows/padroniza-carregamento-menu.yml']
+name: Universal Menu Loading
+on: [push]
 permissions:
   contents: write
 jobs:
@@ -13,37 +10,38 @@ jobs:
         with:
           ref: cloudflare-provedor-plus
           fetch-depth: 0
-      - name: Aplicar carregamento universal do menu
+      - name: Apply universal loading
+        shell: bash
         run: |
-          python3 - <<'PY'
+          python3 <<'PY'
           from pathlib import Path
-          p=Path('dashboard-enhancements.js')
-          s=p.read_text()
-          start=s.index('  let navLoadingLayer=null,navLoadingObserver=null,navLoadingTimer=null;')
-          end_marker="  document.addEventListener('click',event=>{const nav=navRoot(),target=event.target.closest?.('button');if(target&&nav?.contains(target)&&target!==button)showNavLoading(target)},true);"
-          end=s.index(end_marker,start)+len(end_marker)
-          new=r'''  let navLoadingLayer=null,navLoadingObserver=null,navLoadingTimer=null,navLoadingSettleTimer=null,navLoadingStartedAt=0;
+          p = Path('dashboard-enhancements.js')
+          s = p.read_text()
+          start_marker = '  let navLoadingLayer=null,navLoadingObserver=null,navLoadingTimer=null;'
+          end_marker = "  document.addEventListener('click',event=>{const nav=navRoot(),target=event.target.closest?.('button');if(target&&nav?.contains(target)&&target!==button)showNavLoading(target)},true);"
+          start = s.index(start_marker)
+          end = s.index(end_marker, start) + len(end_marker)
+          new = '''  let navLoadingLayer=null,navLoadingObserver=null,navLoadingTimer=null,navLoadingSettleTimer=null,navLoadingStartedAt=0;
   function clearNavLoading(){clearTimeout(navLoadingTimer);clearTimeout(navLoadingSettleTimer);navLoadingTimer=null;navLoadingSettleTimer=null;navLoadingObserver?.disconnect();navLoadingObserver=null;const content=contentRoot();content?.classList.remove('pp-nav-loading-active');navLoadingLayer?.remove();navLoadingLayer=null}
   function scheduleNavLoadingHide(extra=140){clearTimeout(navLoadingSettleTimer);const elapsed=Math.max(0,Date.now()-navLoadingStartedAt),wait=Math.max(extra,600-elapsed);navLoadingSettleTimer=setTimeout(clearNavLoading,wait)}
   function showNavLoading(target){const nav=navRoot(),content=contentRoot();if(!nav||!content||!target||target===button||target.dataset.ppIntegrationHub==='1'||target.disabled||target.classList.contains('active'))return;const label=String(target.textContent||'').trim(),normalized=norm(label);if(!label||['gestao','sistema'].includes(normalized))return;clearNavLoading();navLoadingStartedAt=Date.now();content.classList.add('pp-nav-loading-active');navLoadingLayer=document.createElement('div');navLoadingLayer.className='pp-nav-loading-layer';navLoadingLayer.setAttribute('aria-live','polite');navLoadingLayer.innerHTML=`<div class="ppd-loading"><span></span><strong>Carregando ${esc(label)}...</strong></div>`;content.appendChild(navLoadingLayer);navLoadingObserver=new MutationObserver(records=>{const useful=records.some(record=>{const element=record.target instanceof Element?record.target:record.target?.parentElement;return !element?.closest?.('.pp-nav-loading-layer')});if(useful)scheduleNavLoadingHide(160)});navLoadingObserver.observe(content,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});navLoadingTimer=setTimeout(clearNavLoading,2600)}
   document.addEventListener('click',event=>{const nav=navRoot(),target=event.target.closest?.('button');if(target&&nav?.contains(target)&&target!==button)showNavLoading(target)},true);'''
-          s=s[:start]+new+s[end:]
-          s=s.replace("CSS_VERSION='20260831-nav-loading1'","CSS_VERSION='20260831-nav-loading2'",1)
+          s = s[:start] + new + s[end:]
+          s = s.replace("CSS_VERSION='20260831-nav-loading1'", "CSS_VERSION='20260831-nav-loading2'", 1)
           p.write_text(s)
-
-          p=Path('bootstrap.js'); s=p.read_text();
-          s=s.replace("const BUILD_TOKEN='20260831-nav-loading1'","const BUILD_TOKEN='20260831-nav-loading2'",1)
-          s=s.replace('/dashboard-enhancements.js?v=20260831-nav-loading1','/dashboard-enhancements.js?v=20260831-nav-loading2',1)
+          p = Path('bootstrap.js')
+          s = p.read_text().replace("const BUILD_TOKEN='20260831-nav-loading1'", "const BUILD_TOKEN='20260831-nav-loading2'", 1).replace('/dashboard-enhancements.js?v=20260831-nav-loading1','/dashboard-enhancements.js?v=20260831-nav-loading2',1)
           p.write_text(s)
-
-          p=Path('index.html'); s=p.read_text(); s=s.replace('/bootstrap.js?v=20260831-nav-loading1','/bootstrap.js?v=20260831-nav-loading2',1); p.write_text(s)
+          p = Path('index.html')
+          p.write_text(p.read_text().replace('/bootstrap.js?v=20260831-nav-loading1','/bootstrap.js?v=20260831-nav-loading2',1))
           PY
           node --check dashboard-enhancements.js
           node --check bootstrap.js
-          grep -q "600-elapsed" dashboard-enhancements.js
-          grep -q "20260831-nav-loading2" bootstrap.js
-          grep -q "20260831-nav-loading2" index.html
-      - name: Publicar e remover workflow temporario
+          grep -q '600-elapsed' dashboard-enhancements.js
+          grep -q '20260831-nav-loading2' bootstrap.js
+          grep -q '20260831-nav-loading2' index.html
+      - name: Commit and cleanup
+        shell: bash
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'

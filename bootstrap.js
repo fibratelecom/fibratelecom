@@ -2,7 +2,7 @@ const __ppStartup={done(){},fail(error){console.error(error)}};
 window.addEventListener('provedor-plus-react-error',event=>{const message=event?.detail?.message||'Falha ao montar o painel.';console.error(new Error(message))});
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260831-step2-plans1';
+  const BUILD_TOKEN='20260831-step3-routes1';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');
@@ -56,7 +56,7 @@ window.addEventListener('provedor-plus-react-error',event=>{const message=event?
     const normalize=value=>String(value||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
     const routeClasses=['pp-route-overlay-active','pp-route-billing-active','pp-route-ticket-active','pp-route-staff-active'];
     const layerSelectors={billing:'.pp-billing-auto-layer',ticket:'.pp-ticket-layer',staff:'.pp-staff-layer'};
-    let intentButton=null,intentAt=0,syncTimer=null,contentObserver=null,observedContent=null;
+    let intentButton=null,intentRoute=null,intentAt=0,syncTimer=null,contentObserver=null,observedContent=null,navObservers=new Map(),shellObserver=null,rootObserver=null,observedShell=null,navBindTimer=null;
 
     const routeForButton=button=>{
       if(button?.dataset?.ppDashboardRoot==='1')return'base';
@@ -68,16 +68,18 @@ window.addEventListener('provedor-plus-react-error',event=>{const message=event?
       return'base';
     };
     const activeButton=()=>{
-      const buttons=[...document.querySelectorAll('.sidebar nav button.active,aside nav button.active,nav button.active')];
+      const shell=document.querySelector('.app-shell')||document;
+      const buttons=[...shell.querySelectorAll('.sidebar nav button.active,aside nav button.active')];
       return buttons.find(button=>button.offsetParent!==null)||buttons[0]||null;
     };
-    const intendedButton=()=>{
-      const active=activeButton();
-      if(intentButton?.isConnected&&Date.now()-intentAt<6000){
-        if(active&&routeForButton(active)===routeForButton(intentButton))intentButton=null;
-        else return intentButton;
+    const intendedRoute=()=>{
+      const active=activeButton(),activeRoute=routeForButton(active);
+      if(intentRoute&&Date.now()-intentAt<2500){
+        if(active&&activeRoute===intentRoute){intentButton=null;intentRoute=null}
+        else return {button:intentButton?.isConnected?intentButton:active,route:intentRoute};
       }
-      return active;
+      if(intentRoute&&Date.now()-intentAt>=2500){intentButton=null;intentRoute=null}
+      return {button:active,route:activeRoute};
     };
     const resolveContent=button=>{
       const shell=button?.closest('.app-shell')||document.querySelector('.app-shell');
@@ -111,7 +113,7 @@ window.addEventListener('provedor-plus-react-error',event=>{const message=event?
       contentObserver.observe(content,{childList:true});
     };
     const sync=()=>{
-      const button=intendedButton(),route=routeForButton(button),content=resolveContent(button);
+      const intended=intendedRoute(),button=intended.button,route=intended.route,content=resolveContent(button);
       resetContents();closeForeignEditors(route);observeContent(content);
       if(route==='dashboard'){
         setLayerState('dashboard',content);
@@ -127,9 +129,36 @@ window.addEventListener('provedor-plus-react-error',event=>{const message=event?
       setLayerState('base',content);
     };
     function schedule(){clearTimeout(syncTimer);syncTimer=setTimeout(sync,20);setTimeout(sync,90);setTimeout(sync,220);setTimeout(sync,600)}
-    const navs=[...new Set(document.querySelectorAll('.sidebar nav,aside nav,nav'))];
-    for(const nav of navs){const observer=new MutationObserver(schedule);observer.observe(nav,{subtree:true,childList:true,attributes:true,attributeFilter:['class']})}
-    document.addEventListener('click',event=>{const button=event.target.closest?.('.sidebar nav button,aside nav button,nav button');if(!button)return;intentButton=button;intentAt=Date.now();schedule()},true);
+    const currentNavs=()=>{
+      const shell=document.querySelector('.app-shell');
+      const scope=shell||document;
+      return [...new Set(scope.querySelectorAll('.sidebar nav,aside nav'))];
+    };
+    const bindNavObservers=()=>{
+      const navs=currentNavs(),current=new Set(navs);
+      for(const [nav,observer] of [...navObservers.entries()]){
+        if(!nav.isConnected||!current.has(nav)){observer.disconnect();navObservers.delete(nav)}
+      }
+      for(const nav of navs){
+        if(navObservers.has(nav))continue;
+        const observer=new MutationObserver(()=>schedule());
+        observer.observe(nav,{subtree:true,childList:true,attributes:true,attributeFilter:['class']});
+        navObservers.set(nav,observer);
+      }
+      const shell=document.querySelector('.app-shell');
+      if(shell!==observedShell){
+        shellObserver?.disconnect();shellObserver=null;observedShell=shell||null;
+        if(shell){shellObserver=new MutationObserver(()=>scheduleRebind());shellObserver.observe(shell,{childList:true})}
+      }
+      const root=document.getElementById('root');
+      if(root&&!rootObserver){rootObserver=new MutationObserver(()=>scheduleRebind());rootObserver.observe(root,{childList:true})}
+    };
+    function scheduleRebind(){clearTimeout(navBindTimer);navBindTimer=setTimeout(()=>{bindNavObservers();schedule()},30)}
+    document.addEventListener('click',event=>{
+      const button=event.target.closest?.('.sidebar nav button,aside nav button');if(!button)return;
+      intentButton=button;intentRoute=routeForButton(button);intentAt=Date.now();schedule();
+    },true);
+    bindNavObservers();
     schedule();
   };
 

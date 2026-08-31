@@ -2,7 +2,7 @@ const __ppStartup={done(){},fail(error){console.error(error)}};
 window.addEventListener('provedor-plus-react-error',event=>{const message=event?.detail?.message||'Falha ao montar o painel.';console.error(new Error(message))});
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260831-hubs-rootfix1';
+  const BUILD_TOKEN='20260831-ui-restore1';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');
@@ -278,16 +278,16 @@ window.addEventListener('provedor-plus-react-error',event=>{const message=event?
   await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
   await loadScript('/dashboard-transition-guard.js?v=20260831-hubs-rootfix1').catch(error=>console.error('Provedor Plus: os hubs de navegação não foram carregados.',error));
 
-  installNewPlansModule();
-  await loadScript('/ui-runtime-fixes.js?v=1017-fix18-plans-observer');
+  try{installNewPlansModule()}catch(error){console.error('Provedor Plus: Planos nao impediu os demais modulos de carregar.',error)}
+  await loadScript('/ui-runtime-fixes.js?v=1017-fix18-plans-observer').catch(error=>console.error('Provedor Plus: correcoes de interface nao impediram os demais modulos de carregar.',error));
   await loadScriptStable('/dashboard-enhancements.js?v=20260831-dashboard-mikrotik2',{dropCharacterData:true,observerTargetSelector:'.app-shell',ignoreWithin:['.pp-dashboard-root-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-new-plans-layer']}).catch(error=>console.error('Provedor Plus: o Dashboard gerencial não foi carregado.',error));
   await loadScriptStable('/billing-bank-selector.js?v=1017-billingbank3',{ignoreWithin:['.pp-dashboard-root-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.pp-new-plans-layer']}).catch(error=>console.error('Provedor Plus: a seleção do banco emissor não foi carregada.',error));
   await loadScript('/billing-automation.js?v=1017-billingauto1').catch(error=>console.error('Provedor Plus: a automação de mensalidades não foi carregada.',error));
   await loadScriptStable('/staff-access.js?v=1017-staff1',{observerTargetSelector:'.sidebar',ignoreWithin:['.pp-dashboard-root-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.pp-new-plans-layer']}).catch(error=>console.error('Provedor Plus: a gestão de funcionários não foi carregada.',error));
   await loadScriptStable('/ticket-enhancements.js?v=1017-ticket1',{observerTargetSelector:'.app-shell',ignoreWithin:['.pp-dashboard-root-layer','.client-status-modal','.pp-staff-layer','.pp-ticket-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.pp-new-plans-layer']}).catch(error=>console.error('Provedor Plus: a gestão avançada de chamados não foi carregada.',error));
-  installRouteIsolationGuard();
+  try{installRouteIsolationGuard()}catch(error){console.error('Provedor Plus: isolamento de rotas falhou sem bloquear o painel.',error)}
   await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-  if(typeof window.ProvedorPlusPatchClientViewButtons==='function')window.ProvedorPlusPatchClientViewButtons();
+  try{if(typeof window.ProvedorPlusPatchClientViewButtons==='function')window.ProvedorPlusPatchClientViewButtons()}catch(error){console.error('Provedor Plus: ajuste de botoes de cliente falhou sem bloquear o painel.',error)}
   const shellDeadline=Date.now()+10000;
   while(!document.querySelector('.app-shell')){
     if(window.__PP_REACT_BOOT_ERROR__)throw window.__PP_REACT_BOOT_ERROR__;

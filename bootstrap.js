@@ -2,7 +2,7 @@ const __ppStartup={done(){},fail(error){console.error(error)}};
 window.addEventListener('provedor-plus-react-error',event=>{const message=event?.detail?.message||'Falha ao montar o painel.';console.error(new Error(message))});
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260831-boot-unblock2';
+  const BUILD_TOKEN='20260831-hubs-rootfix1';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');
@@ -271,12 +271,12 @@ window.addEventListener('provedor-plus-react-error',event=>{const message=event?
 
   await loadScript('/client-status-enhancements.js?v=1017-status7-stable').catch(error=>console.error('Provedor Plus: os indicadores avançados do cliente não foram carregados.',error));
   await loadScript('/client-status-layout-cleanup.js?v=1017-statuslayout6-freshdata').catch(error=>console.error('Provedor Plus: a organização visual do status do cliente não foi carregada.',error));
-  await loadScript('/dashboard-transition-guard.js?v=20260831-dashboard-root1').catch(error=>console.error('Provedor Plus: a proteção de transição do Dashboard não foi carregada.',error));
-
   const root=document.getElementById('root');
   const appB64=await read(Array.from({length:33},(_,i)=>`/packed/appgz-${String(i+1).padStart(2,'0')}.txt`));
   const app=await gunzipB64(appB64),appUrl=URL.createObjectURL(new Blob([app],{type:'text/javascript'}));
   try{await import(appUrl)}finally{setTimeout(()=>URL.revokeObjectURL(appUrl),1500)}
+  await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+  await loadScript('/dashboard-transition-guard.js?v=20260831-hubs-rootfix1').catch(error=>console.error('Provedor Plus: os hubs de navegação não foram carregados.',error));
 
   installNewPlansModule();
   await loadScript('/ui-runtime-fixes.js?v=1017-fix18-plans-observer');

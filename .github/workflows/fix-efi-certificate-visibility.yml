@@ -1,0 +1,56 @@
+name: Fix EFI Certificate Visibility
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: ['.github/workflows/fix-efi-certificate-visibility.yml']
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+          fetch-depth: 0
+      - name: Ajustar confirmação do certificado Efí
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('dashboard-transition-guard.js')
+          s=p.read_text()
+          old='<label>Certificado P12/PFX<input name="certificate" type="file" accept=".p12,.pfx,application/x-pkcs12"></label>'
+          new='<label>${efi.certificateConfigured?\'Substituir certificado P12/PFX\':\'Certificado P12/PFX\'}<input name="certificate" type="file" accept=".p12,.pfx,application/x-pkcs12"></label>'
+          if old not in s:
+              raise SystemExit('Campo de certificado Efí não localizado')
+          s=s.replace(old,new,1)
+          s=s.replace('✓ Certificado protegido','✓ Certificado atual salvo e protegido',1)
+          s=s.replace('Certificado necessário para Pix Efí no cloud.','Nenhum certificado salvo. Selecione o arquivo P12/PFX.',1)
+          p.write_text(s)
+
+          b=Path('bootstrap.js')
+          bs=b.read_text()
+          if "20260831-bankapi3" not in bs:
+              raise SystemExit('Token atual do bootstrap não localizado')
+          b.write_text(bs.replace('20260831-bankapi3','20260831-bankapi4',1))
+
+          i=Path('index.html')
+          ix=i.read_text()
+          if '/bootstrap.js?v=20260831-bankapi3' not in ix:
+              raise SystemExit('Referência atual do bootstrap não localizada')
+          i.write_text(ix.replace('/bootstrap.js?v=20260831-bankapi3','/bootstrap.js?v=20260831-bankapi4',1))
+          PY
+          node --check dashboard-transition-guard.js
+          node --check bootstrap.js
+      - name: Publicar ajuste e remover workflow temporário
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/fix-efi-certificate-visibility.yml
+          git add dashboard-transition-guard.js bootstrap.js index.html
+          git commit -m 'Deixa claro quando certificado Efi esta salvo'
+          git push origin HEAD:cloudflare-provedor-plus

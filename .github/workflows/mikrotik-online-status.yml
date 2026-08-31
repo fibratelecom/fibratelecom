@@ -1,19 +1,22 @@
-name: MikroTik Online Status
+name: "MikroTik Online Status"
 on:
   push:
-    branches: [cloudflare-provedor-plus]
-    paths: ['.github/workflows/mikrotik-online-status.yml']
+    branches:
+      - cloudflare-provedor-plus
+    paths:
+      - .github/workflows/mikrotik-online-status.yml
 permissions:
   contents: write
 jobs:
   patch:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
           ref: cloudflare-provedor-plus
           fetch-depth: 0
-      - name: Mostrar status real do MikroTik
+      - name: Aplicar status real do MikroTik
         shell: bash
         run: |
           set -euo pipefail
@@ -24,25 +27,26 @@ jobs:
           old="""<span class=\"pp-bank-status ${r.has_password?'ok':''}\">${r.has_password?'Credencial salva':'Informe a senha'}</span>"""
           new="""<span class=\"pp-bank-status ${r.has_password?'':'error'}\" data-router-live-status=\"${Number(r.id)||0}\">${r.has_password?'Verificando...':'Offline'}</span>"""
           if old not in s:
-              raise SystemExit('badge atual do servidor MikroTik não encontrado')
+              raise SystemExit('badge atual do servidor MikroTik nao encontrado')
           s=s.replace(old,new,1)
           marker="""      const form=h.querySelector('#pp-mt-form'),title=h.querySelector('#pp-mt-form-title'),output=h.querySelector('#pp-mt-output');"""
           inject="""      const refreshRouterStatus=async r=>{const badge=h.querySelector(`[data-router-live-status=\"${Number(r.id)||0}\"]`);if(!badge)return;if(!r.has_password){badge.classList.remove('ok');badge.classList.add('error');badge.textContent='Offline';badge.title='Credencial do MikroTik não disponível.';return}try{const live=await api.mikrotik.sync(Number(r.id));if(!badge.isConnected)return;badge.classList.remove('error');badge.classList.add('ok');badge.textContent='Conectado · Online';const identity=live?.identity||live?.routerName||r.name||'MikroTik',version=live?.version||live?.routerVersion||'';badge.title=[identity,version?`RouterOS ${version}`:''].filter(Boolean).join(' · ')}catch(error){if(!badge.isConnected)return;badge.classList.remove('ok');badge.classList.add('error');badge.textContent='Offline';badge.title=error?.message||String(error)}};
       list.forEach(r=>{refreshRouterStatus(r)});
       const form=h.querySelector('#pp-mt-form'),title=h.querySelector('#pp-mt-form-title'),output=h.querySelector('#pp-mt-output');"""
           if marker not in s:
-              raise SystemExit('ponto de atualização de status não encontrado')
+              raise SystemExit('ponto de atualizacao de status nao encontrado')
           s=s.replace(marker,inject,1)
           p.write_text(s,encoding='utf-8')
-
           b=Path('bootstrap.js')
           x=b.read_text(encoding='utf-8')
           oldtok='20260831-mikrotik-api1';newtok='20260831-mikrotik-status2'
-          if oldtok not in x: raise SystemExit('token atual do bootstrap não encontrado')
+          if oldtok not in x:
+              raise SystemExit('token atual do bootstrap nao encontrado')
           b.write_text(x.replace(oldtok,newtok,1),encoding='utf-8')
           i=Path('index.html')
           x=i.read_text(encoding='utf-8')
-          if oldtok not in x: raise SystemExit('token atual do index não encontrado')
+          if oldtok not in x:
+              raise SystemExit('token atual do index nao encontrado')
           i.write_text(x.replace(oldtok,newtok,1),encoding='utf-8')
           PY
           node --check dashboard-transition-guard.js
@@ -50,7 +54,7 @@ jobs:
           grep -Fq 'Conectado · Online' dashboard-transition-guard.js
           grep -Fq "badge.textContent='Offline'" dashboard-transition-guard.js
           grep -Fq '20260831-mikrotik-status2' bootstrap.js index.html
-      - name: Publicar e remover workflow temporário
+      - name: Publicar e limpar aplicador
         shell: bash
         run: |
           set -euo pipefail

@@ -105,5 +105,11 @@
   function openSection(kind){closePopup();kind==='banks'?renderBanks():renderMikrotik()}
   function ensureButton(){styles();const nav=navRoot();if(!nav)return;let b=nav.querySelector('[data-pp-integration-hub="1"]'),buttons=[...nav.querySelectorAll('button')],chamados=buttons.find(x=>norm(x.textContent).startsWith('chamados'));if(!b){b=document.createElement('button');b.type='button';b.dataset.ppIntegrationHub='1';b.className=String(chamados?.className||'');b.classList.remove('active');b.classList.add('pp-integration-hub-button');b.innerHTML='<span>⌁</span>Integração<span class="pp-integration-chevron">›</span>';b.setAttribute('aria-haspopup','menu');b.setAttribute('aria-expanded','false');b.onmouseenter=showPopup;b.onmouseleave=()=>timer=setTimeout(closePopup,150);b.onclick=e=>{e.preventDefault();e.stopPropagation();popup&&!popup.hidden?closePopup():showPopup()};nav.insertBefore(b,chamados||null)}else if(chamados&&b.nextSibling!==chamados)nav.insertBefore(b,chamados);hubButton=b;buildPopup();if(!navObserver){navObserver=new MutationObserver(()=>ensureButton());navObserver.observe(nav,{childList:true})}}
   function closeLayer(){contentRoot()?.classList.remove('pp-integration-hub-active');layer?.remove();layer=null;hubButton?.classList.remove('active')}
-  document.addEventListener('click',e=>{const nav=navRoot(),b=e.target.closest?.('button');if(b&&nav?.contains(b)&&b!==hubButton){closePopup();closeLayer();return}if(popup&&!popup.hidden&&!e.target.closest('.pp-integration-menu')&&!hubButton?.contains(e.target))closePopup()},true);addEventListener('resize',position);addEventListener('scroll',position,true);styles();ensureButton();
+  document.addEventListener('click',e=>{const nav=navRoot(),b=e.target.closest?.('button');if(b&&nav?.contains(b)&&b!==hubButton){closePopup();closeLayer();return}if(popup&&!popup.hidden&&!e.target.closest('.pp-integration-menu')&&!hubButton?.contains(e.target))closePopup()},true);addEventListener('resize',position);addEventListener('scroll',position,true);
+  const rootObserver=new MutationObserver(()=>{
+    ensureButton();
+    if(navRoot()&&hubButton?.isConnected)rootObserver.disconnect();
+  });
+  rootObserver.observe(document.documentElement,{childList:true,subtree:true});
+  styles();ensureButton();
 })();

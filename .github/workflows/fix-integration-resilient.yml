@@ -1,0 +1,72 @@
+name: Fix Integration Resilient
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: [.github/workflows/fix-integration-resilient.yml]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+          fetch-depth: 0
+      - name: Corrigir persistência da Integração
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          path=Path('dashboard-transition-guard.js')
+          s=path.read_text()
+          old="""  styles();ensureButton();
+  const integrationSidebar=document.querySelector('aside.sidebar')||document.querySelector('aside');
+  if(integrationSidebar){
+    const integrationObserver=new MutationObserver(()=>ensureButton());
+    integrationObserver.observe(integrationSidebar,{childList:true,subtree:true});
+  }
+})();"""
+          new="""  let integrationSidebarObserver=null,integrationShellObserver=null,integrationRootObserver=null,integrationObservedSidebar=null,integrationObservedShell=null,integrationEnsureTimer=null;
+  function scheduleIntegrationEnsure(){clearTimeout(integrationEnsureTimer);integrationEnsureTimer=setTimeout(()=>{ensureButton();bindIntegrationObservers()},30)}
+  function bindIntegrationObservers(){
+    const root=document.getElementById('root'),shell=document.querySelector('.app-shell'),sidebar=document.querySelector('aside.sidebar')||document.querySelector('aside');
+    if(sidebar!==integrationObservedSidebar){integrationSidebarObserver?.disconnect();integrationSidebarObserver=null;integrationObservedSidebar=sidebar||null;if(sidebar){integrationSidebarObserver=new MutationObserver(()=>scheduleIntegrationEnsure());integrationSidebarObserver.observe(sidebar,{childList:true,subtree:true})}}
+    if(shell!==integrationObservedShell){integrationShellObserver?.disconnect();integrationShellObserver=null;integrationObservedShell=shell||null;if(shell){integrationShellObserver=new MutationObserver(()=>scheduleIntegrationEnsure());integrationShellObserver.observe(shell,{childList:true})}}
+    if(root&&!integrationRootObserver){integrationRootObserver=new MutationObserver(()=>scheduleIntegrationEnsure());integrationRootObserver.observe(root,{childList:true})}
+  }
+  styles();scheduleIntegrationEnsure();
+})();"""
+          if old not in s:
+              raise SystemExit('Trecho antigo do observer de Integracao nao encontrado')
+          s=s.replace(old,new,1)
+          path.write_text(s)
+
+          b=Path('bootstrap.js'); t=b.read_text()
+          t=t.replace("const BUILD_TOKEN='20260831-integration-system1';","const BUILD_TOKEN='20260831-integration-system2';",1)
+          t=t.replace('/dashboard-transition-guard.js?v=20260831-integration-system1','/dashboard-transition-guard.js?v=20260831-integration-system2',1)
+          b.write_text(t)
+
+          i=Path('index.html'); h=i.read_text()
+          h=h.replace('/bootstrap.js?v=20260831-integration-system1','/bootstrap.js?v=20260831-integration-system2',1)
+          i.write_text(h)
+          PY
+          node --check dashboard-transition-guard.js
+          node --check bootstrap.js
+          grep -q 'integrationShellObserver' dashboard-transition-guard.js
+          grep -q "BUILD_TOKEN='20260831-integration-system2'" bootstrap.js
+          grep -q 'dashboard-transition-guard.js?v=20260831-integration-system2' bootstrap.js
+          grep -q 'bootstrap.js?v=20260831-integration-system2' index.html
+      - name: Publicar correção isolada
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add dashboard-transition-guard.js bootstrap.js index.html
+          git commit -m 'Mantem Integracao apos recriacao da sidebar'
+          git rm -f .github/workflows/fix-integration-resilient.yml
+          git commit -m 'Remove aplicador temporario da Integracao resiliente'
+          git push origin HEAD:cloudflare-provedor-plus

@@ -1,0 +1,40 @@
+name: fix-sidebar-selector
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-sidebar-selector.yml'
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+          fetch-depth: 0
+      - name: Configure git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+      - name: Apply selector correction
+        run: python .github/scripts/fix-sidebar-selector.py
+      - name: Validate correction
+        run: |
+          grep -q "uiatomic4" bootstrap.js
+          grep -q "bootstrap.js?v=20260831-uiatomic4" index.html
+          grep -q ".app-shell .sidebar nav" dashboard-transition-guard.js
+          grep -q ".app-shell .sidebar nav" dashboard-enhancements.js
+          ! grep -q "document.querySelector('aside.sidebar')||document.querySelector('aside')" dashboard-transition-guard.js
+          ! grep -q "document.querySelector('aside.sidebar')||document.querySelector('aside')" dashboard-enhancements.js
+      - name: Commit correction
+        run: |
+          git add dashboard-transition-guard.js dashboard-enhancements.js bootstrap.js index.html
+          git commit -m 'Unifica seletor da navegação na montagem inicial'
+          git push origin HEAD:cloudflare-provedor-plus
+      - name: Remove temporary applicator
+        run: |
+          git pull --rebase origin cloudflare-provedor-plus
+          git rm .github/scripts/fix-sidebar-selector.py .github/workflows/fix-sidebar-selector.yml
+          git commit -m 'Remove aplicador temporário do seletor de navegação'
+          git push origin HEAD:cloudflare-provedor-plus

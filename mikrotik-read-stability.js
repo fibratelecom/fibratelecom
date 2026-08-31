@@ -28,6 +28,22 @@
     };
   }
 
+  if(typeof api?.mikrotik?.metrics==='function'){
+    const originalMetrics=api.mikrotik.metrics.bind(api.mikrotik);
+    api.mikrotik.metrics=async routerId=>{
+      const id=Number(routerId)||0;
+      try{
+        const result=await originalMetrics(routerId);
+        routerGood.set(id,result);resetCount(routerFails,id);
+        return result;
+      }catch(error){
+        const failures=failCount(routerFails,id),last=routerGood.get(id);
+        if(last&&failures<=MAX_TRANSIENT_FAILURES)return {...last,transientReadFailure:true,transientReadError:message(error)};
+        throw error;
+      }
+    };
+  }
+
   if(typeof api?.clients?.status==='function'){
     const originalStatus=api.clients.status.bind(api.clients);
     api.clients.status=async clientId=>{

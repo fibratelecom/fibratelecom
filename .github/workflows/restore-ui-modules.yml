@@ -1,0 +1,35 @@
+name: Restore UI Modules
+on:
+  push:
+    paths:
+      - '.github/workflows/restore-ui-modules.yml'
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply
+        run: node .github/scripts/restore-ui-modules.cjs
+      - name: Validate
+        run: |
+          node --check bootstrap.js
+          node --check dashboard-transition-guard.js
+          node --check dashboard-enhancements.js
+          grep -Fq "20260831-ui-restore1" bootstrap.js index.html
+          grep -Fq "Planos nao impediu os demais modulos" bootstrap.js
+          grep -Fq "dashboard-enhancements.js?v=20260831-dashboard-mikrotik2" bootstrap.js
+          grep -Fq "__ProvedorPlusClientHubInstalled" dashboard-transition-guard.js
+          grep -Fq "__ProvedorPlusIntegrationHubInstalled" dashboard-transition-guard.js
+      - name: Publish
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add bootstrap.js index.html
+          git commit -m 'Restaura carregamento independente das correcoes visuais'
+          git rm -f .github/scripts/restore-ui-modules.cjs .github/workflows/restore-ui-modules.yml
+          git commit -m 'Remove aplicador temporario da restauracao visual'
+          git push origin HEAD:cloudflare-provedor-plus

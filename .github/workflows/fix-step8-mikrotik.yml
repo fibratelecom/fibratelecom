@@ -1,0 +1,111 @@
+name: fix-step8-mikrotik
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-step8-mikrotik.yml'
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+          fetch-depth: 0
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main cloudflare-provedor-plus
+      - name: Patch lightweight MikroTik backend
+        run: |
+          git switch -C main origin/main
+          node <<'NODE'
+          const fs=require('fs');
+          const p='lib/mikrotik-proxy.js';
+          let s=fs.readFileSync(p,'utf8');
+          if(!s.includes('async function dashboardMetrics(router){')){
+            const marker='async function snapshot(router){';
+            if(!s.includes(marker))throw new Error('snapshot marker not found');
+            const helper=`const dashboardWanCache=new Map();\nfunction dashboardWanKey(router){return \`${'${router.host}'}:${'${router.port}'}:${'${router.username}'}\`}\nasync function readDashboardWanTraffic(router){\n  const key=dashboardWanKey(router),cached=dashboardWanCache.get(key),now=Date.now();\n  if(cached&&now-cached.at<60000&&text(cached.interface)){\n    const rate=await monitorInterfaceTraffic(router,cached.interface);\n    if(rate.available)return {available:true,interface:cached.interface,interfaceType:cached.interfaceType||'',running:true,rxBps:rate.rxBps,txBps:rate.txBps,rateAvailable:true,cachedInterface:true};\n  }\n  const full=await readWanTraffic(router);\n  if(text(full?.interface))dashboardWanCache.set(key,{interface:text(full.interface),interfaceType:text(full.interfaceType),at:now});\n  else dashboardWanCache.delete(key);\n  return full;\n}\nasync function dashboardMetrics(router){\n  const [resourceResult,trafficResult]=await Promise.allSettled([request(router,'system/resource'),readDashboardWanTraffic(router)]);\n  if(resourceResult.status==='rejected')throw resourceResult.reason;\n  const wanTraffic=trafficResult.status==='fulfilled'?trafficResult.value:{available:false,interface:'',rxBps:null,txBps:null,rateAvailable:false,reason:String(trafficResult.reason?.message||trafficResult.reason||'Tráfego indisponível.')};\n  return {connected:true,connectionMethod:'rest',resource:resourceResult.value,wanTraffic,lastSync:new Date().toISOString(),lightweight:true};\n}\n`;
+            s=s.replace(marker,helper+marker);
+          }
+          const allowedOld="const action=text(body.action);const allowed=new Set(['router.test','router.sync','router.profiles','router.remote','pppoe.save','pppoe.delete','client.status','client.block','client.unblock']);";
+          const allowedNew="const action=text(body.action);const allowed=new Set(['router.test','router.sync','router.metrics','router.profiles','router.remote','pppoe.save','pppoe.delete','client.status','client.block','client.unblock']);";
+          if(!s.includes("'router.metrics'")){
+            if(!s.includes(allowedOld))throw new Error('allowed actions marker not found');
+            s=s.replace(allowedOld,allowedNew);
+          }
+          const routeOld="if(action==='router.test'||action==='router.sync')data=await snapshot(router);\n    else if(action==='router.profiles')data=await profiles(router);";
+          const routeNew="if(action==='router.test'||action==='router.sync')data=await snapshot(router);\n    else if(action==='router.metrics')data=await dashboardMetrics(router);\n    else if(action==='router.profiles')data=await profiles(router);";
+          if(!s.includes("action==='router.metrics')data=await dashboardMetrics(router)")){
+            if(!s.includes(routeOld))throw new Error('router action route marker not found');
+            s=s.replace(routeOld,routeNew);
+          }
+          fs.writeFileSync(p,s);
+          NODE
+          node --check lib/mikrotik-proxy.js
+          grep -Fq "async function dashboardMetrics(router)" lib/mikrotik-proxy.js
+          grep -Fq "'router.metrics'" lib/mikrotik-proxy.js
+          grep -Fq "action==='router.metrics')data=await dashboardMetrics(router)" lib/mikrotik-proxy.js
+          git add lib/mikrotik-proxy.js
+          git commit -m "Adiciona leitura leve do Dashboard MikroTik - etapa 8"
+          git push origin HEAD:main
+      - name: Patch Dashboard realtime reader
+        run: |
+          git switch -C cloudflare-provedor-plus origin/cloudflare-provedor-plus
+          node <<'NODE'
+          const fs=require('fs');
+          let a=fs.readFileSync('cloud-adapter.js','utf8');
+          const callOld="async function cloudCall(action,{router=null,data=null}={}){\n    const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),20000);";
+          const callNew="async function cloudCall(action,{router=null,data=null}={},timeoutMs=20000){\n    const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),Math.max(1000,Number(timeoutMs)||20000));";
+          if(!a.includes('timeoutMs=20000')){
+            if(!a.includes(callOld))throw new Error('cloudCall marker not found');
+            a=a.replace(callOld,callNew);
+          }
+          const syncLine="api.mikrotik.sync=async routerId=>{const r=await routerRecord(routerId),result=await cloudRead('router.sync',{router:await routerAuth(routerId)});return {...result,routerId:Number(routerId),routerName:r.name}};";
+          const metricsLine="api.mikrotik.metrics=async routerId=>{const r=await routerRecord(routerId),result=await cloudCall('router.metrics',{router:await routerAuth(routerId)},6500);return {...result,routerId:Number(routerId),routerName:r.name}};";
+          if(!a.includes('api.mikrotik.metrics=async routerId')){
+            if(!a.includes(syncLine))throw new Error('mikrotik sync marker not found');
+            a=a.replace(syncLine,syncLine+'\n    '+metricsLine);
+          }
+          fs.writeFileSync('cloud-adapter.js',a);
+
+          let d=fs.readFileSync('dashboard-enhancements.js','utf8');
+          const startOld="const api=window.provedor;if(!api?.mikrotik?.sync||routerPollBusy)return;\n    routerPollBusy=true;";
+          const startNew="const api=window.provedor,liveReader=api?.mikrotik?.metrics||api?.mikrotik?.sync;if(!liveReader||routerPollBusy)return;\n    routerPollBusy=true;";
+          if(!d.includes(startOld))throw new Error('dashboard poll start marker not found');
+          d=d.replace(startOld,startNew);
+          const callSync="const data=await api.mikrotik.sync(id),resource=data?.resource||{}";
+          const callMetrics="const data=await liveReader(id),resource=data?.resource||{}";
+          if(!d.includes(callSync))throw new Error('dashboard sync call marker not found');
+          d=d.replace(callSync,callMetrics);
+          fs.writeFileSync('dashboard-enhancements.js',d);
+
+          let b=fs.readFileSync('bootstrap.js','utf8');
+          b=b.replace("const BUILD_TOKEN='20260831-step7-permissions1'","const BUILD_TOKEN='20260831-step8-mikrotik1'");
+          b=b.replace('/cloud-adapter.js?v=1017-cloud17-stable3','/cloud-adapter.js?v=20260831-step8-mikrotik1');
+          b=b.replace('/dashboard-enhancements.js?v=20260831-dashboard-mikrotik2','/dashboard-enhancements.js?v=20260831-step8-mikrotik1');
+          fs.writeFileSync('bootstrap.js',b);
+
+          let i=fs.readFileSync('index.html','utf8');
+          i=i.replace('/bootstrap.js?v=20260831-step7-permissions1','/bootstrap.js?v=20260831-step8-mikrotik1');
+          fs.writeFileSync('index.html',i);
+          NODE
+          node --check cloud-adapter.js
+          node --check dashboard-enhancements.js
+          node --check bootstrap.js
+          grep -Fq "api.mikrotik.metrics=async routerId" cloud-adapter.js
+          grep -Fq "liveReader=api?.mikrotik?.metrics||api?.mikrotik?.sync" dashboard-enhancements.js
+          ! grep -Fq "const data=await api.mikrotik.sync(id)" dashboard-enhancements.js
+          grep -Fq "20260831-step8-mikrotik1" bootstrap.js index.html
+          git add cloud-adapter.js dashboard-enhancements.js bootstrap.js index.html
+          git commit -m "Otimiza monitoramento MikroTik em tempo real - etapa 8"
+          git push origin HEAD:cloudflare-provedor-plus
+      - name: Cleanup workflow
+        run: |
+          git pull --rebase origin cloudflare-provedor-plus
+          git rm .github/workflows/fix-step8-mikrotik.yml
+          git commit -m "Remove aplicador temporario da etapa 8"
+          git push origin HEAD:cloudflare-provedor-plus

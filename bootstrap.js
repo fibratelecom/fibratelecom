@@ -1,17 +1,8 @@
-const __ppStartup=(()=>{
-  const screen=document.getElementById('pp-startup-screen-new'),status=document.getElementById('pp-startup-status-new'),stage=document.getElementById('pp-startup-stage-new'),retry=document.getElementById('pp-startup-retry-new');
-  if(retry)retry.onclick=()=>location.reload();
-  let finished=false;
-  const watchdog=setTimeout(()=>{if(finished||!screen)return;screen.classList.add('is-error');if(status)status.textContent='O painel está demorando mais do que o esperado.';if(stage)stage.textContent='Verifique a conexão e tente novamente';},15000);
-  return {
-    done(){if(finished)return;finished=true;clearTimeout(watchdog);if(!screen)return;screen.classList.add('is-leaving');setTimeout(()=>screen.remove(),320)},
-    fail(error){finished=true;clearTimeout(watchdog);console.error(error);if(!screen)return;screen.classList.add('is-error');if(status)status.textContent='Não foi possível concluir a inicialização do painel.';if(stage)stage.textContent='Use Recarregar painel para tentar novamente';}
-  };
-})();
-window.addEventListener('provedor-plus-react-error',event=>{const message=event?.detail?.message||'Falha ao montar o painel.';__ppStartup.fail(new Error(message))});
+const __ppStartup={done(){},fail(error){console.error(error)}};
+window.addEventListener('provedor-plus-react-error',event=>{const message=event?.detail?.message||'Falha ao montar o painel.';console.error(new Error(message))});
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260831-startup-rootfix1';
+  const BUILD_TOKEN='20260831-no-loading1';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');

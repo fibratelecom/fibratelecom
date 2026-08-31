@@ -200,13 +200,25 @@
 
   function initial(){replaceText(document.body);patchStatic()}
 
-  const observer=new MutationObserver(records=>{
+  let observedShell=null,shellObserver=null,rootObserver=null,rebindTimer=null;
+  const bindObserver=()=>{
+    const shell=document.querySelector('.app-shell');
+    if(shell===observedShell)return;
+    shellObserver?.disconnect();shellObserver=null;observedShell=shell||null;
+    if(shell){
+      shellObserver=new MutationObserver(records=>{
     let structural=false;
     for(const record of records){
       for(const node of record.addedNodes){patchAddedNode(node);structural=true}
     }
     if(structural)patchStatic();
   });
-  observer.observe(document.documentElement,{childList:true,subtree:true});
+      shellObserver.observe(shell,{childList:true,subtree:true});
+    }
+  };
+  const scheduleRebind=()=>{clearTimeout(rebindTimer);rebindTimer=setTimeout(()=>{bindObserver();patchStatic()},30)};
+  const root=document.getElementById('root');
+  if(root){rootObserver=new MutationObserver(()=>scheduleRebind());rootObserver.observe(root,{childList:true})}
+  bindObserver();
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initial,{once:true});else initial();
 })();

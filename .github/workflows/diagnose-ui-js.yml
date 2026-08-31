@@ -29,13 +29,14 @@ jobs:
           set -euxo pipefail
           for f in bootstrap.js dashboard-transition-guard.js dashboard-enhancements.js; do
             echo "=== $f ==="
-            curl -fsS -D "/tmp/$f.headers" "https://painel.fibramais.workers.dev/$f?diag=$(date +%s)" -o "/tmp/$f.live"
+            dest="/tmp/live-$f"
+            curl -fsS -D "/tmp/$f.headers" "https://painel.fibramais.workers.dev/$f?diag=$(date +%s)" -o "$dest"
             grep -iE '^(HTTP/|content-type:|content-length:|cf-cache-status:|etag:)' "/tmp/$f.headers" || true
             printf 'repo sha256: '; sha256sum "$f"
-            printf 'live sha256: '; sha256sum "/tmp/$f.live"
-            printf 'live first bytes: '; head -c 80 "/tmp/$f.live" | tr '\n' ' '; echo
-            cmp "$f" "/tmp/$f.live"
-            node --check "/tmp/$f.live"
+            printf 'live sha256: '; sha256sum "$dest"
+            printf 'live first bytes: '; head -c 80 "$dest" | tr '\n' ' '; echo
+            cmp "$f" "$dest"
+            node --check "$dest"
           done
       - name: File sizes
         run: wc -c bootstrap.js dashboard-transition-guard.js dashboard-enhancements.js

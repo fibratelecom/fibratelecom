@@ -1,0 +1,57 @@
+name: Replace Startup Loader
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: [.github/workflows/replace-startup-loader.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+          fetch-depth: 0
+      - name: Substituir carregamento inicial
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64
+          markup=base64.b64decode('PHN0eWxlIGlkPSJwcC1zdGFydHVwLXN0eWxlIj4KICBodG1sLGJvZHl7bWFyZ2luOjA7bWluLWhlaWdodDoxMDAlO2JhY2tncm91bmQ6I2Y0ZjdmNn0KICAucHAtc3RhcnR1cC1zY3JlZW57cG9zaXRpb246Zml4ZWQ7aW5zZXQ6MDt6LWluZGV4OjIxNDc0ODMwMDA7ZGlzcGxheTpncmlkO3BsYWNlLWl0ZW1zOmNlbnRlcjtvdmVyZmxvdzpoaWRkZW47YmFja2dyb3VuZDoKICAgIHJhZGlhbC1ncmFkaWVudChjaXJjbGUgYXQgMTglIDE4JSxyZ2JhKDI3LDE4MCwxNTMsLjE4KSx0cmFuc3BhcmVudCAzMCUpLAogICAgcmFkaWFsLWdyYWRpZW50KGNpcmNsZSBhdCA4MiUgNzglLHJnYmEoNzAsMTE3LDI1NSwuMTQpLHRyYW5zcGFyZW50IDMyJSksCiAgICBsaW5lYXItZ3JhZGllbnQoMTQ1ZGVnLCMwNzFkMTkgMCUsIzBiMmEyNCA0OCUsIzA2MTcxMyAxMDAlKTsKICAgIGZvbnQtZmFtaWx5OiJTZWdvZSBVSSIsQXJpYWwsc2Fucy1zZXJpZjtjb2xvcjojZWVmYWY3O3RyYW5zaXRpb246b3BhY2l0eSAuMjhzIGVhc2UsdmlzaWJpbGl0eSAuMjhzIGVhc2V9CiAgLnBwLXN0YXJ0dXAtc2NyZWVuOjpiZWZvcmUsLnBwLXN0YXJ0dXAtc2NyZWVuOjphZnRlcntjb250ZW50OiIiO3Bvc2l0aW9uOmFic29sdXRlO2JvcmRlcjoxcHggc29saWQgcmdiYSgxMzcsMjM2LDIxMywuMDkpO2JvcmRlci1yYWRpdXM6NTAlO3BvaW50ZXItZXZlbnRzOm5vbmV9CiAgLnBwLXN0YXJ0dXAtc2NyZWVuOjpiZWZvcmV7d2lkdGg6NjIwcHg7aGVpZ2h0OjYyMHB4O2xlZnQ6LTI1MHB4O3RvcDotMjkwcHg7Ym94LXNoYWRvdzowIDAgMTAwcHggcmdiYSgxNiwxNDMsMTE5LC4wOCl9CiAgLnBwLXN0YXJ0dXAtc2NyZWVuOjphZnRlcnt3aWR0aDo3NjBweDtoZWlnaHQ6NzYwcHg7cmlnaHQ6LTM2MHB4O2JvdHRvbTotNDIwcHh9CiAgLnBwLXN0YXJ0dXAtc2NyZWVuLmlzLWxlYXZpbmd7b3BhY2l0eTowO3Zpc2liaWxpdHk6aGlkZGVuO3BvaW50ZXItZXZlbnRzOm5vbmV9CiAgLnBwLXN0YXJ0dXAtY2FyZHtwb3NpdGlvbjpyZWxhdGl2ZTt3aWR0aDptaW4oNDMwcHgsY2FsYygxMDB2dyAtIDQycHgpKTtib3gtc2l6aW5nOmJvcmRlci1ib3g7cGFkZGluZzozMnB4IDM0cHggMjhweDtib3JkZXI6MXB4IHNvbGlkIHJnYmEoMTg1LDI0MCwyMjYsLjE0KTtib3JkZXItcmFkaXVzOjIycHg7YmFja2dyb3VuZDpsaW5lYXItZ3JhZGllbnQoMTgwZGVnLHJnYmEoMjU1LDI1NSwyNTUsLjA4NSkscmdiYSgyNTUsMjU1LDI1NSwuMDM1KSk7Ym94LXNoYWRvdzowIDI4cHggODBweCByZ2JhKDAsMCwwLC4zMik7YmFja2Ryb3AtZmlsdGVyOmJsdXIoMThweCl9CiAgLnBwLXN0YXJ0dXAtYnJhbmR7ZGlzcGxheTpmbGV4O2FsaWduLWl0ZW1zOmNlbnRlcjtnYXA6MTNweDttYXJnaW4tYm90dG9tOjI4cHh9CiAgLnBwLXN0YXJ0dXAtbWFya3tkaXNwbGF5OmZsZXg7YWxpZ24taXRlbXM6ZmxleC1lbmQ7anVzdGlmeS1jb250ZW50OmNlbnRlcjtnYXA6M3B4O3dpZHRoOjQycHg7aGVpZ2h0OjQycHg7cGFkZGluZzo5cHg7Ym94LXNpemluZzpib3JkZXItYm94O2JvcmRlci1yYWRpdXM6MTJweDtiYWNrZ3JvdW5kOmxpbmVhci1ncmFkaWVudCgxNDVkZWcsIzFiYzZhNiwjMGI4Zjc5KTtib3gtc2hhZG93OjAgMTBweCAzMHB4IHJnYmEoMTYsMTc4LDE0NSwuMjgpfQogIC5wcC1zdGFydHVwLW1hcmsgaXtkaXNwbGF5OmJsb2NrO3dpZHRoOjRweDtib3JkZXItcmFkaXVzOjRweDtiYWNrZ3JvdW5kOiNmZmY7YW5pbWF0aW9uOnBwU3RhcnRCYXJzIDEuMDVzIGVhc2UtaW4tb3V0IGluZmluaXRlfQogIC5wcC1zdGFydHVwLW1hcmsgaTpudGgtY2hpbGQoMSl7aGVpZ2h0OjhweDthbmltYXRpb24tZGVsYXk6LS4zc30ucHAtc3RhcnR1cC1tYXJrIGk6bnRoLWNoaWxkKDIpe2hlaWdodDoxNXB4O2FuaW1hdGlvbi1kZWxheTotLjE1c30ucHAtc3RhcnR1cC1tYXJrIGk6bnRoLWNoaWxkKDMpe2hlaWdodDoyMnB4fS5wcC1zdGFydHVwLW1hcmsgaTpudGgtY2hpbGQoNCl7aGVpZ2h0OjEzcHg7YW5pbWF0aW9uLWRlbGF5Oi0uNDVzfQogIC5wcC1zdGFydHVwLWJyYW5kLXRleHQgc21hbGx7ZGlzcGxheTpibG9jaztjb2xvcjojODdjZmMwO2ZvbnQtc2l6ZTo5cHg7Zm9udC13ZWlnaHQ6OTAwO2xldHRlci1zcGFjaW5nOi4xOGVtfS5wcC1zdGFydHVwLWJyYW5kLXRleHQgc3Ryb25ne2Rpc3BsYXk6YmxvY2s7bWFyZ2luLXRvcDoycHg7Zm9udC1zaXplOjE4cHg7bGV0dGVyLXNwYWNpbmc6LS4wMmVtfS5wcC1zdGFydHVwLWJyYW5kLXRleHQgc3Ryb25nIGJ7Y29sb3I6IzM3ZDRiNX0KICAucHAtc3RhcnR1cC1jYXJkIGgxe21hcmdpbjowO2ZvbnQtc2l6ZToyN3B4O2xpbmUtaGVpZ2h0OjEuMDg7bGV0dGVyLXNwYWNpbmc6LS4wMzVlbX0ucHAtc3RhcnR1cC1jYXJkIHB7bWFyZ2luOjEwcHggMCAwO2NvbG9yOiNhOWMzYmM7Zm9udC1zaXplOjExcHg7bGluZS1oZWlnaHQ6MS41fQogIC5wcC1zdGFydHVwLXByb2dyZXNze3Bvc2l0aW9uOnJlbGF0aXZlO2hlaWdodDo1cHg7bWFyZ2luOjI0cHggMCAxNHB4O292ZXJmbG93OmhpZGRlbjtib3JkZXItcmFkaXVzOjk5OXB4O2JhY2tncm91bmQ6cmdiYSgyNTUsMjU1LDI1NSwuMDkpfQogIC5wcC1zdGFydHVwLXByb2dyZXNzIHNwYW57cG9zaXRpb246YWJzb2x1dGU7aW5zZXQ6MCBhdXRvIDAgMDt3aWR0aDozOCU7Ym9yZGVyLXJhZGl1czppbmhlcml0O2JhY2tncm91bmQ6bGluZWFyLWdyYWRpZW50KDkwZGVnLCMxNmE5OGUsIzVlZTJjOCwjMTZhOThlKTthbmltYXRpb246cHBTdGFydE1vdmUgMS4xNXMgZWFzZS1pbi1vdXQgaW5maW5pdGV9CiAgLnBwLXN0YXJ0dXAtZm9vdHtkaXNwbGF5OmZsZXg7YWxpZ24taXRlbXM6Y2VudGVyO2p1c3RpZnktY29udGVudDpzcGFjZS1iZXR3ZWVuO2dhcDoxMnB4O2NvbG9yOiM3ODliOTI7Zm9udC1zaXplOjlweDtmb250LXdlaWdodDo3MDB9CiAgLnBwLXN0YXJ0dXAtbGl2ZXtkaXNwbGF5OmZsZXg7YWxpZ24taXRlbXM6Y2VudGVyO2dhcDo2cHg7Y29sb3I6IzhlYzZiYX0ucHAtc3RhcnR1cC1saXZlOjpiZWZvcmV7Y29udGVudDoiIjt3aWR0aDo2cHg7aGVpZ2h0OjZweDtib3JkZXItcmFkaXVzOjUwJTtiYWNrZ3JvdW5kOiMzNGQzOTk7Ym94LXNoYWRvdzowIDAgMCA0cHggcmdiYSg1MiwyMTEsMTUzLC4wOCk7YW5pbWF0aW9uOnBwU3RhcnRQdWxzZSAxLjNzIGVhc2UtaW4tb3V0IGluZmluaXRlfQogIC5wcC1zdGFydHVwLXJldHJ5e2Rpc3BsYXk6bm9uZTt3aWR0aDoxMDAlO2hlaWdodDo0MHB4O21hcmdpbi10b3A6MThweDtib3JkZXI6MXB4IHNvbGlkIHJnYmEoMTQ3LDIzMCwyMDksLjI4KTtib3JkZXItcmFkaXVzOjEwcHg7YmFja2dyb3VuZDpyZ2JhKDIwLDE1OCwxMzEsLjE4KTtjb2xvcjojZThmZmY5O2ZvbnQtc2l6ZToxMXB4O2ZvbnQtd2VpZ2h0Ojg1MDtjdXJzb3I6cG9pbnRlcn0KICAucHAtc3RhcnR1cC1yZXRyeTpob3ZlcntiYWNrZ3JvdW5kOnJnYmEoMjAsMTU4LDEzMSwuMyl9CiAgLnBwLXN0YXJ0dXAtc2NyZWVuLmlzLWVycm9yIC5wcC1zdGFydHVwLXByb2dyZXNzIHNwYW57d2lkdGg6MTAwJTthbmltYXRpb246bm9uZTtiYWNrZ3JvdW5kOiNkNThjNWF9LnBwLXN0YXJ0dXAtc2NyZWVuLmlzLWVycm9yIC5wcC1zdGFydHVwLWxpdmU6OmJlZm9yZXtiYWNrZ3JvdW5kOiNmNTllMGJ9LnBwLXN0YXJ0dXAtc2NyZWVuLmlzLWVycm9yIC5wcC1zdGFydHVwLXJldHJ5e2Rpc3BsYXk6YmxvY2t9CiAgQGtleWZyYW1lcyBwcFN0YXJ0QmFyc3swJSwxMDAle29wYWNpdHk6LjUyO3RyYW5zZm9ybTpzY2FsZVkoLjcpfTUwJXtvcGFjaXR5OjE7dHJhbnNmb3JtOnNjYWxlWSgxLjA4KX19QGtleWZyYW1lcyBwcFN0YXJ0TW92ZXswJXt0cmFuc2Zvcm06dHJhbnNsYXRlWCgtMTA1JSl9MTAwJXt0cmFuc2Zvcm06dHJhbnNsYXRlWCgyODUlKX19QGtleWZyYW1lcyBwcFN0YXJ0UHVsc2V7MCUsMTAwJXtvcGFjaXR5Oi41NX01MCV7b3BhY2l0eToxfX0KICBAbWVkaWEobWF4LXdpZHRoOjUyMHB4KXsucHAtc3RhcnR1cC1jYXJke3BhZGRpbmc6MjZweCAyNHB4IDI0cHg7Ym9yZGVyLXJhZGl1czoxOHB4fS5wcC1zdGFydHVwLWNhcmQgaDF7Zm9udC1zaXplOjI0cHh9fQogIEBtZWRpYShwcmVmZXJzLXJlZHVjZWQtbW90aW9uOnJlZHVjZSl7LnBwLXN0YXJ0dXAtbWFyayBpLC5wcC1zdGFydHVwLXByb2dyZXNzIHNwYW4sLnBwLXN0YXJ0dXAtbGl2ZTo6YmVmb3Jle2FuaW1hdGlvbjpub25lfX0KPC9zdHlsZT4KPGRpdiBpZD0icHAtc3RhcnR1cC1zY3JlZW4iIGNsYXNzPSJwcC1zdGFydHVwLXNjcmVlbiIgcm9sZT0ic3RhdHVzIiBhcmlhLWxpdmU9InBvbGl0ZSI+CiAgPHNlY3Rpb24gY2xhc3M9InBwLXN0YXJ0dXAtY2FyZCI+CiAgICA8ZGl2IGNsYXNzPSJwcC1zdGFydHVwLWJyYW5kIj4KICAgICAgPHNwYW4gY2xhc3M9InBwLXN0YXJ0dXAtbWFyayIgYXJpYS1oaWRkZW49InRydWUiPjxpPjwvaT48aT48L2k+PGk+PC9pPjxpPjwvaT48L3NwYW4+CiAgICAgIDxzcGFuIGNsYXNzPSJwcC1zdGFydHVwLWJyYW5kLXRleHQiPjxzbWFsbD5HRVNUw4NPIERFIFBST1ZFRE9SPC9zbWFsbD48c3Ryb25nPlByb3ZlZG9yIDxiPlBsdXM8L2I+PC9zdHJvbmc+PC9zcGFuPgogICAgPC9kaXY+CiAgICA8aDE+UHJlcGFyYW5kbyBzZXUgcGFpbmVsPC9oMT4KICAgIDxwIGlkPSJwcC1zdGFydHVwLXN0YXR1cyI+Q29uZWN0YW5kbyBkYWRvcywgcmVkZSBlIHNlcnZpw6dvcyBkbyBwcm92ZWRvci4uLjwvcD4KICAgIDxkaXYgY2xhc3M9InBwLXN0YXJ0dXAtcHJvZ3Jlc3MiIGFyaWEtaGlkZGVuPSJ0cnVlIj48c3Bhbj48L3NwYW4+PC9kaXY+CiAgICA8ZGl2IGNsYXNzPSJwcC1zdGFydHVwLWZvb3QiPjxzcGFuIGNsYXNzPSJwcC1zdGFydHVwLWxpdmUiPkluaWNpYWxpemHDp8OjbyBzZWd1cmE8L3NwYW4+PHNwYW4gaWQ9InBwLXN0YXJ0dXAtc3RhZ2UiPkNhcnJlZ2FuZG8gbcOzZHVsb3M8L3NwYW4+PC9kaXY+CiAgICA8YnV0dG9uIGlkPSJwcC1zdGFydHVwLXJldHJ5IiBjbGFzcz0icHAtc3RhcnR1cC1yZXRyeSIgdHlwZT0iYnV0dG9uIj5SZWNhcnJlZ2FyIHBhaW5lbDwvYnV0dG9uPgogIDwvc2VjdGlvbj4KPC9kaXY+CjxkaXYgaWQ9InJvb3QiPjwvZGl2Pg==').decode()
+          helper=base64.b64decode('Y29uc3QgX19wcFN0YXJ0dXA9KCgpPT57CiAgY29uc3Qgc2NyZWVuPWRvY3VtZW50LmdldEVsZW1lbnRCeUlkKCdwcC1zdGFydHVwLXNjcmVlbicpLHN0YXR1cz1kb2N1bWVudC5nZXRFbGVtZW50QnlJZCgncHAtc3RhcnR1cC1zdGF0dXMnKSxzdGFnZT1kb2N1bWVudC5nZXRFbGVtZW50QnlJZCgncHAtc3RhcnR1cC1zdGFnZScpLHJldHJ5PWRvY3VtZW50LmdldEVsZW1lbnRCeUlkKCdwcC1zdGFydHVwLXJldHJ5Jyk7CiAgaWYocmV0cnkpcmV0cnkub25jbGljaz0oKT0+bG9jYXRpb24ucmVsb2FkKCk7CiAgbGV0IGZpbmlzaGVkPWZhbHNlOwogIGNvbnN0IHdhdGNoZG9nPXNldFRpbWVvdXQoKCk9PntpZihmaW5pc2hlZHx8IXNjcmVlbilyZXR1cm47c2NyZWVuLmNsYXNzTGlzdC5hZGQoJ2lzLWVycm9yJyk7aWYoc3RhdHVzKXN0YXR1cy50ZXh0Q29udGVudD0nTyBwYWluZWwgZXN0w6EgZGVtb3JhbmRvIG1haXMgZG8gcXVlIG8gZXNwZXJhZG8uJztpZihzdGFnZSlzdGFnZS50ZXh0Q29udGVudD0nVmVyaWZpcXVlIGEgY29uZXjDo28gZSB0ZW50ZSBub3ZhbWVudGUnO30sMTUwMDApOwogIHJldHVybiB7CiAgICBkb25lKCl7aWYoZmluaXNoZWQpcmV0dXJuO2ZpbmlzaGVkPXRydWU7Y2xlYXJUaW1lb3V0KHdhdGNoZG9nKTtpZighc2NyZWVuKXJldHVybjtzY3JlZW4uY2xhc3NMaXN0LmFkZCgnaXMtbGVhdmluZycpO3NldFRpbWVvdXQoKCk9PnNjcmVlbi5yZW1vdmUoKSwzMjApfSwKICAgIGZhaWwoZXJyb3Ipe2ZpbmlzaGVkPXRydWU7Y2xlYXJUaW1lb3V0KHdhdGNoZG9nKTtjb25zb2xlLmVycm9yKGVycm9yKTtpZighc2NyZWVuKXJldHVybjtzY3JlZW4uY2xhc3NMaXN0LmFkZCgnaXMtZXJyb3InKTtpZihzdGF0dXMpc3RhdHVzLnRleHRDb250ZW50PSdOw6NvIGZvaSBwb3Nzw612ZWwgY29uY2x1aXIgYSBpbmljaWFsaXphw6fDo28gZG8gcGFpbmVsLic7aWYoc3RhZ2Upc3RhZ2UudGV4dENvbnRlbnQ9J1VzZSBSZWNhcnJlZ2FyIHBhaW5lbCBwYXJhIHRlbnRhciBub3ZhbWVudGUnO30KICB9Owp9KSgpOwo=').decode()
+          p=Path('bootstrap.js');s=p.read_text()
+          s=s.replace("const BUILD_TOKEN='20260831-hubs-fix1';","const BUILD_TOKEN='20260831-startup-loader1';",1)
+          if not s.startswith('const __ppStartup='): s=helper+s
+          old="  if(root)root.style.visibility='hidden';\n"
+          if old not in s: raise SystemExit('Ocultacao antiga do root nao encontrada')
+          s=s.replace(old,'',1)
+          old_done="  if(root)root.style.visibility='';\n})().catch(err=>{console.error(err);const root=document.getElementById('root')||document.body;if(root)root.style.visibility='';const message=String(err&&err.message||err);root.innerHTML='<div style=\"font-family:Segoe UI,Arial,sans-serif;max-width:760px;margin:60px auto;padding:24px;border:1px solid #e5e7eb;border-radius:14px\"><h2>Provedor Plus</h2><p>Não foi possível carregar o painel.</p><pre id=\"pp-startup-error\" style=\"white-space:pre-wrap;color:#b91c1c\"></pre><button id=\"pp-startup-retry\">Tentar novamente</button></div>';const pre=root.querySelector('#pp-startup-error'),button=root.querySelector('#pp-startup-retry');if(pre)pre.textContent=message;if(button)button.addEventListener('click',()=>location.reload())});"
+          new_done="  __ppStartup.done();\n})().catch(err=>{__ppStartup.fail(err)});"
+          if old_done not in s: raise SystemExit('Final antigo do bootstrap nao encontrado')
+          s=s.replace(old_done,new_done,1)
+          p.write_text(s)
+          i=Path('index.html');h=i.read_text()
+          old_body='<body><div id="root"></div></body>'
+          if old_body not in h: raise SystemExit('Body antigo nao encontrado')
+          h=h.replace(old_body,'<body>\n'+markup+'\n</body>',1)
+          h=h.replace('/bootstrap.js?v=20260831-hubs-fix1','/bootstrap.js?v=20260831-startup-loader1',1)
+          i.write_text(h)
+          PY
+          node --check bootstrap.js
+          ! grep -q "root.style.visibility='hidden'" bootstrap.js
+          grep -q 'pp-startup-screen' index.html
+          grep -q "BUILD_TOKEN='20260831-startup-loader1'" bootstrap.js
+      - name: Publicar e limpar temporário
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add bootstrap.js index.html
+          git commit -m 'Cria novo carregamento inicial do Provedor Plus'
+          git rm -f .github/workflows/replace-startup-loader.yml
+          git commit -m 'Remove aplicador temporario do carregamento'
+          git push origin HEAD:cloudflare-provedor-plus

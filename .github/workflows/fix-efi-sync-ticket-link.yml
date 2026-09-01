@@ -1,0 +1,41 @@
+name: Recuperar link do boleto Efí existente
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: ['.github/workflows/fix-efi-sync-ticket-link.yml']
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+      - name: Corrigir consulta do link
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('worker-bank-native.js')
+          s=p.read_text()
+          old="bank_ticket_url:String(x.payment?.banking_billet?.billet_link||x.billet_link||x.link||invoice.bank_ticket_url||'')"
+          new="bank_ticket_url:String(x.payment?.banking_billet?.link||x.payment?.banking_billet?.billet_link||x.billet_link||x.link||invoice.bank_ticket_url||'')"
+          if old not in s:
+              raise SystemExit('trecho de sincronização Efí esperado não encontrado')
+          s=s.replace(old,new,1)
+          if s.count(new)!=1:
+              raise SystemExit('fallback do link Efí não ficou único')
+          p.write_text(s)
+          PY
+          node --check worker-bank-native.js
+          grep -F "bank_ticket_url:String(x.payment?.banking_billet?.link||x.payment?.banking_billet?.billet_link||x.billet_link||x.link||invoice.bank_ticket_url||'')" worker-bank-native.js >/dev/null
+      - name: Publicar e remover aplicador
+        shell: bash
+        run: |
+          rm -f .github/workflows/fix-efi-sync-ticket-link.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add worker-bank-native.js .github/workflows/fix-efi-sync-ticket-link.yml
+          git commit -m 'Recupera link do boleto Efi na sincronizacao'
+          git push origin HEAD:cloudflare-provedor-plus

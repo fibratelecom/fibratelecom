@@ -1,0 +1,43 @@
+name: Auditar ações atuais da Área do Cliente
+on:
+  push:
+    branches: [fix/status-cliente-visual-unico]
+    paths: ['.github/workflows/audit-portal-actions.yml']
+permissions:
+  contents: write
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/status-cliente-visual-unico
+          fetch-depth: 1
+      - name: Ler Worker de produção
+        shell: bash
+        run: |
+          git fetch origin cloudflare-provedor-plus --depth=1
+          git show FETCH_HEAD:worker.js > /tmp/worker.js
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          src=Path('/tmp/worker.js').read_text()
+          print('ACTION LITERALS')
+          actions=sorted(set(re.findall(r"action\s*===\s*['\"]([^'\"]+)['\"]",src)))
+          for a in actions:
+              if any(k in a.lower() for k in ['portal','connection','connect','diagn','status','login','session','invoice','payment','plan','protocol','negoti']):
+                  print(a)
+          print('\nCUSTOMER PORTAL CONTEXTS')
+          for m in re.finditer(r'customer-portal|nativePortalLogin|portalSnapshot|verifyPortalSession|connection',src,re.I):
+              p=m.start(); print(src[max(0,p-900):min(len(src),p+2200)].replace('\n',' ')); print('\n---')
+          PY
+      - name: Remover auditor temporário
+        if: always()
+        shell: bash
+        run: |
+          rm -f .github/workflows/audit-portal-actions.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/audit-portal-actions.yml
+          git commit -m 'Remove auditor temporario das acoes do portal' || true
+          git push origin HEAD:fix/status-cliente-visual-unico

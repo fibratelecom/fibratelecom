@@ -1,0 +1,48 @@
+name: fix-efi-audit-typo
+on:
+  push:
+    branches:
+      - cloudflare-provedor-plus
+    paths:
+      - .github/workflows/fix-efi-audit-typo.yml
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+      - name: Corrigir e validar auditoria
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('worker.js')
+          s=p.read_text()
+          if 'mplan_id' not in s:
+              raise SystemExit('mplan_id não encontrado para correção')
+          s=s.replace('plan,mplan_id,due_day','plan,plan_id,due_day',1)
+          p.write_text(s)
+          b=Path('worker-bank-native.js')
+          t=b.read_text().replace("` ÷ contrato ${contract}`","` · contrato ${contract}`")
+          b.write_text(t)
+          PY
+          node --check worker.js
+          node --check worker-bank-native.js
+          grep -F 'plan,plan_id,due_day' worker.js >/dev/null
+          ! grep -F 'mplan_id' worker.js
+          ! grep -F 'OR contract_number=${contract}' worker.js
+          grep -F 'FROM pp_clients WHERE id=${clientId} LIMIT 1' worker.js >/dev/null
+          grep -F 'function efiSamePersonError' worker-bank-native.js >/dev/null
+          grep -F 'e-mail ${maskEmail(c.email)}' worker-bank-native.js >/dev/null
+      - name: Publicar e remover aplicador
+        shell: bash
+        run: |
+          rm -f .github/workflows/fix-efi-audit-typo.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add worker.js worker-bank-native.js .github/workflows/fix-efi-audit-typo.yml
+          git commit -m 'Finaliza auditoria da identidade enviada a Efi'
+          git push origin HEAD:cloudflare-provedor-plus

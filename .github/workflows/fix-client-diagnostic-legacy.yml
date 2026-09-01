@@ -1,0 +1,59 @@
+name: Corrigir compatibilidade do diagnóstico da Área do Cliente
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: ['.github/workflows/fix-client-diagnostic-legacy.yml']
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+      - name: Ajustar retorno legado do diagnóstico
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('worker.js')
+          s=p.read_text()
+          old="""async function connectionTestForSession(env,data){
+  const portal=await refreshPortalForSession(env,data),connection=portal?.connection||{};
+  return {...portal,diagnostic:{ok:!connection.connectionError,status:connection.connectionError?'error':'complete',message:connection.connectionError||'Diagnóstico concluído.',checkedAt:connection.checkedAt||new Date().toISOString()}};
+}"""
+          new="""function completedPortalDiagnostic(connection={}){
+  const failed=Boolean(text(connection.connectionError)),checkedAt=connection.checkedAt||new Date().toISOString(),message=connection.connectionError||'Diagnóstico concluído.';
+  return {ok:!failed,success:!failed,status:failed?'error':'success',state:failed?'error':'complete',phase:failed?'error':'complete',complete:!failed,completed:!failed,done:!failed,finished:!failed,running:false,loading:false,checking:false,isChecking:false,message,detail:message,checkedAt,checkedAtLabel:portalDateLabel(checkedAt)};
+}
+function withCompletedPortalDiagnostic(portal={}){
+  const connection=portal?.connection||{},diagnostic=completedPortalDiagnostic(connection),failed=!diagnostic.ok;
+  return {...portal,success:!failed,complete:!failed,completed:!failed,done:!failed,finished:!failed,running:false,loading:false,checking:false,isChecking:false,diagnosticStatus:diagnostic.status,diagnosticMessage:diagnostic.message,diagnostic,connection:{...connection,diagnosticStatus:diagnostic.status,diagnosticState:diagnostic.state,diagnosticMessage:diagnostic.message,diagnosticComplete:diagnostic.complete,diagnosticCompleted:diagnostic.completed,diagnosticDone:diagnostic.done,diagnosticRunning:false,diagnosticLoading:false,checking:false,isChecking:false,diagnostic}};
+}
+async function connectionTestForSession(env,data){
+  return withCompletedPortalDiagnostic(await refreshPortalForSession(env,data));
+}"""
+          if s.count(old)!=1:
+              raise SystemExit(f'bloco connectionTest esperado não encontrado de forma única: {s.count(old)}')
+          s=s.replace(old,new,1)
+          old_route="else if(['connection-test','test-connection','connection-status','connection-diagnostic','diagnostic','diagnose','connection-check','check-connection','diagnostic-connection'].includes(action))result=await connectionTestForSession(env,data);"
+          new_route="else if(['connection-test','test-connection','connection-status','connection-diagnostic','diagnostic','diagnose','connection-check','check-connection','diagnostic-connection'].includes(action)||/(connection|diagnostic|diagnose|diagnost|conex[aã]o|teste.*conex)/i.test(action))result=await connectionTestForSession(env,data);"
+          if s.count(old_route)!=1:
+              raise SystemExit(f'rota esperada não encontrada de forma única: {s.count(old_route)}')
+          s=s.replace(old_route,new_route,1)
+          p.write_text(s)
+          PY
+          node --check worker.js
+          grep -F "function withCompletedPortalDiagnostic" worker.js >/dev/null
+          grep -F "status:failed?'error':'success'" worker.js >/dev/null
+          grep -F "diagnosticCompleted:diagnostic.completed" worker.js >/dev/null
+      - name: Publicar e remover aplicador temporário
+        shell: bash
+        run: |
+          rm -f .github/workflows/fix-client-diagnostic-legacy.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add worker.js .github/workflows/fix-client-diagnostic-legacy.yml
+          git commit -m 'Compatibiliza conclusão do diagnóstico do cliente'
+          git push origin HEAD:cloudflare-provedor-plus

@@ -16,6 +16,13 @@ const ALLOWED_PORTAL_ORIGINS=new Set([
 const text=value=>String(value??'').trim();
 const digits=value=>text(value).replace(/\D/g,'');
 const number=value=>{const n=Number(value);return Number.isFinite(n)?n:null};
+function parseStateValue(value){
+  if(value&&typeof value==='object'&&!Array.isArray(value))return value;
+  if(typeof value==='string'){
+    try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{return {}}
+  }
+  return {};
+}
 const bankUtf8=new TextEncoder();
 const portalUtf8=new TextEncoder();
 

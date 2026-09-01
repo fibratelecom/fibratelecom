@@ -1,0 +1,39 @@
+name: Publicar recuperação do boleto Efí
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: ['.github/workflows/publish-efi-sync-link.yml']
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+      - name: Atualizar marcador de publicação
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('index.html')
+          s=p.read_text()
+          marker='<!-- pp-build:'
+          token='<!-- pp-build:20260901-boleto-portal-sync -->'
+          if marker in s:
+              import re
+              s=re.sub(r'<!-- pp-build:[^>]*-->',token,s,count=1)
+          else:
+              s=s+'\n'+token+'\n'
+          p.write_text(s)
+          PY
+      - name: Publicar e remover aplicador
+        shell: bash
+        run: |
+          rm -f .github/workflows/publish-efi-sync-link.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html .github/workflows/publish-efi-sync-link.yml
+          git commit -m 'Publica auditoria de boleto e Area do Cliente'
+          git push origin HEAD:cloudflare-provedor-plus

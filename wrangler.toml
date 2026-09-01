@@ -1,5 +1,5 @@
 # Cloudflare Provedor Plus - painel
-# build: 20260901-portal-session-fix
+# build: 20260901-client-diagnostic-legacy-final
 name = "painel"
 main = "worker.js"
 compatibility_date = "2026-08-30"

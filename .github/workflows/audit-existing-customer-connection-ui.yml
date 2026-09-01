@@ -1,0 +1,52 @@
+name: Auditar Minha Conexão existente
+on:
+  push:
+    branches: [fix/status-cliente-visual-unico]
+    paths: ['.github/workflows/audit-existing-customer-connection-ui.yml']
+permissions:
+  contents: write
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/status-cliente-visual-unico
+      - name: Procurar textos no bundle
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import glob,base64,gzip,re
+          files=sorted(glob.glob('packed/appgz-*.txt'))
+          if not files:
+              raise SystemExit('packed/appgz não encontrado')
+          raw=''.join(Path(f).read_text() for f in files)
+          src=gzip.decompress(base64.b64decode(''.join(raw.split()))).decode('utf-8','replace')
+          print('SOURCE_LEN',len(src))
+          needles=[
+            'Verificação real pelo Provedor Plus',
+            'Verificar minha conexão',
+            'Verificando sua conexão',
+            'Problemas na região',
+            'Minha conexão',
+            'Última conexão',
+            'Aguardando dados da conexão'
+          ]
+          for needle in needles:
+              poss=[m.start() for m in re.finditer(re.escape(needle),src,re.I)]
+              print('\n===',needle,'COUNT',len(poss),'===')
+              for pos in poss[:8]:
+                  print(src[max(0,pos-2200):min(len(src),pos+4200)].replace('\n',' '))
+                  print('\n---')
+          PY
+      - name: Remover auditor temporário
+        if: always()
+        shell: bash
+        run: |
+          rm -f .github/workflows/audit-existing-customer-connection-ui.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/audit-existing-customer-connection-ui.yml
+          git commit -m 'Remove auditor temporario da Minha Conexao' || true
+          git push origin HEAD:fix/status-cliente-visual-unico

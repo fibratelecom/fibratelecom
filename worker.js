@@ -487,7 +487,7 @@ function normalizePortalDate(value){
 function portalDateLabel(value){
   const iso=normalizePortalDate(value);if(!iso)return '';
   const date=new Date(iso);if(Number.isNaN(date.getTime()))return text(value);
-  try{return new Intl.DateTimeFormat('pt-BR',{dateStyle:'short',timeStyle:'medium'}).format(date)}catch{return iso}
+  try{return new Intl.DateTimeFormat('pt-BR',{dateStyle:'short',timeStyle:'medium',timeZone:'America/Maceio'}).format(date)}catch{return iso}
 }
 async function portalConnectionContext(env,data){
   if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão nativa com o Neon não configurada na Cloudflare.'),{statusCode:503});
@@ -500,7 +500,7 @@ async function portalLiveConnection(env,sql,client){
   const fallback={
     status:storedStatus||'Aguardando dados',pppoeStatus:client?.connection_type==='PPPoE'?'Aguardando confirmação':'Não se aplica',pppoeConnected:null,online:null,
     ip:storedIp||'Aguardando dados',uptime:'',downloadBps:null,uploadBps:null,liveRatesAvailable:false,latencyMs:null,packetLoss:null,availability30Days:null,
-    quality:'Aguardando dados',checkedAt:checkedFallback,lastConnection:checkedFallback||'Aguardando dados',lastConnectionLabel:portalDateLabel(checkedFallback),source:'stored',connectionError:''
+    quality:'Aguardando dados',checkedAt:checkedFallback,lastConnection:portalDateLabel(checkedFallback)||'Aguardando dados',lastConnectionIso:checkedFallback,lastConnectionLabel:portalDateLabel(checkedFallback),diagnosticStatus:'idle',diagnosticMessage:'Pronto para verificar sua conexão.',checking:false,isChecking:false,source:'stored',connectionError:''
   };
   if(client?.connection_type!=='PPPoE')return {...fallback,status:storedStatus||'Não se aplica',pppoeStatus:'Não se aplica',quality:'Não se aplica',source:'not-pppoe'};
   if(!Number(client?.router_id)||!text(client?.pppoe_username))return {...fallback,status:'Aguardando configuração',connectionError:'Cliente sem MikroTik ou usuário PPPoE vinculado.',source:'configuration'};
@@ -516,14 +516,14 @@ async function portalLiveConnection(env,sql,client){
     const connection={
       status:live.online?'Online':'Offline',pppoeStatus:live.online?'Conectado':'Desconectado',pppoeConnected:Boolean(live.online),online:Boolean(live.online),ip:text(live.ip)||storedIp||'Aguardando dados',uptime:text(live.uptime),
       downloadBps,uploadBps,liveRatesAvailable:Boolean(live.liveRatesAvailable)||(Number(downloadBps)>0)||(Number(uploadBps)>0),latencyMs:latency,packetLoss:loss,availability30Days:null,
-      quality:text(live.quality)||(live.online?'Boa':'Sem conexão'),qualityAvailable:Boolean(live.qualityAvailable),checkedAt,lastConnection:checkedAt,lastConnectionLabel:portalDateLabel(checkedAt),source:'mikrotik-live',connectionError:'',
+      quality:text(live.quality)||(live.online?'Boa':'Sem conexão'),qualityAvailable:Boolean(live.qualityAvailable),checkedAt,lastConnection:portalDateLabel(checkedAt),lastConnectionIso:checkedAt,lastConnectionLabel:portalDateLabel(checkedAt),diagnosticStatus:'complete',diagnosticMessage:'Diagnóstico concluído.',checking:false,isChecking:false,source:'mikrotik-live',connectionError:'',
       trafficMonth:text(traffic?.current?.month),monthDownloadBytes:Number(traffic?.current?.download_bytes)||0,monthUploadBytes:Number(traffic?.current?.upload_bytes)||0
     };
     try{await sql`UPDATE pp_clients SET ip=COALESCE(NULLIF(${text(live.ip)},''),ip),mikrotik_status=${live.online?'Online':'Offline'},mikrotik_last_sync=${checkedAt},updated_at=${checkedAt} WHERE id=${Number(client.id)}`;}catch{}
     return connection;
   }catch(error){
     const checkedAt=new Date().toISOString(),message=error instanceof Error?error.message:String(error);
-    return {...fallback,status:'Indisponível',quality:'Indisponível',checkedAt,lastConnection:checkedFallback||checkedAt,lastConnectionLabel:portalDateLabel(checkedFallback||checkedAt),source:'mikrotik-error',connectionError:message};
+    return {...fallback,status:'Indisponível',quality:'Indisponível',checkedAt,lastConnection:portalDateLabel(checkedFallback||checkedAt),lastConnectionIso:checkedFallback||checkedAt,lastConnectionLabel:portalDateLabel(checkedFallback||checkedAt),diagnosticStatus:'error',diagnosticMessage:message,checking:false,isChecking:false,source:'mikrotik-error',connectionError:message};
   }
 }
 async function portalSnapshot(client,state,env,sessionToken='',connectionOverride=null){
@@ -558,15 +558,23 @@ async function portalSnapshot(client,state,env,sessionToken='',connectionOverrid
       pppoeConnected:client.connection_type==='PPPoE'?online:null,
       online:client.connection_type==='PPPoE'?online:null,
       ip:text(client.ip)||'Aguardando dados',
-      lastConnection:normalizePortalDate(client.mikrotik_last_sync)||'Aguardando dados',
+      lastConnection:portalDateLabel(client.mikrotik_last_sync)||'Aguardando dados',
+      lastConnectionIso:normalizePortalDate(client.mikrotik_last_sync),
       lastConnectionLabel:portalDateLabel(client.mikrotik_last_sync),
       checkedAt:normalizePortalDate(client.mikrotik_last_sync),
       uptime:'',downloadBps:null,uploadBps:null,liveRatesAvailable:false,latencyMs:null,packetLoss:null,
       availability30Days:null,
       quality:online?'Boa':'Aguardando dados',
+      diagnosticStatus:'idle',diagnosticMessage:'Pronto para verificar sua conexão.',checking:false,isChecking:false,
       source:'stored',connectionError:'',
       regionIssue:{active:false,status:'clear',title:'Nenhum problema informado na região',message:'Não há manutenção ou indisponibilidade geral informada no momento.'},
       ...(connectionOverride&&typeof connectionOverride==='object'?connectionOverride:{})
+    },
+    diagnostic:{
+      ok:!text(connectionOverride?.connectionError),
+      status:connectionOverride?(text(connectionOverride?.connectionError)?'error':'complete'):'idle',
+      message:text(connectionOverride?.connectionError)||(connectionOverride?'Diagnóstico concluído.':'Pronto para verificar sua conexão.'),
+      checkedAt:text(connectionOverride?.checkedAt)||normalizePortalDate(client.mikrotik_last_sync)
     }
   };
 }

@@ -292,6 +292,27 @@ async function handleProtocols(request,env){
   }
 }
 
+async function refreshBankClientRequest(request,env){
+  if(!env.DATABASE_URL)return request;
+  let body={};try{body=await request.clone().json()}catch{return request}
+  if(!body?.client||typeof body.client!=='object')return request;
+  const clientId=Number(body.client?.id||body.invoice?.client_id||body.invoice?.clientId)||0;
+  if(!clientId)return request;
+  const sql=neon(env.DATABASE_URL),rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code FROM pp_clients WHERE id=${clientId} LIMIT 1`,fresh=Array.isArray(rows)?rows[0]:null;
+  if(!fresh)throw Object.assign(new Error('Cliente não encontrado na nuvem. Salve o cadastro antes de emitir a cobrança.'),{statusCode:404});
+  const current=body.client||{},freshAddress=text(fresh.address),freshZip=text(fresh.zip_code);
+  body.client={
+    ...current,
+    ...fresh,
+    id:Number(fresh.id)||clientId,
+    street:freshAddress||text(current.street)||text(current.address),
+    address:freshAddress||text(current.address)||text(current.street),
+    cep:freshZip||text(current.cep)||text(current.zip_code),
+    zip_code:freshZip||text(current.zip_code)||text(current.cep)
+  };
+  return new Request(request.url,{method:'POST',headers:copyHeaders(request.headers),body:JSON.stringify(body)});
+}
+
 async function handleSpecializedNative(request,env){
   const path=new URL(request.url).pathname;
   if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-native-integration'});
@@ -299,7 +320,10 @@ async function handleSpecializedNative(request,env){
     if(path==='/api/bank-proxy')await requirePanelPermission(request,env,'billing');
     else await requirePanelPermission(request,env,'network');
   }catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||401,{'x-provedor-plus-edge':'cloudflare-native-integration'})}
-  if(path==='/api/bank-proxy')return handleBankProxy(request);
+  if(path==='/api/bank-proxy'){
+    try{return handleBankProxy(await refreshBankClientRequest(request,env))}
+    catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,{'x-provedor-plus-edge':'cloudflare-native-integration'})}
+  }
   return handleMikrotikProxy(request);
 }
 

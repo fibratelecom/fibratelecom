@@ -1,0 +1,39 @@
+name: Acionar build final da auditoria de boleto
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: ['.github/workflows/trigger-panel-build-boleto-portal.yml']
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+      - name: Atualizar marcador interno do Worker
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('worker.js')
+          s=p.read_text()
+          token='// pp-build: 20260901-boleto-portal-sync-final\n'
+          if re.search(r'^// pp-build:.*\n',s,re.M):
+              s=re.sub(r'^// pp-build:.*\n',token,s,count=1,flags=re.M)
+          else:
+              s=token+s
+          p.write_text(s)
+          PY
+          node --check worker.js
+      - name: Publicar e remover aplicador
+        shell: bash
+        run: |
+          rm -f .github/workflows/trigger-panel-build-boleto-portal.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add worker.js .github/workflows/trigger-panel-build-boleto-portal.yml
+          git commit -m 'Aciona build final da auditoria de boleto e portal'
+          git push origin HEAD:cloudflare-provedor-plus

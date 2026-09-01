@@ -112,27 +112,20 @@
   }
 
   async function reconcile(state){
-    let clients=(Array.isArray(state.clients)?state.clients:[]).map(normalize),remote=[];
-    try{remote=await cloudData('clients.list')}catch(error){console.error('Provedor Plus: falha ao ler clientes normalizados da nuvem.',error);return {state,clients,changed:false}}
+    const localClients=(Array.isArray(state.clients)?state.clients:[]).map(normalize);let remote=[];
+    try{remote=await cloudData('clients.list')}catch(error){console.error('Provedor Plus: falha ao ler clientes normalizados da nuvem.',error);return {state,clients:localClients,changed:false}}
     remote=Array.isArray(remote)?remote.map(normalize):[];
-    let changed=false;
-    for(let i=0;i<clients.length;i++){
-      let local=clients[i],cloud=remote.find(r=>sameIdentity(local,r));
-      if(!cloud){
-        try{cloud=normalize(await cloudData('clients.save',local));remote.push(cloud);changed=true}catch(error){console.error('Provedor Plus: falha ao normalizar cliente na nuvem.',error);continue}
-      }
-      if(cloud?.id&&Number(local.id)!==Number(cloud.id)){remapClientReferences(state,local.id,cloud.id);local={...local,id:Number(cloud.id)};changed=true}
-      const merged=overlayCloudFields(local,cloud);
-      if(JSON.stringify(merged)!==JSON.stringify(clients[i]))changed=true;
-      clients[i]=merged;
+    const clients=[];
+    for(const cloud of remote){
+      let local=localClients.find(row=>sameIdentity(row,cloud))||null;
+      if(local&&cloud?.id&&Number(local.id)!==Number(cloud.id)){remapClientReferences(state,local.id,cloud.id);local={...local,id:Number(cloud.id)}}
+      clients.push(local?overlayCloudFields(local,cloud):normalize(cloud));
     }
-    for(const cloud of remote)if(!clients.some(c=>sameIdentity(c,cloud))){clients.push(normalize(cloud));changed=true}
     const deduped=dedupeClients(clients);
-    if(deduped.length!==clients.length||JSON.stringify(deduped)!==JSON.stringify(clients))changed=true;
-    clients=deduped;
-    clients.sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'pt-BR'));
-    if(changed){state={...state,clients};state=await writeState(state)}
-    return {state,clients:Array.isArray(state.clients)?dedupeClients(state.clients):clients,changed};
+    deduped.sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'pt-BR'));
+    const changed=JSON.stringify(deduped)!==JSON.stringify(dedupeClients(localClients));
+    if(changed){state={...state,clients:deduped};state=await writeState(state)}
+    return {state,clients:Array.isArray(state.clients)?dedupeClients(state.clients):deduped,changed};
   }
 
   async function list(){
@@ -162,6 +155,8 @@
   async function remove(id){
     id=Number(id)||0;if(!id)return {deleted:false,id};
     await cloudData('clients.delete',{id});
+    const remaining=await cloudData('clients.list');
+    if((Array.isArray(remaining)?remaining:[]).some(c=>Number(c?.id)===id))throw new Error('O cliente ainda existe na nuvem após a exclusão. Tente novamente.');
     let state=await readState();
     state.clients=(Array.isArray(state.clients)?state.clients:[]).filter(c=>Number(c?.id)!==id);
     state.invoices=(Array.isArray(state.invoices)?state.invoices:[]).map(row=>Number(row?.client_id)===id?{...row,client_id:null}:row);

@@ -3,14 +3,112 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+<meta name="robots" content="noindex,nofollow" />
 <meta http-equiv="Cache-Control" content="no-store,no-cache,must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https://viacep.com.br; font-src 'self' data:; frame-src 'self' https:;" />
-<title>Provedor Plus</title>
-<!-- Provedor Plus cloud17: clientes, status, credenciais e tráfego centralizados na nuvem -->
-<link rel="stylesheet" href="/client-status-loader-cover.css?v=1017-status-loader3" />
-<script defer src="/bootstrap.js?v=1017-cloud17-prod7"></script>
+<title>Área do Cliente | Fibra+</title>
+<style>
+:root{color-scheme:dark;--bg:#0d0914;--card:#181020;--card2:#21142c;--purple:#7626d7;--purple2:#9b2fc8;--orange:#ff7500;--green:#2fd38a;--red:#ff6464;--text:#fff;--muted:#bcb4c7;--line:rgba(255,255,255,.1)}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;font-family:Inter,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--text)}button,input{font:inherit}.hidden{display:none!important}
+body{min-height:100vh;background:radial-gradient(circle at 70% 0%,rgba(117,38,215,.22),transparent 38%),radial-gradient(circle at 0% 100%,rgba(255,117,0,.12),transparent 34%),#0d0914}
+.login-shell{min-height:100vh;display:grid;grid-template-columns:minmax(0,1.1fr) minmax(420px,.9fr)}
+.hero{position:relative;display:flex;align-items:flex-end;padding:64px;overflow:hidden;background:linear-gradient(145deg,rgba(20,12,31,.62),rgba(43,18,58,.92))}
+.hero:before{content:"";position:absolute;inset:0;background:radial-gradient(circle at 28% 30%,rgba(255,117,0,.16),transparent 26%),linear-gradient(135deg,transparent 35%,rgba(126,32,184,.26));pointer-events:none}
+.hero-copy{position:relative;max-width:570px}.brand{display:flex;align-items:center;gap:11px;font-size:42px;font-weight:900;letter-spacing:-2px;margin-bottom:25px}.brand-mark{width:54px;height:11px;border-radius:999px;background:linear-gradient(90deg,var(--orange),var(--purple));box-shadow:0 0 24px rgba(151,45,216,.3)}.brand span{color:var(--orange)}
+.hero h1{font-size:clamp(36px,5vw,62px);line-height:1.02;margin:0 0 18px;letter-spacing:-2px}.hero p{color:#ddd3e5;font-size:17px;line-height:1.55;max-width:510px;margin:0}
+.login-side{display:grid;place-items:center;padding:34px}.login-card{width:min(100%,520px);padding:34px;border:1px solid var(--line);border-radius:26px;background:rgba(23,15,31,.94);box-shadow:0 28px 90px rgba(0,0,0,.38)}
+.eyebrow{font-size:12px;font-weight:800;letter-spacing:.13em;text-transform:uppercase;color:#c5a5ef}.login-card h2{font-size:30px;margin:9px 0 8px}.login-card>p{color:var(--muted);margin:0 0 25px;line-height:1.5}
+.mode-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-bottom:16px}.mode-btn{border:1px solid var(--line);border-radius:13px;padding:12px 8px;background:#251a2d;color:#ddd;cursor:pointer;font-size:13px;font-weight:800}.mode-btn.active{border-color:var(--orange);background:rgba(255,117,0,.12);color:#fff}
+.field{display:block;margin-bottom:14px}.field span{display:block;color:#cfc8d5;font-size:12px;font-weight:700;margin:0 0 7px}.field input{width:100%;border:1px solid var(--line);border-radius:14px;padding:15px 16px;background:#110c17;color:#fff;outline:none;font-size:16px}.field input:focus{border-color:#8d39dd;box-shadow:0 0 0 3px rgba(141,57,221,.12)}
+.remember{display:flex;align-items:center;gap:9px;color:#bdb4c5;font-size:13px;margin:2px 0 18px}.remember input{accent-color:var(--orange)}.primary{width:100%;border:0;border-radius:14px;padding:15px 18px;background:linear-gradient(90deg,var(--purple),var(--purple2));color:#fff;font-weight:900;cursor:pointer;box-shadow:0 14px 30px rgba(118,38,215,.2)}.primary:disabled{opacity:.65;cursor:wait}.login-error{margin-top:14px;padding:11px 13px;border-radius:12px;background:rgba(255,92,92,.1);border:1px solid rgba(255,92,92,.22);color:#ffb3b3;font-size:13px}
+.app{min-height:100vh}.topbar{height:76px;display:flex;align-items:center;justify-content:space-between;padding:0 34px;border-bottom:1px solid var(--line);background:rgba(13,9,20,.86);backdrop-filter:blur(16px);position:sticky;top:0;z-index:5}.top-brand{font-size:25px;font-weight:900}.top-brand span{color:var(--orange)}.userbox{display:flex;align-items:center;gap:12px}.usertext{text-align:right}.usertext strong{display:block;font-size:13px}.usertext small{color:var(--muted)}.logout{border:1px solid var(--line);background:#211729;color:#fff;border-radius:12px;padding:9px 12px;cursor:pointer}
+.content{width:min(1180px,calc(100% - 40px));margin:0 auto;padding:38px 0 60px}.page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:24px}.page-head h1{font-size:34px;margin:0 0 6px}.page-head p{margin:0;color:var(--muted)}.refresh-note{font-size:12px;color:var(--muted)}
+.connection-card{border:1px solid var(--line);border-radius:26px;background:linear-gradient(145deg,rgba(33,20,44,.96),rgba(21,14,29,.98));box-shadow:0 25px 70px rgba(0,0,0,.25);overflow:hidden}.connection-main{padding:28px}.status-line{display:flex;align-items:center;justify-content:space-between;gap:14px;padding-bottom:22px;border-bottom:1px solid var(--line)}.status-title{display:flex;align-items:center;gap:11px;font-size:22px;font-weight:900}.dot{width:13px;height:13px;border-radius:50%;background:#777;box-shadow:0 0 0 6px rgba(255,255,255,.03)}.dot.online{background:var(--green);box-shadow:0 0 0 6px rgba(47,211,138,.1),0 0 22px rgba(47,211,138,.28)}.dot.offline{background:var(--red)}.status-detail{color:var(--muted);font-size:13px;margin-top:4px}.live-badge{padding:8px 11px;border-radius:999px;background:rgba(47,211,138,.09);color:#8cf1bf;border:1px solid rgba(47,211,138,.16);font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.08em}
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:20px}.metric{min-height:112px;border:1px solid var(--line);border-radius:17px;background:rgba(255,255,255,.025);padding:17px}.metric-label{color:#a99faf;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;margin-bottom:9px}.metric-value{font-size:20px;font-weight:900;word-break:break-word}.metric-sub{font-size:11px;color:#8f8796;margin-top:7px;line-height:1.35}.metric.wide{grid-column:span 2}
+.test-wrap{display:flex;align-items:center;gap:14px;padding:22px 28px;border-top:1px solid var(--line);background:rgba(0,0,0,.1)}.test-btn{border:0;border-radius:14px;padding:13px 18px;background:linear-gradient(90deg,var(--orange),#ef5a00);color:#fff;font-weight:900;cursor:pointer}.test-btn:disabled{opacity:.6;cursor:wait}.test-result{color:var(--muted);font-size:13px}
+@media(max-width:900px){.login-shell{grid-template-columns:1fr}.hero{min-height:290px;padding:38px}.login-side{padding:22px}.metrics{grid-template-columns:repeat(2,1fr)}.metric.wide{grid-column:span 1}}
+@media(max-width:560px){.hero{padding:28px;min-height:250px}.brand{font-size:31px}.hero h1{font-size:37px}.login-card{padding:24px 18px}.mode-tabs{gap:6px}.mode-btn{font-size:11px}.topbar{padding:0 17px}.content{width:min(100% - 24px,1180px);padding-top:25px}.page-head{display:block}.refresh-note{margin-top:8px}.connection-main{padding:19px}.status-line{align-items:flex-start}.metrics{grid-template-columns:1fr}.test-wrap{display:block;padding:18px}.test-btn{width:100%;margin-bottom:10px}.usertext{display:none}}
+</style>
 </head>
-<body><div id="root"></div></body>
+<body>
+<section id="loginView" class="login-shell">
+  <div class="hero">
+    <div class="hero-copy">
+      <div class="brand"><div class="brand-mark"></div>Fibra<span>+</span></div>
+      <h1>Sua internet Fibra+ na palma da sua mão</h1>
+      <p>Acesse sua conta e acompanhe sua conexão diretamente pelo portal do assinante.</p>
+    </div>
+  </div>
+  <div class="login-side">
+    <form id="loginForm" class="login-card" autocomplete="off">
+      <div class="eyebrow">Área do Cliente</div>
+      <h2>Acessar minha conta</h2>
+      <p>Entre com CPF, CNPJ ou contrato do titular.</p>
+      <div class="mode-tabs" role="tablist">
+        <button class="mode-btn active" type="button" data-mode="cpf">CPF</button>
+        <button class="mode-btn" type="button" data-mode="cnpj">CNPJ</button>
+        <button class="mode-btn" type="button" data-mode="contract">Contrato</button>
+      </div>
+      <label class="field"><span id="fieldLabel">CPF do titular</span><input id="credential" inputmode="numeric" placeholder="Digite o CPF" required /></label>
+      <label class="remember"><input id="remember" type="checkbox" /> Lembrar meus dados neste computador</label>
+      <button id="loginButton" class="primary" type="submit">Entrar</button>
+      <div id="loginError" class="login-error hidden"></div>
+    </form>
+  </div>
+</section>
+
+<section id="appView" class="app hidden">
+  <header class="topbar">
+    <div class="top-brand">Fibra<span>+</span></div>
+    <div class="userbox"><div class="usertext"><strong id="clientName">Cliente</strong><small id="clientContract">Contrato</small></div><button id="logoutButton" class="logout" type="button">Sair</button></div>
+  </header>
+  <main class="content">
+    <div class="page-head"><div><h1>Minha Conexão</h1><p>Acompanhe o estado atual da sua internet Fibra+.</p></div><div id="lastUpdate" class="refresh-note"></div></div>
+    <section class="connection-card">
+      <div class="connection-main">
+        <div class="status-line">
+          <div><div class="status-title"><span id="statusDot" class="dot"></span><span id="statusText">AGUARDANDO</span></div><div id="statusDetail" class="status-detail">Carregando situação da conexão...</div></div>
+          <div id="liveBadge" class="live-badge">Dados do Provedor Plus</div>
+        </div>
+        <div class="metrics">
+          <article class="metric wide"><div class="metric-label">Plano</div><div id="planValue" class="metric-value">—</div><div class="metric-sub">Plano contratado</div></article>
+          <article class="metric wide"><div class="metric-label">IP</div><div id="ipValue" class="metric-value">—</div><div class="metric-sub">Endereço IP atual</div></article>
+          <article class="metric"><div class="metric-label">Download agora</div><div id="downloadValue" class="metric-value">Aguardando medição</div><div class="metric-sub">Será ligado às métricas do MikroTik</div></article>
+          <article class="metric"><div class="metric-label">Upload agora</div><div id="uploadValue" class="metric-value">Aguardando medição</div><div class="metric-sub">Será ligado às métricas do MikroTik</div></article>
+          <article class="metric"><div class="metric-label">Latência</div><div id="latencyValue" class="metric-value">Aguardando medição</div><div class="metric-sub">Tempo de resposta da conexão</div></article>
+          <article class="metric"><div class="metric-label">Perda</div><div id="lossValue" class="metric-value">Aguardando medição</div><div class="metric-sub">Perda de pacotes</div></article>
+          <article class="metric wide"><div class="metric-label">Disponibilidade 30 dias</div><div id="availabilityValue" class="metric-value">Aguardando histórico</div><div class="metric-sub">Será calculada com o histórico de conexão</div></article>
+          <article class="metric wide"><div class="metric-label">Última leitura do MikroTik</div><div id="lastConnectionValue" class="metric-value">—</div><div class="metric-sub">Última sincronização informada pelo Provedor Plus</div></article>
+        </div>
+      </div>
+      <div class="test-wrap"><button id="testButton" class="test-btn" type="button">Testar minha conexão</button><div id="testResult" class="test-result">Atualiza os dados reais disponíveis no Provedor Plus.</div></div>
+    </section>
+  </main>
+</section>
+
+<script>
+(()=>{
+  'use strict';
+  const API='https://painel.fibramais.workers.dev/api/customer-portal';
+  const $=id=>document.getElementById(id);
+  const state={mode:'cpf',credential:'',payload:null};
+  const loginView=$('loginView'),appView=$('appView'),credential=$('credential'),remember=$('remember'),loginError=$('loginError'),loginButton=$('loginButton');
+  const modeInfo={cpf:{label:'CPF do titular',placeholder:'Digite o CPF',inputmode:'numeric'},cnpj:{label:'CNPJ do titular',placeholder:'Digite o CNPJ',inputmode:'numeric'},contract:{label:'Número do contrato',placeholder:'Digite o contrato',inputmode:'text'}};
+  function onlyDigits(v){return String(v||'').replace(/\D/g,'')}
+  function setMode(mode){state.mode=mode;document.querySelectorAll('.mode-btn').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));const info=modeInfo[mode];$('fieldLabel').textContent=info.label;credential.placeholder=info.placeholder;credential.inputMode=info.inputmode;credential.value='';credential.focus()}
+  document.querySelectorAll('.mode-btn').forEach(btn=>btn.addEventListener('click',()=>setMode(btn.dataset.mode)));
+  function requestData(value){if(state.mode==='contract')return {contract:String(value||'').trim()};const doc=onlyDigits(value);return state.mode==='cnpj'?{cnpj:doc}:{cpf:doc}}
+  async function portalLogin(data){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);try{const response=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'login',data}),signal:controller.signal,cache:'no-store'});let body={};try{body=await response.json()}catch{}if(!response.ok||!body.ok)throw new Error(body.error||`Não foi possível entrar (HTTP ${response.status}).`);return body.data||{}}finally{clearTimeout(timer)}}
+  function metric(id,value,suffix=''){const el=$(id);const v=value===0?0:(value||'');if(v!==''&&v!==null&&v!==undefined)el.textContent=`${v}${suffix}`}
+  function relativeDate(value){if(!value)return '';const date=new Date(value);if(Number.isNaN(date.getTime()))return String(value);const seconds=Math.max(0,Math.round((Date.now()-date.getTime())/1000));if(seconds<60)return 'agora';if(seconds<3600)return `há ${Math.floor(seconds/60)} min`;if(seconds<86400)return `há ${Math.floor(seconds/3600)}h ${Math.floor((seconds%3600)/60)}min`;return date.toLocaleString('pt-BR')}
+  function render(data){state.payload=data;const client=data.client||{},conn=data.connection||{};const rawStatus=String(conn.status||client.status||'').trim(),online=/online|conectado|ativo/i.test(rawStatus)&&!/offline|desconectado|bloqueado/i.test(rawStatus);$('clientName').textContent=client.name||'Cliente';$('clientContract').textContent=client.contract?`Contrato ${client.contract}`:'Área do Cliente';$('statusDot').className=`dot ${online?'online':'offline'}`;$('statusText').textContent=online?'ONLINE':(rawStatus?rawStatus.toUpperCase():'AGUARDANDO');const connectedFor=conn.uptime||conn.connectedFor||conn.connected_for||'';$('statusDetail').textContent=online?(connectedFor?`Conectado há ${connectedFor}`:'Conexão ativa'):(rawStatus||'Aguardando confirmação do MikroTik');$('planValue').textContent=client.plan||'Aguardando dados';$('ipValue').textContent=conn.ip||'Aguardando dados';$('lastConnectionValue').textContent=conn.lastConnection?relativeDate(conn.lastConnection):'Aguardando dados';metric('downloadValue',conn.downloadMbps??conn.download_mbps??conn.rxMbps,' Mbps');metric('uploadValue',conn.uploadMbps??conn.upload_mbps??conn.txMbps,' Mbps');metric('latencyValue',conn.latencyMs??conn.latency_ms,' ms');metric('lossValue',conn.packetLoss??conn.packet_loss,'%');metric('availabilityValue',conn.availability30d??conn.availability_30d,'%');$('lastUpdate').textContent=`Atualizado ${new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}`;loginView.classList.add('hidden');appView.classList.remove('hidden')}
+  function rememberCredential(){if(remember.checked){localStorage.setItem('fibraPlusClientLogin',JSON.stringify({mode:state.mode,value:state.credential}))}else localStorage.removeItem('fibraPlusClientLogin')}
+  $('loginForm').addEventListener('submit',async e=>{e.preventDefault();loginError.classList.add('hidden');const value=credential.value.trim();if(!value)return;state.credential=value;loginButton.disabled=true;loginButton.textContent='Conectando...';try{const data=requestData(value),result=await portalLogin(data);rememberCredential();render(result)}catch(error){loginError.textContent=error.name==='AbortError'?'A conexão demorou mais que o esperado. Tente novamente.':(error.message||'Não foi possível acessar sua conta.');loginError.classList.remove('hidden')}finally{loginButton.disabled=false;loginButton.textContent='Entrar'}});
+  $('testButton').addEventListener('click',async()=>{const button=$('testButton'),result=$('testResult');if(!state.credential){result.textContent='Entre novamente para atualizar a conexão.';return}button.disabled=true;button.textContent='Testando...';result.textContent='Consultando o Provedor Plus...';try{const data=await portalLogin(requestData(state.credential));render(data);result.textContent='Dados atualizados com sucesso.'}catch(error){result.textContent=error.message||'Não foi possível atualizar os dados agora.'}finally{button.disabled=false;button.textContent='Testar minha conexão'}});
+  $('logoutButton').addEventListener('click',()=>{state.payload=null;state.credential='';appView.classList.add('hidden');loginView.classList.remove('hidden');credential.value='';credential.focus()});
+  try{const saved=JSON.parse(localStorage.getItem('fibraPlusClientLogin')||'null');if(saved&&modeInfo[saved.mode]){setMode(saved.mode);credential.value=String(saved.value||'');remember.checked=true}}catch{}
+})();
+</script>
+</body>
 </html>

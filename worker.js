@@ -383,6 +383,52 @@ async function portalClientById(sql,clientId){
   return Array.isArray(rows)?rows[0]||null:null;
 }
 
+
+function formatDate(value){
+  const raw=text(value).slice(0,10),match=raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match?`${match[3]}/${match[2]}/${match[1]}`:text(value);
+}
+function invoiceCents(row){
+  const centsKeys=['amount_cents','total_cents','value_cents','price_cents','service_amount_cents'];
+  for(const key of centsKeys){const n=number(row?.[key]);if(n!==null)return Math.max(0,Math.round(n));}
+  const valueKeys=['amount','total','value','price','service_amount'];
+  for(const key of valueKeys){const n=number(row?.[key]);if(n!==null)return Math.max(0,Math.round(n*100));}
+  return 0;
+}
+function brlCents(value){return new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format((Number(value)||0)/100);}
+function invoiceReference(row){
+  const explicit=text(row?.reference||row?.competency||row?.competence||row?.month||row?.period);
+  if(explicit)return explicit;
+  const raw=text(row?.due_date||row?.dueDate).slice(0,10),match=raw.match(/^(\d{4})-(\d{2})-/);
+  return match?`${match[2]}/${match[1]}`:'';
+}
+function mapInvoice(row,client,state){
+  const cents=invoiceCents(row),total=brlCents(cents),planName=text(client.plan_name||client.plan||state?.plans?.find?.(p=>Number(p?.id)===Number(client.plan_id))?.name)||'Serviço de internet',company=state?.settings||state?.company||{};
+  const pdfUrl=text(row?.bank_pdf_url||row?.bank_ticket_url||row?.pdf_url||row?.invoice_pdf_url||row?.boleto_pdf_url||row?.bank_slip_pdf_url);
+  const ticketUrl=text(row?.bank_ticket_url||row?.bank_pdf_url||row?.pdf_url||row?.invoice_pdf_url||row?.boleto_pdf_url||row?.bank_slip_pdf_url);
+  const digitableLine=text(row?.bank_digitable_line||row?.digitable_line||row?.linha_digitavel);
+  return {
+    id:row?.id??null,reference:invoiceReference(row),dueDate:formatDate(row?.due_date||row?.dueDate),dueDateRaw:text(row?.due_date||row?.dueDate),
+    total,totalNumber:cents/100,amountCents:cents,status:text(row?.status)||'Pendente',serviceName:planName,serviceAmount:total,serviceAmountRaw:total,subtotal:total,quantity:'1',unitAmount:total,
+    customerName:text(client.name),customerDocument:text(client.document),customerAddress:[client.address||client.street,client.city,client.state].map(text).filter(Boolean).join(' - '),customerWhatsapp:text(client.phone||client.whatsapp),contract:text(client.contract_number),
+    companyName:text(company.company_name||company.companyName||company.name)||'Fibra+',companyCnpj:text(company.cnpj||company.company_cnpj),companyIe:text(company.ie||company.state_registration||company.inscricao_estadual),companyWhatsapp:text(company.whatsapp||company.phone)||'(92) 98486-7428',
+    pixPaymentUrl:text(row?.pix_payment_url||row?.pixPaymentUrl||row?.pix_url||row?.pixUrl),pixCopyPaste:text(row?.pix_copy_paste||row?.pixCopyPaste||row?.pix_payload||row?.pixPayload||row?.bank_pix_code),pixQrImage:text(row?.pix_qr_image||row?.pixQrImage||row?.pix_qr_url||row?.qr_code_url),cardPaymentUrl:text(row?.card_payment_url||row?.cardPaymentUrl||row?.checkout_url||row?.payment_url),
+    pdfUrl,ticketUrl,digitableLine,barcode:text(row?.bank_barcode||row?.barcode||row?.barcode_content),barcodeImage:text(row?.barcode_image||row?.barcode_url),bankCode:text(row?.bank_code||row?.bankCode),ourNumber:text(row?.our_number||row?.nosso_numero),documentNumber:text(row?.document_number||row?.number||row?.id),bankProvider:text(row?.bank_provider),bankStatus:text(row?.bank_status),
+    cashbackEnabled:row?.cashback_enabled!==false,cashbackRate:number(row?.cashback_rate??state?.settings?.cashback_rate)??null,cashbackPending:number(row?.cashback_pending)??null,cashbackBalance:number(client?.cashback_balance)??0
+  };
+}
+function mapPlan(plan){
+  const cents=number(plan?.price_cents),plain=number(plan?.price??plan?.amount);
+  return {id:plan?.id??null,name:text(plan?.name||plan?.title)||'Plano Fibra+',speed:text(plan?.speed||plan?.bandwidth),description:text(plan?.description),price:cents!==null?cents/100:(plain??0),highlight:plan?.highlight===true,badge:text(plan?.badge||plan?.category)||'Plano Fibra+'};
+}
+function sameClient(client,{document='',cpf='',cnpj='',contract=''}){
+  const requestedDocument=digits(document||cpf||cnpj),storedDocument=digits(client?.document),storedContract=text(client?.contract_number),contractDigits=digits(storedContract);
+  const byDocument=requestedDocument?storedDocument===requestedDocument:false;
+  const byContract=contract?(storedContract===contract||contractDigits===digits(contract)):false;
+  if(requestedDocument&&contract)return byDocument&&byContract;
+  return byDocument||byContract;
+}
+
 function portalClientData(client){
   return {
     id:client.id,

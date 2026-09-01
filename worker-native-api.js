@@ -112,7 +112,28 @@ function preservePortalState(incoming,existing){
   for(const item of remoteNegotiations){const id=String(item?.id||'');if(id&&!known.has(id)){localNegotiations.push(item);known.add(id)}}
   if(localNegotiations.length)state.negotiations=localNegotiations;
   const localInvoices=Array.isArray(state.invoices)?[...state.invoices]:[],remoteInvoices=Array.isArray(remote.invoices)?remote.invoices:[],index=new Map(localInvoices.map((item,i)=>[String(item?.id??''),i]));
-  for(const remoteInvoice of remoteInvoices){if(!remoteInvoice?.negotiation_id)continue;const key=String(remoteInvoice?.id??''),position=index.get(key);if(position===undefined){index.set(key,localInvoices.length);localInvoices.push(remoteInvoice);continue}const localInvoice=localInvoices[position];if(!localInvoice?.negotiation_id||String(localInvoice.negotiation_id)!==String(remoteInvoice.negotiation_id))localInvoices[position]=remoteInvoice;}
+  const bankFields=['bank_provider','bank_environment','bank_charge_id','bank_order_id','bank_payment_id','bank_external_reference','bank_status','bank_status_detail','bank_barcode','bank_digitable_line','bank_ticket_url','bank_pdf_url','bank_pix_code','bank_last_sync_at'];
+  const missing=value=>value===undefined||value===null||(typeof value==='string'&&!value.trim());
+  for(const remoteInvoice of remoteInvoices){
+    const key=String(remoteInvoice?.id??''),position=index.get(key);
+    if(remoteInvoice?.negotiation_id){
+      if(position===undefined){index.set(key,localInvoices.length);localInvoices.push(remoteInvoice);continue}
+      const localInvoice=localInvoices[position];
+      if(!localInvoice?.negotiation_id||String(localInvoice.negotiation_id)!==String(remoteInvoice.negotiation_id))localInvoices[position]=remoteInvoice;
+      continue;
+    }
+    if(position===undefined)continue;
+    const localInvoice=localInvoices[position];
+    if(!localInvoice||typeof localInvoice!=='object')continue;
+    let merged=localInvoice,changed=false;
+    for(const field of bankFields){
+      if(missing(localInvoice[field])&&!missing(remoteInvoice?.[field])){
+        if(!changed){merged={...localInvoice};changed=true}
+        merged[field]=remoteInvoice[field];
+      }
+    }
+    if(changed)localInvoices[position]=merged;
+  }
   if(localInvoices.length)state.invoices=localInvoices;
   const maxInvoiceId=Math.max(Number(state?.seq?.invoices)||0,...localInvoices.map(item=>Number(item?.id)||0));if(maxInvoiceId)state.seq={...(state.seq||{}),invoices:maxInvoiceId};
   return state;

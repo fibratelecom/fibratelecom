@@ -1,0 +1,51 @@
+name: "Corrigir identidade do cliente Efí"
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+      - name: "Corrigir seleção do cliente e diagnóstico Efí"
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          worker=Path('worker.js')
+          s=worker.read_text(encoding='utf-8')
+          old="""  const sql=neon(env.DATABASE_URL),rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code FROM pp_clients WHERE id=${clientId} LIMIT 1`,fresh=Array.isArray(rows)?rows[0]:null;
+"""
+          new="""  const sql=neon(env.DATABASE_URL),contract=text(body.client?.contract_number||body.invoice?.client_contract_number||body.invoice?.contract_number);let rows=[];
+  if(contract)rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,updated_at FROM pp_clients WHERE id=${clientId} OR contract_number=${contract} ORDER BY updated_at DESC NULLS LAST,CASE WHEN id=${clientId} THEN 0 ELSE 1 END LIMIT 1`;
+  else rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,updated_at FROM pp_clients WHERE id=${clientId} LIMIT 1`;
+  const fresh=Array.isArray(rows)?rows[0]:null;
+"""
+          if s.count(old)!=1:
+              raise SystemExit(f'Bloco de atualização do cliente encontrado {s.count(old)} vez(es); abortando.')
+          worker.write_text(s.replace(old,new),encoding='utf-8')
+
+          bank=Path('worker-bank-native.js')
+          b=bank.read_text(encoding='utf-8')
+          old2="""const r=await jsonRequest(`${a.base}/v1/charge/one-step`,{method:'POST',headers:{Authorization:`Bearer ${a.token}`},body,timeout:30000});if(r.status<200||r.status>=300||!r.data?.data?.charge_id)throw new Error(errMsg('Efí Bank',r.status,r.data));const x=r.data.data;"""
+          new2="""const r=await jsonRequest(`${a.base}/v1/charge/one-step`,{method:'POST',headers:{Authorization:`Bearer ${a.token}`},body,timeout:30000});if(r.status<200||r.status>=300||!r.data?.data?.charge_id){const message=errMsg('Efí Bank',r.status,r.data);if(/recebedor.*cliente.*mesma pessoa|cliente.*recebedor.*mesma pessoa/i.test(message))throw new Error(`${message} Documento do cliente enviado termina em ${c.document.slice(-4)}.`);throw new Error(message)}const x=r.data.data;"""
+          if b.count(old2)!=1:
+              raise SystemExit(f'Bloco de emissão Efí encontrado {b.count(old2)} vez(es); abortando.')
+          bank.write_text(b.replace(old2,new2),encoding='utf-8')
+          PY
+          node --check worker.js
+          node --check worker-bank-native.js
+          grep -q "ORDER BY updated_at DESC" worker.js
+          grep -q "Documento do cliente enviado termina" worker-bank-native.js
+      - name: "Publicar correção e remover aplicador"
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/fix-efi-customer-identity.yml
+          git add worker.js worker-bank-native.js
+          git commit -m "Corrige identidade usada na emissão Efí"
+          git push origin HEAD:cloudflare-provedor-plus

@@ -1,0 +1,93 @@
+name: Auditar Área do Cliente ao vivo ponta a ponta
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: ['.github/workflows/audit-live-customer-portal-e2e.yml']
+permissions:
+  contents: write
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+      - name: Auditar Workers ao vivo
+        shell: bash
+        run: |
+          set -u
+          echo '=== DNS / HEAD CLIENT ==='
+          curl -sSvkI --max-time 20 https://client.fibramais.workers.dev/ 2>&1 | sed -n '1,80p' || true
+          echo
+          echo '=== HTML CLIENT ==='
+          curl -sSL --max-time 20 -D /tmp/client.headers https://client.fibramais.workers.dev/ -o /tmp/client.html || true
+          sed -n '1,80p' /tmp/client.headers || true
+          wc -c /tmp/client.html || true
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('/tmp/client.html')
+          s=p.read_text(errors='ignore') if p.exists() else ''
+          print('HTML_LENGTH',len(s))
+          for needle in ['Sua internet Fibra+','Conectando','customer-portal','painel.fibramais','fetch(','XMLHttpRequest','CPF','CNPJ','Contrato']:
+              print('\nNEEDLE',needle,'COUNT',s.lower().count(needle.lower()))
+              start=0
+              for _ in range(5):
+                  pos=s.lower().find(needle.lower(),start)
+                  if pos<0: break
+                  print(s[max(0,pos-900):min(len(s),pos+2600)].replace('\n',' '))
+                  print('---')
+                  start=pos+len(needle)
+          scripts=re.findall(r'<script[^>]+src=["\']([^"\']+)',s,re.I)
+          print('\nSCRIPTS',scripts)
+          Path('/tmp/scripts.txt').write_text('\n'.join(scripts))
+          PY
+          echo
+          echo '=== JS EXTERNOS ==='
+          while IFS= read -r src; do
+            [ -z "$src" ] && continue
+            case "$src" in
+              http*) url="$src" ;;
+              /*) url="https://client.fibramais.workers.dev$src" ;;
+              *) url="https://client.fibramais.workers.dev/$src" ;;
+            esac
+            echo "--- $url ---"
+            f="/tmp/js-$(echo "$url" | sha256sum | cut -c1-12).txt"
+            curl -sSL --max-time 20 "$url" -o "$f" || true
+            wc -c "$f" || true
+            python3 - "$f" <<'PY'
+          import sys,re
+          from pathlib import Path
+          s=Path(sys.argv[1]).read_text(errors='ignore') if Path(sys.argv[1]).exists() else ''
+          for needle in ['Conectando','customer-portal','painel.fibramais','fetch(','CPF','sessionToken','login']:
+              positions=[m.start() for m in re.finditer(re.escape(needle),s,re.I)]
+              if positions:
+                  print('NEEDLE',needle,'COUNT',len(positions))
+                  for pos in positions[:8]:
+                      print(s[max(0,pos-1200):min(len(s),pos+3500)].replace('\n',' '))
+                      print('---')
+          PY
+          done < /tmp/scripts.txt
+          echo
+          echo '=== PREFLIGHT REAL ==='
+          curl -sS -i --max-time 20 -X OPTIONS 'https://painel.fibramais.workers.dev/api/customer-portal' \
+            -H 'Origin: https://client.fibramais.workers.dev' \
+            -H 'Access-Control-Request-Method: POST' \
+            -H 'Access-Control-Request-Headers: content-type' | sed -n '1,120p' || true
+          echo
+          echo '=== POST CPF FICTICIO ==='
+          curl -sS -i --max-time 25 -w '\nCURL_TIME_TOTAL:%{time_total}\nHTTP_CODE:%{http_code}\n' \
+            -X POST 'https://painel.fibramais.workers.dev/api/customer-portal' \
+            -H 'Origin: https://client.fibramais.workers.dev' \
+            -H 'Content-Type: application/json' \
+            --data '{"action":"login","data":{"document":"00000000000","cpf":"00000000000"}}' | sed -n '1,180p' || true
+      - name: Remover auditor temporário
+        if: always()
+        shell: bash
+        run: |
+          rm -f .github/workflows/audit-live-customer-portal-e2e.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/audit-live-customer-portal-e2e.yml
+          git commit -m 'Remove auditor temporario do portal ao vivo' || true
+          git push origin HEAD:cloudflare-provedor-plus

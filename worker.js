@@ -1,3 +1,4 @@
+// pp-build: 20260901-boleto-portal-sync-final
 import { neon } from '@neondatabase/serverless';
 import { handleNativeAuth,handleNativeCloudState,handleNativeCloudData } from './worker-native-api.js';
 import { handleBankProxy } from './worker-bank-native.js';

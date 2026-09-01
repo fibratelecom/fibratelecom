@@ -330,7 +330,7 @@ async function handleSpecializedNative(request,env){
     else await requirePanelPermission(request,env,'network');
   }catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||401,{'x-provedor-plus-edge':'cloudflare-native-integration'})}
   if(path==='/api/bank-proxy'){
-    try{return handleBankProxy(await refreshBankClientRequest(request,env))}
+    try{return handleBankProxy(await refreshBankClientRequest(request,env),env)}
     catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,{'x-provedor-plus-edge':'cloudflare-native-integration'})}
   }
   return handleMikrotikProxy(request);
@@ -605,7 +605,7 @@ async function sha256Hex(value){
 function serviceToken(){const bytes=new Uint8Array(32);crypto.getRandomValues(bytes);return base64Url(bytes)}
 
 async function bankProxyAsService(env,sql,payload){
-  const response=await handleBankProxy(new Request('https://painel.fibramais.workers.dev/api/bank-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}));
+  const response=await handleBankProxy(new Request('https://painel.fibramais.workers.dev/api/bank-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),env);
   let body={};try{body=await response.json()}catch{}
   if(!response.ok||!body.ok)throw Object.assign(new Error(body?.error||`Falha na integração bancária Cloudflare (HTTP ${response.status}).`),{statusCode:response.status>=400&&response.status<500?409:502});
   return body.data||{};

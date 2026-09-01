@@ -1,0 +1,74 @@
+name: Auditar cliente 3 no backend do Provedor Plus
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: ['.github/workflows/audit-live-panel-client3.yml']
+permissions:
+  contents: write
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+      - name: Testar login real pelo contrato sem expor dados pessoais
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json,time,urllib.request,urllib.error
+          url='https://painel.fibramais.workers.dev/api/customer-portal'
+          payload=json.dumps({'action':'login','data':{'contract':'CTR-2026-000004'}}).encode()
+          req=urllib.request.Request(url,data=payload,method='POST',headers={'Origin':'https://client.fibramais.workers.dev','Content-Type':'application/json'})
+          start=time.time()
+          try:
+              with urllib.request.urlopen(req,timeout=25) as r:
+                  status=r.status; headers=dict(r.headers); raw=r.read().decode('utf-8','replace')
+          except urllib.error.HTTPError as e:
+              status=e.code; headers=dict(e.headers); raw=e.read().decode('utf-8','replace')
+          except Exception as e:
+              print('TRANSPORT_ERROR',type(e).__name__,str(e)); raise
+          elapsed=time.time()-start
+          print('HTTP_STATUS',status)
+          print('ELAPSED_SECONDS',round(elapsed,3))
+          print('ALLOW_ORIGIN',headers.get('Access-Control-Allow-Origin'))
+          try: body=json.loads(raw)
+          except Exception:
+              print('JSON_VALID',False); print('BODY_LENGTH',len(raw)); raise
+          print('JSON_VALID',True)
+          print('OK',body.get('ok'))
+          if not body.get('ok'):
+              print('ERROR',body.get('error'))
+          data=body.get('data') or {}
+          client=data.get('client') or {}
+          print('SESSION_PRESENT',bool(data.get('session')))
+          print('CLIENT_ID',client.get('id'))
+          print('CLIENT_NAME_PRESENT',bool(client.get('name')))
+          print('CLIENT_DOCUMENT_LAST4', ''.join(ch for ch in str(client.get('document') or '') if ch.isdigit())[-4:])
+          print('CLIENT_CONTRACT',client.get('contract'))
+          invoices=data.get('invoices') if isinstance(data.get('invoices'),list) else []
+          print('INVOICE_COUNT',len(invoices))
+          current=data.get('invoice') or {}
+          print('CURRENT_INVOICE_ID',current.get('id'))
+          print('CURRENT_STATUS',current.get('status'))
+          print('CURRENT_BANK_PROVIDER',current.get('bankProvider'))
+          print('CURRENT_BANK_STATUS',current.get('bankStatus'))
+          print('CURRENT_TICKET_URL_PRESENT',bool(current.get('ticketUrl')))
+          print('CURRENT_PDF_URL_PRESENT',bool(current.get('pdfUrl')))
+          print('CURRENT_DIGITABLE_LINE_PRESENT',bool(current.get('digitableLine')))
+          print('CURRENT_BARCODE_PRESENT',bool(current.get('barcode')))
+          print('PLANS_COUNT',len(data.get('plans') or []))
+          print('PROTOCOLS_COUNT',len(data.get('protocols') or []))
+          print('NEGOTIATIONS_COUNT',len(data.get('negotiations') or []))
+          print('CONNECTION_KEYS',sorted((data.get('connection') or {}).keys()))
+          PY
+      - name: Remover auditor temporário
+        if: always()
+        shell: bash
+        run: |
+          rm -f .github/workflows/audit-live-panel-client3.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/audit-live-panel-client3.yml
+          git commit -m 'Remove auditor temporario do cliente 3' || true
+          git push origin HEAD:cloudflare-provedor-plus

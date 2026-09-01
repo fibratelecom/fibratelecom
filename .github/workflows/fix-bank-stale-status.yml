@@ -1,0 +1,58 @@
+name: "Limpar status bancario antigo"
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+      - name: "Invalidar teste quando credencial mudar"
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          def one(s,old,new,label):
+              n=s.count(old)
+              if n!=1: raise SystemExit(f'{label}: encontrado {n} vez(es)')
+              return s.replace(old,new,1)
+
+          p=Path('worker.js');s=p.read_text(encoding='utf-8')
+          s=one(s,
+          "  const certificateBase64=data.removeCertificate===true?'':data.certificateBase64===undefined?String(previous.certificateBase64||''):String(data.certificateBase64||'');\n  if(certificateBase64.length>2500000)",
+          "  const certificateBase64=data.removeCertificate===true?'':data.certificateBase64===undefined?String(previous.certificateBase64||''):String(data.certificateBase64||'');\n  const resetTest=data.clientId!==undefined||data.clientSecret!==undefined||data.certificatePassword!==undefined||data.certificateBase64!==undefined||data.removeCertificate===true;\n  if(certificateBase64.length>2500000)",
+          'reset Efí')
+          s=one(s,
+          "    lastTestStatus:text(previous.lastTestStatus),lastTestMessage:text(previous.lastTestMessage),lastTestAt:text(previous.lastTestAt),webhookConfiguredAt:text(previous.webhookConfiguredAt)",
+          "    lastTestStatus:resetTest?'':text(previous.lastTestStatus),lastTestMessage:resetTest?'':text(previous.lastTestMessage),lastTestAt:resetTest?'':text(previous.lastTestAt),webhookConfiguredAt:resetTest?'':text(previous.webhookConfiguredAt)",
+          'status Efí')
+          s=one(s,
+          "function mergeMercadoPagoBank(current,data={}){\n  const previous=current?.mercadoPago||emptyBankSettings().mercadoPago;\n  return {",
+          "function mergeMercadoPagoBank(current,data={}){\n  const previous=current?.mercadoPago||emptyBankSettings().mercadoPago;\n  const resetTest=data.accessToken!==undefined;\n  return {",
+          'reset Mercado Pago')
+          s=one(s,
+          "    lastTestStatus:text(previous.lastTestStatus),lastTestMessage:text(previous.lastTestMessage),lastTestAt:text(previous.lastTestAt)\n  };\n}\n\nfunction safeBankSettings",
+          "    lastTestStatus:resetTest?'':text(previous.lastTestStatus),lastTestMessage:resetTest?'':text(previous.lastTestMessage),lastTestAt:resetTest?'':text(previous.lastTestAt)\n  };\n}\n\nfunction safeBankSettings",
+          'status Mercado Pago')
+          p.write_text(s,encoding='utf-8')
+
+          u=Path('dashboard-transition-guard.js');d=u.read_text(encoding='utf-8')
+          d=one(d,"${statusClass(efi.lastTestStatus)}","${statusClass(efi.enabled?efi.lastTestStatus:'')}",'cor Efí')
+          d=one(d,"${statusClass(mp.lastTestStatus)}","${statusClass(mp.enabled?mp.lastTestStatus:'')}",'cor Mercado Pago')
+          u.write_text(d,encoding='utf-8')
+          PY
+          node --check worker.js
+          node --check dashboard-transition-guard.js
+          grep -q "const resetTest=data.clientId" worker.js
+          grep -q "const resetTest=data.accessToken" worker.js
+      - name: "Publicar e remover aplicador"
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/fix-bank-stale-status.yml
+          git add worker.js dashboard-transition-guard.js
+          git commit -m "Limpa status bancario ao alterar credenciais"
+          git push origin HEAD:cloudflare-provedor-plus

@@ -9,7 +9,8 @@ const BANK_SETTINGS_KEY='bank_credentials_v1';
 const CUSTOMER_PORTAL_PATH='/api/customer-portal';
 const PROTOCOLS_PATH='/api/protocols';
 const ALLOWED_PORTAL_ORIGINS=new Set([
-  'https://cliente.fibramais.workers.dev'
+  'https://cliente.fibramais.workers.dev',
+  'https://client.fibramais.workers.dev'
 ]);
 
 const text=value=>String(value??'').trim();

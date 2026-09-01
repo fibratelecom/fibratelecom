@@ -44,7 +44,7 @@
     const nativeSet=Storage.prototype.setItem;
     const text=value=>String(value??'').trim();
     const paidInvoice=row=>{
-      const status=text(row?.status||row?.bank_status).toLowerCase();
+      const status=`${text(row?.status)} ${text(row?.bank_status)}`.toLowerCase();
       return Boolean(text(row?.paid_at))||['pago','paid','baixado','settled','concluido','concluído','concluida','concluída'].some(value=>status.includes(value));
     };
     const invoiceCents=row=>{

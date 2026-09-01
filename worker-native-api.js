@@ -167,6 +167,23 @@ async function decryptSecret(record,keyBytes){try{if(!record?.iv||!record?.tag||
 async function routerSecretGet(request,sql,routerId){const id=num(routerId);if(!id)throw Object.assign(new Error('MikroTik inválido.'),{statusCode:400});const ctx=await secretContext(request,sql,id),row=await getSetting(sql,ctx.settingKey),password=await decryptSecret(row?.value,ctx.key);return {configured:Boolean(password),password};}
 async function routerSecretSave(request,sql,routerId,password){const id=num(routerId),value=String(password||'');if(!id)throw Object.assign(new Error('MikroTik inválido.'),{statusCode:400});if(!value)throw Object.assign(new Error('Informe a senha do MikroTik.'),{statusCode:400});const ctx=await secretContext(request,sql,id);await setSetting(sql,ctx.settingKey,await encryptSecret(value,ctx.key));return {configured:true,id};}
 async function routerSecretDelete(request,sql,routerId){const id=num(routerId);if(!id)return {deleted:false,id:null};const ctx=await secretContext(request,sql,id);await deleteSetting(sql,ctx.settingKey);return {deleted:true,id};}
+export async function resolveRouterForService(env,routerId){
+  const sql=sqlFor(env),id=num(routerId);
+  if(!id)throw Object.assign(new Error('MikroTik do cliente não está configurado.'),{statusCode:409});
+  const routers=await sql`SELECT id,name,host,port,username,allow_self_signed,active FROM pp_routers WHERE id=${id} LIMIT 1`,router=Array.isArray(routers)?routers[0]:null;
+  if(!router)throw Object.assign(new Error('MikroTik vinculado ao cliente não foi encontrado.'),{statusCode:404});
+  if(router.active===false)throw Object.assign(new Error('O MikroTik vinculado ao cliente está desativado.'),{statusCode:409});
+  const users=await sql`SELECT id,password_hash,role FROM pp_users ORDER BY CASE WHEN role='admin' THEN 0 ELSE 1 END,id ASC`;
+  for(const user of Array.isArray(users)?users:[]){
+    const userId=Number(user?.id)||0,passwordHash=text(user?.password_hash);if(!userId||!passwordHash)continue;
+    const row=await getSetting(sql,`router_secret_v1_${userId}_${id}`),record=row?.value;
+    if(!record||typeof record!=='object')continue;
+    const key=await sha256Bytes(`provedor-plus-router-secret-v1|${userId}|${passwordHash}`),password=await decryptSecret(record,key);
+    if(password)return {id:Number(router.id),name:text(router.name)||'MikroTik',host:text(router.host),port:num(router.port)||443,username:text(router.username),password,allow_self_signed:bool(router.allow_self_signed,false)};
+  }
+  throw Object.assign(new Error('A credencial segura deste MikroTik não está disponível para o diagnóstico do cliente.'),{statusCode:409});
+}
+export async function recordTrafficForService(env,clientId,live){return trafficRecord(sqlFor(env),{clientId,live});}
 function currentMonth(value=''){const month=text(value);return /^\d{4}-\d{2}$/.test(month)?month:new Date().toISOString().slice(0,7)}
 function trafficEmpty(month=currentMonth()){return {month,download_bytes:0,upload_bytes:0,lastSession:'',lastDownload:0,lastUpload:0,lastAt:0,history:[]}}
 async function trafficRecord(sql,data={}){const clientId=num(data.clientId);if(!clientId)throw Object.assign(new Error('Cliente inválido para registrar tráfego.'),{statusCode:400});const month=currentMonth(data.month),key=`client_traffic_v1_${clientId}`,row=await getSetting(sql,key),all=row?.value&&typeof row.value==='object'?row.value:trafficEmpty(month),live=data.live&&typeof data.live==='object'?data.live:{},t=Date.now();let x={...trafficEmpty(month),...all};if(x.month!==month){const history=x.month?[{month:x.month,download_bytes:Number(x.download_bytes)||0,upload_bytes:Number(x.upload_bytes)||0},...(Array.isArray(x.history)?x.history:[])].slice(0,12):(Array.isArray(x.history)?x.history:[]);x={...trafficEmpty(month),history}}let downloadBps=Number(live.downloadBps)||0,uploadBps=Number(live.uploadBps)||0;if(live.online&&live.sessionId){const d=Math.max(0,Number(live.downloadBytes)||0),u=Math.max(0,Number(live.uploadBytes)||0),same=x.lastSession===String(live.sessionId),dd=same?Math.max(0,d-(Number(x.lastDownload)||0)):d,du=same?Math.max(0,u-(Number(x.lastUpload)||0)):u;if(!downloadBps&&same&&x.lastAt){const seconds=Math.max(.25,(t-Number(x.lastAt))/1000);downloadBps=Math.round(dd*8/seconds);uploadBps=Math.round(du*8/seconds)}x.download_bytes=(Number(x.download_bytes)||0)+dd;x.upload_bytes=(Number(x.upload_bytes)||0)+du;x.lastSession=String(live.sessionId);x.lastDownload=d;x.lastUpload=u;x.lastAt=t}await setSetting(sql,key,x);return {current:{month:x.month,download_bytes:Number(x.download_bytes)||0,upload_bytes:Number(x.upload_bytes)||0},history:Array.isArray(x.history)?x.history:[],downloadBps,uploadBps};}

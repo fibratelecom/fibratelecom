@@ -1,6 +1,6 @@
 // pp-build: 20260901-boleto-portal-sync-final
 import { neon } from '@neondatabase/serverless';
-import { handleNativeAuth,handleNativeCloudState,handleNativeCloudData } from './worker-native-api.js';
+import { handleNativeAuth,handleNativeCloudState,handleNativeCloudData,resolveRouterForService,recordTrafficForService } from './worker-native-api.js';
 import { handleBankProxy } from './worker-bank-native.js';
 import { handleMikrotikProxy } from './worker-mikrotik-native.js';
 
@@ -479,7 +479,54 @@ function safeNegotiation(item){
   };
 }
 
-async function portalSnapshot(client,state,env,sessionToken=''){
+function normalizePortalDate(value){
+  if(!value)return '';
+  const date=value instanceof Date?value:new Date(value);
+  return Number.isNaN(date.getTime())?text(value):date.toISOString();
+}
+function portalDateLabel(value){
+  const iso=normalizePortalDate(value);if(!iso)return '';
+  const date=new Date(iso);if(Number.isNaN(date.getTime()))return text(value);
+  try{return new Intl.DateTimeFormat('pt-BR',{dateStyle:'short',timeStyle:'medium'}).format(date)}catch{return iso}
+}
+async function portalConnectionContext(env,data){
+  if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão nativa com o Neon não configurada na Cloudflare.'),{statusCode:503});
+  const session=await verifyPortalSession(data?.session,env),sql=neon(env.DATABASE_URL),client=await portalClientById(sql,session.clientId);
+  if(!client)throw Object.assign(new Error('Cliente da sessão não foi encontrado.'),{statusCode:404});
+  const state=await loadState(sql);return {session,sql,client,state};
+}
+async function portalLiveConnection(env,sql,client){
+  const checkedFallback=normalizePortalDate(client?.mikrotik_last_sync),storedStatus=text(client?.mikrotik_status||client?.status),storedIp=text(client?.ip);
+  const fallback={
+    status:storedStatus||'Aguardando dados',pppoeStatus:client?.connection_type==='PPPoE'?'Aguardando confirmação':'Não se aplica',pppoeConnected:null,online:null,
+    ip:storedIp||'Aguardando dados',uptime:'',downloadBps:null,uploadBps:null,liveRatesAvailable:false,latencyMs:null,packetLoss:null,availability30Days:null,
+    quality:'Aguardando dados',checkedAt:checkedFallback,lastConnection:checkedFallback||'Aguardando dados',lastConnectionLabel:portalDateLabel(checkedFallback),source:'stored',connectionError:''
+  };
+  if(client?.connection_type!=='PPPoE')return {...fallback,status:storedStatus||'Não se aplica',pppoeStatus:'Não se aplica',quality:'Não se aplica',source:'not-pppoe'};
+  if(!Number(client?.router_id)||!text(client?.pppoe_username))return {...fallback,status:'Aguardando configuração',connectionError:'Cliente sem MikroTik ou usuário PPPoE vinculado.',source:'configuration'};
+  try{
+    const router=await resolveRouterForService(env,client.router_id),response=await handleMikrotikProxy(new Request('https://painel.fibramais.workers.dev/api/mikrotik-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'client.status',router,data:client})}));
+    let body={};try{body=await response.json()}catch{}
+    if(!response.ok||!body.ok)throw new Error(text(body?.error)||`Falha no diagnóstico MikroTik (HTTP ${response.status}).`);
+    const live=body.data||{},checkedAt=normalizePortalDate(live.checkedAt)||new Date().toISOString();let traffic=null;
+    try{traffic=await recordTrafficForService(env,client.id,live)}catch{}
+    const liveDown=Number(live.downloadBps),liveUp=Number(live.uploadBps),trafficDown=Number(traffic?.downloadBps),trafficUp=Number(traffic?.uploadBps);
+    const downloadBps=Number.isFinite(liveDown)?Math.max(0,liveDown):(Number.isFinite(trafficDown)?Math.max(0,trafficDown):null),uploadBps=Number.isFinite(liveUp)?Math.max(0,liveUp):(Number.isFinite(trafficUp)?Math.max(0,trafficUp):null);
+    const latency=live.qualityAvailable&&Number.isFinite(Number(live.latencyMs))?Math.max(0,Math.round(Number(live.latencyMs))):null,loss=live.packetLoss===null||live.packetLoss===undefined||!Number.isFinite(Number(live.packetLoss))?null:Math.max(0,Math.min(100,Math.round(Number(live.packetLoss))));
+    const connection={
+      status:live.online?'Online':'Offline',pppoeStatus:live.online?'Conectado':'Desconectado',pppoeConnected:Boolean(live.online),online:Boolean(live.online),ip:text(live.ip)||storedIp||'Aguardando dados',uptime:text(live.uptime),
+      downloadBps,uploadBps,liveRatesAvailable:Boolean(live.liveRatesAvailable)||(Number(downloadBps)>0)||(Number(uploadBps)>0),latencyMs:latency,packetLoss:loss,availability30Days:null,
+      quality:text(live.quality)||(live.online?'Boa':'Sem conexão'),qualityAvailable:Boolean(live.qualityAvailable),checkedAt,lastConnection:checkedAt,lastConnectionLabel:portalDateLabel(checkedAt),source:'mikrotik-live',connectionError:'',
+      trafficMonth:text(traffic?.current?.month),monthDownloadBytes:Number(traffic?.current?.download_bytes)||0,monthUploadBytes:Number(traffic?.current?.upload_bytes)||0
+    };
+    try{await sql`UPDATE pp_clients SET ip=COALESCE(NULLIF(${text(live.ip)},''),ip),mikrotik_status=${live.online?'Online':'Offline'},mikrotik_last_sync=${checkedAt},updated_at=${checkedAt} WHERE id=${Number(client.id)}`;}catch{}
+    return connection;
+  }catch(error){
+    const checkedAt=new Date().toISOString(),message=error instanceof Error?error.message:String(error);
+    return {...fallback,status:'Indisponível',quality:'Indisponível',checkedAt,lastConnection:checkedFallback||checkedAt,lastConnectionLabel:portalDateLabel(checkedFallback||checkedAt),source:'mikrotik-error',connectionError:message};
+  }
+}
+async function portalSnapshot(client,state,env,sessionToken='',connectionOverride=null){
   const invoices=(Array.isArray(state.invoices)?state.invoices:[])
     .filter(row=>Number(row?.client_id)===Number(client.id))
     .map(row=>mapInvoice(row,client,state))
@@ -509,10 +556,17 @@ async function portalSnapshot(client,state,env,sessionToken=''){
       status:connectionStatus||'Aguardando dados',
       pppoeStatus:client.connection_type==='PPPoE'?(online?'Conectado':'Aguardando confirmação'):'Não se aplica',
       pppoeConnected:client.connection_type==='PPPoE'?online:null,
+      online:client.connection_type==='PPPoE'?online:null,
       ip:text(client.ip)||'Aguardando dados',
-      lastConnection:text(client.mikrotik_last_sync)||'Aguardando dados',
+      lastConnection:normalizePortalDate(client.mikrotik_last_sync)||'Aguardando dados',
+      lastConnectionLabel:portalDateLabel(client.mikrotik_last_sync),
+      checkedAt:normalizePortalDate(client.mikrotik_last_sync),
+      uptime:'',downloadBps:null,uploadBps:null,liveRatesAvailable:false,latencyMs:null,packetLoss:null,
+      availability30Days:null,
       quality:online?'Boa':'Aguardando dados',
-      regionIssue:{active:false,status:'clear',title:'Nenhum problema informado na região',message:'Não há manutenção ou indisponibilidade geral informada no momento.'}
+      source:'stored',connectionError:'',
+      regionIssue:{active:false,status:'clear',title:'Nenhum problema informado na região',message:'Não há manutenção ou indisponibilidade geral informada no momento.'},
+      ...(connectionOverride&&typeof connectionOverride==='object'?connectionOverride:{})
     }
   };
 }
@@ -841,7 +895,14 @@ async function paymentStatusForSession(env,data){
   else if(provider==='efi'&&text(invoice.bank_charge_id)){const remote=await bankProxyAsService(env,ctx.sql,{action:'sync',invoice:bankInvoice(invoice,ctx.client,ctx.state),efi:ctx.banks.secrets.efi,mercadoPago:ctx.banks.secrets.mercadoPago});Object.assign(invoice,remote||{});status=text(remote?.bank_status||invoice.bank_status);paidAt=text(remote?.paidAt);changed=true;const paid=Boolean(paidAt)||['paid','pago','settled','concluida','concluída','concluido','concluído'].some(value=>status.toLowerCase().includes(value));if(paid)markPortalInvoicePaid(invoice,'Pix Efí',paidAt);}
   if(changed)await saveState(ctx.sql,ctx.state);const portal=await portalSnapshot(ctx.client,ctx.state,env,ctx.session.token);return {provider,status:text(invoice.status).toLowerCase().includes('pago')?'approved':status,state:text(invoice.status),paymentId:text(invoice.bank_payment_id||invoice.bank_charge_id),portal};
 }
-async function refreshPortalForSession(env,data){const ctx=await portalPaymentContext(env,data);return portalSnapshot(ctx.client,ctx.state,env,ctx.session.token);}
+async function refreshPortalForSession(env,data){
+  const ctx=await portalConnectionContext(env,data),connection=await portalLiveConnection(env,ctx.sql,ctx.client);
+  return portalSnapshot(ctx.client,ctx.state,env,ctx.session.token,connection);
+}
+async function connectionTestForSession(env,data){
+  const portal=await refreshPortalForSession(env,data),connection=portal?.connection||{};
+  return {...portal,diagnostic:{ok:!connection.connectionError,status:connection.connectionError?'error':'complete',message:connection.connectionError||'Diagnóstico concluído.',checkedAt:connection.checkedAt||new Date().toISOString()}};
+}
 
 async function handleNativeCustomerPortal(request,env){
   const cors=portalCors(request),origin=text(request.headers.get('origin'));
@@ -860,6 +921,7 @@ async function handleNativeCustomerPortal(request,env){
     else if(action==='payment-status')result=await paymentStatusForSession(env,data);
     else if(action==='negotiation-options')result=await negotiationOptionsForSession(env,data);
     else if(action==='negotiate')result=await negotiateForSession(env,data);
+    else if(['connection-test','test-connection','connection-status','connection-diagnostic','diagnostic','diagnose','connection-check','check-connection','diagnostic-connection'].includes(action))result=await connectionTestForSession(env,data);
     else throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});
     return json({ok:true,data:result},200,{...cors,'x-provedor-plus-edge':'cloudflare-native-customer-portal'});
   }catch(error){

@@ -1,0 +1,50 @@
+name: Auditar frontend client com navegador
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: ['.github/workflows/audit-live-client-ui.yml']
+permissions:
+  contents: write
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+      - name: Ler fonte publicada como Chrome
+        shell: bash
+        run: |
+          set -u
+          BASE='https://client.fibramais.workers.dev'
+          UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36'
+          code=$(curl -sSL --max-time 30 -A "$UA" -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' -D /tmp/headers.txt -o /tmp/client-root.html -w '%{http_code}' "$BASE/")
+          echo "ROOT_HTTP=$code"
+          grep -iE '^(content-type|location|server|cf-ray):' /tmp/headers.txt || true
+          echo '=== ROOT MATCHES ==='
+          grep -nE -C 10 'Verificando sua conexão|Verificar minha conexão|Diagnóstico da conexão|Última conexão|lastConnection|connection-test|diagnostic|customer-portal' /tmp/client-root.html || true
+          python3 - <<'PY' > /tmp/scripts.txt
+          import re
+          from pathlib import Path
+          html=Path('/tmp/client-root.html').read_text(errors='ignore')
+          for src in re.findall(r'<script[^>]+src=["\x27]([^"\x27]+)',html,re.I): print(src)
+          PY
+          echo '=== SCRIPTS ==='; cat /tmp/scripts.txt
+          while IFS= read -r src; do
+            [ -n "$src" ] || continue
+            case "$src" in http://*|https://*) url="$src" ;; /*) url="$BASE$src" ;; *) url="$BASE/$src" ;; esac
+            echo "=== SCRIPT $url ==="
+            code=$(curl -sSL --max-time 30 -A "$UA" -H 'Accept: */*' -o /tmp/client-script.js -w '%{http_code}' "$url")
+            echo "SCRIPT_HTTP=$code"
+            grep -nE -C 12 'Verificando sua conexão|Verificar minha conexão|Diagnóstico da conexão|Última conexão|lastConnection|connection-test|test-connection|connection-status|diagnostic|customer-portal' /tmp/client-script.js || true
+          done < /tmp/scripts.txt
+      - name: Remover auditor temporário
+        if: always()
+        shell: bash
+        run: |
+          rm -f .github/workflows/audit-live-client-ui.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/audit-live-client-ui.yml
+          git commit -m 'Remove auditor temporario do frontend client' || true
+          git push origin HEAD:cloudflare-provedor-plus

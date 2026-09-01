@@ -1,0 +1,147 @@
+from pathlib import Path
+
+native=Path('worker-native-api.js')
+s=native.read_text()
+marker="async function routerSecretDelete(request,sql,routerId){const id=num(routerId);if(!id)return {deleted:false,id:null};const ctx=await secretContext(request,sql,id);await deleteSetting(sql,ctx.settingKey);return {deleted:true,id};}\n"
+if marker not in s:
+    raise SystemExit('Ponto seguro dos segredos do MikroTik não encontrado')
+if 'export async function resolveRouterForService' in s:
+    raise SystemExit('Helper interno do roteador já existe; abortando para evitar duplicidade')
+helper=r'''export async function resolveRouterForService(env,routerId){
+  const sql=sqlFor(env),id=num(routerId);
+  if(!id)throw Object.assign(new Error('MikroTik do cliente não está configurado.'),{statusCode:409});
+  const routers=await sql`SELECT id,name,host,port,username,allow_self_signed,active FROM pp_routers WHERE id=${id} LIMIT 1`,router=Array.isArray(routers)?routers[0]:null;
+  if(!router)throw Object.assign(new Error('MikroTik vinculado ao cliente não foi encontrado.'),{statusCode:404});
+  if(router.active===false)throw Object.assign(new Error('O MikroTik vinculado ao cliente está desativado.'),{statusCode:409});
+  const users=await sql`SELECT id,password_hash,role FROM pp_users ORDER BY CASE WHEN role='admin' THEN 0 ELSE 1 END,id ASC`;
+  for(const user of Array.isArray(users)?users:[]){
+    const userId=Number(user?.id)||0,passwordHash=text(user?.password_hash);if(!userId||!passwordHash)continue;
+    const row=await getSetting(sql,`router_secret_v1_${userId}_${id}`),record=row?.value;
+    if(!record||typeof record!=='object')continue;
+    const key=await sha256Bytes(`provedor-plus-router-secret-v1|${userId}|${passwordHash}`),password=await decryptSecret(record,key);
+    if(password)return {id:Number(router.id),name:text(router.name)||'MikroTik',host:text(router.host),port:num(router.port)||443,username:text(router.username),password,allow_self_signed:bool(router.allow_self_signed,false)};
+  }
+  throw Object.assign(new Error('A credencial segura deste MikroTik não está disponível para o diagnóstico do cliente.'),{statusCode:409});
+}
+export async function recordTrafficForService(env,clientId,live){return trafficRecord(sqlFor(env),{clientId,live});}
+'''
+s=s.replace(marker,marker+helper,1)
+native.write_text(s)
+
+worker=Path('worker.js')
+s=worker.read_text()
+old_import="import { handleNativeAuth,handleNativeCloudState,handleNativeCloudData } from './worker-native-api.js';"
+new_import="import { handleNativeAuth,handleNativeCloudState,handleNativeCloudData,resolveRouterForService,recordTrafficForService } from './worker-native-api.js';"
+if old_import not in s:
+    raise SystemExit('Import do worker-native-api não encontrado')
+s=s.replace(old_import,new_import,1)
+
+old_sig="async function portalSnapshot(client,state,env,sessionToken=''){"
+new_sig="async function portalSnapshot(client,state,env,sessionToken='',connectionOverride=null){"
+if old_sig not in s:
+    raise SystemExit('Assinatura portalSnapshot não encontrada')
+s=s.replace(old_sig,new_sig,1)
+
+old_connection='''    connection:{
+      status:connectionStatus||'Aguardando dados',
+      pppoeStatus:client.connection_type==='PPPoE'?(online?'Conectado':'Aguardando confirmação'):'Não se aplica',
+      pppoeConnected:client.connection_type==='PPPoE'?online:null,
+      ip:text(client.ip)||'Aguardando dados',
+      lastConnection:text(client.mikrotik_last_sync)||'Aguardando dados',
+      quality:online?'Boa':'Aguardando dados',
+      regionIssue:{active:false,status:'clear',title:'Nenhum problema informado na região',message:'Não há manutenção ou indisponibilidade geral informada no momento.'}
+    }
+'''
+new_connection='''    connection:{
+      status:connectionStatus||'Aguardando dados',
+      pppoeStatus:client.connection_type==='PPPoE'?(online?'Conectado':'Aguardando confirmação'):'Não se aplica',
+      pppoeConnected:client.connection_type==='PPPoE'?online:null,
+      online:client.connection_type==='PPPoE'?online:null,
+      ip:text(client.ip)||'Aguardando dados',
+      lastConnection:normalizePortalDate(client.mikrotik_last_sync)||'Aguardando dados',
+      lastConnectionLabel:portalDateLabel(client.mikrotik_last_sync),
+      checkedAt:normalizePortalDate(client.mikrotik_last_sync),
+      uptime:'',downloadBps:null,uploadBps:null,liveRatesAvailable:false,latencyMs:null,packetLoss:null,
+      availability30Days:null,
+      quality:online?'Boa':'Aguardando dados',
+      source:'stored',connectionError:'',
+      regionIssue:{active:false,status:'clear',title:'Nenhum problema informado na região',message:'Não há manutenção ou indisponibilidade geral informada no momento.'},
+      ...(connectionOverride&&typeof connectionOverride==='object'?connectionOverride:{})
+    }
+'''
+if old_connection not in s:
+    raise SystemExit('Bloco connection original não encontrado')
+s=s.replace(old_connection,new_connection,1)
+
+portal_marker="async function portalSnapshot(client,state,env,sessionToken='',connectionOverride=null){"
+helpers=r'''function normalizePortalDate(value){
+  if(!value)return '';
+  const date=value instanceof Date?value:new Date(value);
+  return Number.isNaN(date.getTime())?text(value):date.toISOString();
+}
+function portalDateLabel(value){
+  const iso=normalizePortalDate(value);if(!iso)return '';
+  const date=new Date(iso);if(Number.isNaN(date.getTime()))return text(value);
+  try{return new Intl.DateTimeFormat('pt-BR',{dateStyle:'short',timeStyle:'medium'}).format(date)}catch{return iso}
+}
+async function portalConnectionContext(env,data){
+  if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão nativa com o Neon não configurada na Cloudflare.'),{statusCode:503});
+  const session=await verifyPortalSession(data?.session,env),sql=neon(env.DATABASE_URL),client=await portalClientById(sql,session.clientId);
+  if(!client)throw Object.assign(new Error('Cliente da sessão não foi encontrado.'),{statusCode:404});
+  const state=await loadState(sql);return {session,sql,client,state};
+}
+async function portalLiveConnection(env,sql,client){
+  const checkedFallback=normalizePortalDate(client?.mikrotik_last_sync),storedStatus=text(client?.mikrotik_status||client?.status),storedIp=text(client?.ip);
+  const fallback={
+    status:storedStatus||'Aguardando dados',pppoeStatus:client?.connection_type==='PPPoE'?'Aguardando confirmação':'Não se aplica',pppoeConnected:null,online:null,
+    ip:storedIp||'Aguardando dados',uptime:'',downloadBps:null,uploadBps:null,liveRatesAvailable:false,latencyMs:null,packetLoss:null,availability30Days:null,
+    quality:'Aguardando dados',checkedAt:checkedFallback,lastConnection:checkedFallback||'Aguardando dados',lastConnectionLabel:portalDateLabel(checkedFallback),source:'stored',connectionError:''
+  };
+  if(client?.connection_type!=='PPPoE')return {...fallback,status:storedStatus||'Não se aplica',pppoeStatus:'Não se aplica',quality:'Não se aplica',source:'not-pppoe'};
+  if(!Number(client?.router_id)||!text(client?.pppoe_username))return {...fallback,status:'Aguardando configuração',connectionError:'Cliente sem MikroTik ou usuário PPPoE vinculado.',source:'configuration'};
+  try{
+    const router=await resolveRouterForService(env,client.router_id),response=await handleMikrotikProxy(new Request('https://painel.fibramais.workers.dev/api/mikrotik-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'client.status',router,data:client})}));
+    let body={};try{body=await response.json()}catch{}
+    if(!response.ok||!body.ok)throw new Error(text(body?.error)||`Falha no diagnóstico MikroTik (HTTP ${response.status}).`);
+    const live=body.data||{},checkedAt=normalizePortalDate(live.checkedAt)||new Date().toISOString();let traffic=null;
+    try{traffic=await recordTrafficForService(env,client.id,live)}catch{}
+    const liveDown=Number(live.downloadBps),liveUp=Number(live.uploadBps),trafficDown=Number(traffic?.downloadBps),trafficUp=Number(traffic?.uploadBps);
+    const downloadBps=Number.isFinite(liveDown)?Math.max(0,liveDown):(Number.isFinite(trafficDown)?Math.max(0,trafficDown):null),uploadBps=Number.isFinite(liveUp)?Math.max(0,liveUp):(Number.isFinite(trafficUp)?Math.max(0,trafficUp):null);
+    const latency=live.qualityAvailable&&Number.isFinite(Number(live.latencyMs))?Math.max(0,Math.round(Number(live.latencyMs))):null,loss=live.packetLoss===null||live.packetLoss===undefined||!Number.isFinite(Number(live.packetLoss))?null:Math.max(0,Math.min(100,Math.round(Number(live.packetLoss))));
+    const connection={
+      status:live.online?'Online':'Offline',pppoeStatus:live.online?'Conectado':'Desconectado',pppoeConnected:Boolean(live.online),online:Boolean(live.online),ip:text(live.ip)||storedIp||'Aguardando dados',uptime:text(live.uptime),
+      downloadBps,uploadBps,liveRatesAvailable:Boolean(live.liveRatesAvailable)||(Number(downloadBps)>0)||(Number(uploadBps)>0),latencyMs:latency,packetLoss:loss,availability30Days:null,
+      quality:text(live.quality)||(live.online?'Boa':'Sem conexão'),qualityAvailable:Boolean(live.qualityAvailable),checkedAt,lastConnection:checkedAt,lastConnectionLabel:portalDateLabel(checkedAt),source:'mikrotik-live',connectionError:'',
+      trafficMonth:text(traffic?.current?.month),monthDownloadBytes:Number(traffic?.current?.download_bytes)||0,monthUploadBytes:Number(traffic?.current?.upload_bytes)||0
+    };
+    try{await sql`UPDATE pp_clients SET ip=COALESCE(NULLIF(${text(live.ip)},''),ip),mikrotik_status=${live.online?'Online':'Offline'},mikrotik_last_sync=${checkedAt},updated_at=${checkedAt} WHERE id=${Number(client.id)}`;}catch{}
+    return connection;
+  }catch(error){
+    const checkedAt=new Date().toISOString(),message=error instanceof Error?error.message:String(error);
+    return {...fallback,status:'Indisponível',quality:'Indisponível',checkedAt,lastConnection:checkedFallback||checkedAt,lastConnectionLabel:portalDateLabel(checkedFallback||checkedAt),source:'mikrotik-error',connectionError:message};
+  }
+}
+'''
+if 'async function portalLiveConnection' in s:
+    raise SystemExit('portalLiveConnection já existe; abortando para evitar duplicidade')
+s=s.replace(portal_marker,helpers+portal_marker,1)
+
+old_refresh="async function refreshPortalForSession(env,data){const ctx=await portalPaymentContext(env,data);return portalSnapshot(ctx.client,ctx.state,env,ctx.session.token);}"
+new_refresh=r'''async function refreshPortalForSession(env,data){
+  const ctx=await portalConnectionContext(env,data),connection=await portalLiveConnection(env,ctx.sql,ctx.client);
+  return portalSnapshot(ctx.client,ctx.state,env,ctx.session.token,connection);
+}
+async function connectionTestForSession(env,data){
+  const portal=await refreshPortalForSession(env,data),connection=portal?.connection||{};
+  return {...portal,diagnostic:{ok:!connection.connectionError,status:connection.connectionError?'error':'complete',message:connection.connectionError||'Diagnóstico concluído.',checkedAt:connection.checkedAt||new Date().toISOString()}};
+}'''
+if old_refresh not in s:
+    raise SystemExit('refreshPortalForSession original não encontrado')
+s=s.replace(old_refresh,new_refresh,1)
+
+old_action="else if(action==='negotiate')result=await negotiateForSession(env,data);\n    else throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});"
+new_action="else if(action==='negotiate')result=await negotiateForSession(env,data);\n    else if(['connection-test','test-connection','connection-status','connection-diagnostic','diagnostic','diagnose','connection-check','check-connection','diagnostic-connection'].includes(action))result=await connectionTestForSession(env,data);\n    else throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});"
+if old_action not in s:
+    raise SystemExit('Roteamento de ações do portal não encontrado')
+s=s.replace(old_action,new_action,1)
+worker.write_text(s)

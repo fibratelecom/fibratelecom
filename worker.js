@@ -907,9 +907,16 @@ async function refreshPortalForSession(env,data){
   const ctx=await portalConnectionContext(env,data),connection=await portalLiveConnection(env,ctx.sql,ctx.client);
   return portalSnapshot(ctx.client,ctx.state,env,ctx.session.token,connection);
 }
+function completedPortalDiagnostic(connection={}){
+  const failed=Boolean(text(connection.connectionError)),checkedAt=connection.checkedAt||new Date().toISOString(),message=connection.connectionError||'Diagnóstico concluído.';
+  return {ok:!failed,success:!failed,status:failed?'error':'success',state:failed?'error':'complete',phase:failed?'error':'complete',complete:!failed,completed:!failed,done:!failed,finished:!failed,running:false,loading:false,checking:false,isChecking:false,message,detail:message,checkedAt,checkedAtLabel:portalDateLabel(checkedAt)};
+}
+function withCompletedPortalDiagnostic(portal={}){
+  const connection=portal?.connection||{},diagnostic=completedPortalDiagnostic(connection),failed=!diagnostic.ok;
+  return {...portal,success:!failed,complete:!failed,completed:!failed,done:!failed,finished:!failed,running:false,loading:false,checking:false,isChecking:false,diagnosticStatus:diagnostic.status,diagnosticMessage:diagnostic.message,diagnostic,connection:{...connection,diagnosticStatus:diagnostic.status,diagnosticState:diagnostic.state,diagnosticMessage:diagnostic.message,diagnosticComplete:diagnostic.complete,diagnosticCompleted:diagnostic.completed,diagnosticDone:diagnostic.done,diagnosticRunning:false,diagnosticLoading:false,checking:false,isChecking:false,diagnostic}};
+}
 async function connectionTestForSession(env,data){
-  const portal=await refreshPortalForSession(env,data),connection=portal?.connection||{};
-  return {...portal,diagnostic:{ok:!connection.connectionError,status:connection.connectionError?'error':'complete',message:connection.connectionError||'Diagnóstico concluído.',checkedAt:connection.checkedAt||new Date().toISOString()}};
+  return withCompletedPortalDiagnostic(await refreshPortalForSession(env,data));
 }
 
 async function handleNativeCustomerPortal(request,env){
@@ -929,7 +936,7 @@ async function handleNativeCustomerPortal(request,env){
     else if(action==='payment-status')result=await paymentStatusForSession(env,data);
     else if(action==='negotiation-options')result=await negotiationOptionsForSession(env,data);
     else if(action==='negotiate')result=await negotiateForSession(env,data);
-    else if(['connection-test','test-connection','connection-status','connection-diagnostic','diagnostic','diagnose','connection-check','check-connection','diagnostic-connection'].includes(action))result=await connectionTestForSession(env,data);
+    else if(['connection-test','test-connection','connection-status','connection-diagnostic','diagnostic','diagnose','connection-check','check-connection','diagnostic-connection'].includes(action)||/(connection|diagnostic|diagnose|diagnost|conex[aã]o|teste.*conex)/i.test(action))result=await connectionTestForSession(env,data);
     else throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});
     return json({ok:true,data:result},200,{...cors,'x-provedor-plus-edge':'cloudflare-native-customer-portal'});
   }catch(error){

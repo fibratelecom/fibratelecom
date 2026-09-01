@@ -1,4 +1,4 @@
-// pp-build: 20260901-boleto-portal-sync-final
+// pp-build: 20260901-cashback-control-final
 import { neon } from '@neondatabase/serverless';
 import { handleNativeAuth,handleNativeCloudState,handleNativeCloudData,resolveRouterForService,recordTrafficForService } from './worker-native-api.js';
 import { handleBankProxy } from './worker-bank-native.js';
@@ -422,8 +422,27 @@ function invoiceReference(row){
   const raw=text(row?.due_date||row?.dueDate).slice(0,10),match=raw.match(/^(\d{4})-(\d{2})-/);
   return match?`${match[2]}/${match[1]}`:'';
 }
+function cashbackRules(state){
+  const settings=state?.settings||{},mode=text(settings.cashback_mode).toLowerCase()==='fixed'?'fixed':'percent';
+  return {enabled:boolValue(settings.cashback_enabled,false),mode,rate:bounded(settings.cashback_rate,0,0,100),fixedCents:Math.max(0,Math.round(Number(settings.cashback_fixed_cents)||0))};
+}
+function cashbackBalanceCents(state,client){
+  const local=stateClient(state,client);if(local?.cashback_balance_cents!==undefined&&local?.cashback_balance_cents!==null){const direct=Number(local.cashback_balance_cents);if(Number.isFinite(direct))return Math.max(0,Math.round(direct))}const amount=Number(local?.cashback_balance);return Number.isFinite(amount)?Math.max(0,Math.round(amount*100)):0;
+}
+function cashbackAmountCents(state,invoice){const rules=cashbackRules(state);if(!rules.enabled||invoice?.cashback_credited_at||invoice?.cashback_eligible===false||invoice?.cashback_enabled===false)return 0;return rules.mode==='fixed'?rules.fixedCents:Math.max(0,Math.round(invoiceCents(invoice)*rules.rate/100))}
+function pixCashbackEligible(invoice){const method=text(invoice?.payment_method).toLowerCase(),detail=text(invoice?.bank_status_detail).toLowerCase();return method.includes('pix')||detail.includes('pix')||Boolean(text(invoice?.bank_pix_code||invoice?.pix_copy_paste))}
+function creditPixCashback(state,client,invoice,paidAt=''){
+  if(!pixCashbackEligible(invoice)||invoice?.cashback_eligible===false||invoice?.cashback_enabled===false)return false;
+  const rules=cashbackRules(state),amountCents=cashbackAmountCents(state,invoice);if(!rules.enabled||amountCents<=0)return false;
+  const transactions=Array.isArray(state.cashback_transactions)?state.cashback_transactions:[],already=Boolean(invoice?.cashback_credited_at)||transactions.some(item=>item?.source==='pix_paid'&&String(item?.invoice_id)===String(invoice?.id));if(already)return false;
+  const clients=Array.isArray(state.clients)?[...state.clients]:[],position=clients.findIndex(item=>Number(item?.id)===Number(client.id));if(position<0)return false;
+  const local={...clients[position]},before=cashbackBalanceCents(state,client),after=before+amountCents,createdAt=new Date().toISOString(),paymentAt=text(paidAt)||createdAt,transactionId=crypto.randomUUID(),rate=rules.mode==='fixed'?rules.fixedCents:rules.rate;
+  local.cashback_balance_cents=after;local.cashback_balance=after/100;local.cashback_updated_at=createdAt;clients[position]=local;state.clients=clients;
+  const transaction={id:transactionId,client_id:Number(client.id),invoice_id:invoice.id,type:'credit',source:'pix_paid',amount_cents:amountCents,balance_before_cents:before,balance_after_cents:after,reason:`Cashback automático do Pix da fatura ${invoiceReference(invoice)||invoice.id}`,created_at:createdAt,payment_at:paymentAt,created_by_name:'Pagamento Pix automático'};
+  state.cashback_transactions=[...transactions,transaction].slice(-5000);Object.assign(invoice,{cashback_credited_at:createdAt,cashback_credit_cents:amountCents,cashback_transaction_id:transactionId,cashback_mode:rules.mode,cashback_rate:rate});return true;
+}
 function mapInvoice(row,client,state){
-  const cents=invoiceCents(row),total=brlCents(cents),planName=text(client.plan_name||client.plan||state?.plans?.find?.(p=>Number(p?.id)===Number(client.plan_id))?.name)||'Serviço de internet',company=state?.settings||state?.company||{};
+  const cents=invoiceCents(row),total=brlCents(cents),planName=text(client.plan_name||client.plan||state?.plans?.find?.(p=>Number(p?.id)===Number(client.plan_id))?.name)||'Serviço de internet',company=state?.settings||state?.company||{},rules=cashbackRules(state),cashbackPending=cashbackAmountCents(state,row),effectiveRate=rules.mode==='fixed'&&cents>0?Math.round(cashbackPending/cents*10000)/100:rules.rate;
   const pdfUrl=text(row?.bank_pdf_url||row?.bank_ticket_url||row?.pdf_url||row?.invoice_pdf_url||row?.boleto_pdf_url||row?.bank_slip_pdf_url);
   const ticketUrl=text(row?.bank_ticket_url||row?.bank_pdf_url||row?.pdf_url||row?.invoice_pdf_url||row?.boleto_pdf_url||row?.bank_slip_pdf_url);
   const digitableLine=text(row?.bank_digitable_line||row?.digitable_line||row?.linha_digitavel);
@@ -434,7 +453,7 @@ function mapInvoice(row,client,state){
     companyName:text(company.company_name||company.companyName||company.name)||'Fibra+',companyCnpj:text(company.cnpj||company.company_cnpj),companyIe:text(company.ie||company.state_registration||company.inscricao_estadual),companyWhatsapp:text(company.whatsapp||company.phone)||'(92) 98486-7428',
     pixPaymentUrl:text(row?.pix_payment_url||row?.pixPaymentUrl||row?.pix_url||row?.pixUrl),pixCopyPaste:text(row?.pix_copy_paste||row?.pixCopyPaste||row?.pix_payload||row?.pixPayload||row?.bank_pix_code),pixQrImage:text(row?.pix_qr_image||row?.pixQrImage||row?.pix_qr_url||row?.qr_code_url),cardPaymentUrl:text(row?.card_payment_url||row?.cardPaymentUrl||row?.checkout_url||row?.payment_url),
     pdfUrl,ticketUrl,digitableLine,barcode:text(row?.bank_barcode||row?.barcode||row?.barcode_content),barcodeImage:text(row?.barcode_image||row?.barcode_url),bankCode:text(row?.bank_code||row?.bankCode),ourNumber:text(row?.our_number||row?.nosso_numero),documentNumber:text(row?.document_number||row?.number||row?.id),bankProvider:text(row?.bank_provider),bankStatus:text(row?.bank_status),
-    cashbackEnabled:row?.cashback_enabled!==false,cashbackRate:number(row?.cashback_rate??state?.settings?.cashback_rate)??null,cashbackPending:number(row?.cashback_pending)??null,cashbackBalance:number(client?.cashback_balance)??0
+    cashbackEnabled:rules.enabled&&row?.cashback_eligible!==false&&row?.cashback_enabled!==false,cashbackMode:rules.mode,cashbackRate:effectiveRate,cashbackFixed:rules.fixedCents/100,cashbackRuleLabel:rules.mode==='fixed'?`${brlCents(rules.fixedCents)} por Pix`:`${rules.rate}% do valor pago`,cashbackPending:cashbackPending/100,cashbackBalance:cashbackBalanceCents(state,client)/100
   };
 }
 function mapPlan(plan){
@@ -884,8 +903,9 @@ async function paymentPixForSession(env,data){
     const email=requireMpEmail(ctx.client),environment=text(ctx.vault?.mercadoPago?.environment)||'sandbox';let mp=null;
     if(text(invoice.bank_provider)==='mercadoPago'&&text(invoice.bank_status_detail)==='mercado_pago_pix'&&text(invoice.bank_payment_id)){try{mp=await mercadoPagoRequest(ctx.vault,`/v1/payments/${encodeURIComponent(invoice.bank_payment_id)}`)}catch{}}
     if(!mp||mpRejected(mp.status)){const name=text(ctx.client.name),parts=name.split(/\s+/).filter(Boolean),first=parts.shift()||name,last=parts.join(' ')||first,payload={transaction_amount:invoiceCents(invoice)/100,description:text(invoice.description)||`Fatura ${invoiceReference(invoice)}`,payment_method_id:'pix',external_reference:`PP-INV-${invoice.id}-CLI-${ctx.client.id}`,payer:{email,first_name:first,last_name:last,identification:{type:digits(ctx.client.document).length===14?'CNPJ':'CPF',number:digits(ctx.client.document)}}};mp=await mercadoPagoRequest(ctx.vault,'/v1/payments',{method:'POST',body:payload,idempotencyKey:crypto.randomUUID()});}
-    Object.assign(invoice,mpPaymentFields(mp,'mercado_pago_pix',environment));invoice.payment_origin='area-cliente';if(mpPaid(mp.status))markPortalInvoicePaid(invoice,'Pix Mercado Pago',mp.date_approved||mp.date_last_updated);
+    Object.assign(invoice,mpPaymentFields(mp,'mercado_pago_pix',environment));invoice.payment_origin='area-cliente';if(mpPaid(mp.status)){markPortalInvoicePaid(invoice,'Pix Mercado Pago',mp.date_approved||mp.date_last_updated);creditPixCashback(ctx.state,ctx.client,invoice,mp.date_approved||mp.date_last_updated);}
   }
+  if(provider==='efi'){const status=text(invoice.bank_status||invoice.status).toLowerCase(),paid=Boolean(text(invoice.paid_at))||['paid','pago','settled','concluida','concluída','concluido','concluído'].some(value=>status.includes(value));if(paid){markPortalInvoicePaid(invoice,'Pix Efí',invoice.paid_at);creditPixCashback(ctx.state,ctx.client,invoice,invoice.paid_at);}}
   await saveState(ctx.sql,ctx.state);const portal=await portalSnapshot(ctx.client,ctx.state,env,ctx.session.token);return {provider,providerLabel:provider==='efi'?'Efí Bank':'Mercado Pago',paymentId:text(invoice.bank_payment_id||invoice.bank_charge_id),status:text(invoice.bank_status||invoice.status),qrCode:text(invoice.pix_copy_paste||invoice.bank_pix_code),qrCodeBase64:text(invoice.pix_qr_image).replace(/^data:image\/[^;]+;base64,/,''),paymentUrl:text(invoice.pix_payment_url||invoice.bank_ticket_url),portal};
 }
 async function paymentCardForSession(env,data){
@@ -899,8 +919,8 @@ async function paymentCardForSession(env,data){
 async function paymentStatusForSession(env,data){
   const ctx=await portalPaymentContext(env,data),invoice=portalPaymentInvoice(ctx.state,ctx.client,data?.invoiceId,{allowInactive:true});if(text(invoice.status).toLowerCase().includes('pago'))return {provider:text(invoice.bank_provider),status:'approved',state:text(invoice.status),paymentId:text(invoice.bank_payment_id||invoice.bank_charge_id),portal:await portalSnapshot(ctx.client,ctx.state,env,ctx.session.token)};
   let changed=false,provider=text(invoice.bank_provider),status=text(invoice.bank_status||invoice.status),paidAt='';
-  if(provider==='mercadoPago'&&text(invoice.bank_payment_id||data?.paymentId)){const mp=await mercadoPagoRequest(ctx.vault,`/v1/payments/${encodeURIComponent(invoice.bank_payment_id||data.paymentId)}`),environment=text(ctx.vault?.mercadoPago?.environment)||'sandbox';Object.assign(invoice,mpPaymentFields(mp,text(invoice.bank_status_detail)||'mercado_pago_payment',environment));status=text(mp.status);paidAt=text(mp.date_approved||mp.date_last_updated);changed=true;if(mpPaid(status))markPortalInvoicePaid(invoice,text(invoice.bank_status_detail)==='mercado_pago_card'?'Cartão Mercado Pago':'Pix Mercado Pago',paidAt);}
-  else if(provider==='efi'&&text(invoice.bank_charge_id)){const remote=await bankProxyAsService(env,ctx.sql,{action:'sync',invoice:bankInvoice(invoice,ctx.client,ctx.state),efi:ctx.banks.secrets.efi,mercadoPago:ctx.banks.secrets.mercadoPago});Object.assign(invoice,remote||{});status=text(remote?.bank_status||invoice.bank_status);paidAt=text(remote?.paidAt);changed=true;const paid=Boolean(paidAt)||['paid','pago','settled','concluida','concluída','concluido','concluído'].some(value=>status.toLowerCase().includes(value));if(paid)markPortalInvoicePaid(invoice,'Pix Efí',paidAt);}
+  if(provider==='mercadoPago'&&text(invoice.bank_payment_id||data?.paymentId)){const mp=await mercadoPagoRequest(ctx.vault,`/v1/payments/${encodeURIComponent(invoice.bank_payment_id||data.paymentId)}`),environment=text(ctx.vault?.mercadoPago?.environment)||'sandbox';Object.assign(invoice,mpPaymentFields(mp,text(invoice.bank_status_detail)||'mercado_pago_payment',environment));status=text(mp.status);paidAt=text(mp.date_approved||mp.date_last_updated);changed=true;if(mpPaid(status)){const isCard=text(invoice.bank_status_detail)==='mercado_pago_card';markPortalInvoicePaid(invoice,isCard?'Cartão Mercado Pago':'Pix Mercado Pago',paidAt);if(!isCard)creditPixCashback(ctx.state,ctx.client,invoice,paidAt);}}
+  else if(provider==='efi'&&text(invoice.bank_charge_id)){const remote=await bankProxyAsService(env,ctx.sql,{action:'sync',invoice:bankInvoice(invoice,ctx.client,ctx.state),efi:ctx.banks.secrets.efi,mercadoPago:ctx.banks.secrets.mercadoPago});Object.assign(invoice,remote||{});status=text(remote?.bank_status||invoice.bank_status);paidAt=text(remote?.paidAt);changed=true;const paid=Boolean(paidAt)||['paid','pago','settled','concluida','concluída','concluido','concluído'].some(value=>status.toLowerCase().includes(value));if(paid){markPortalInvoicePaid(invoice,'Pix Efí',paidAt);creditPixCashback(ctx.state,ctx.client,invoice,paidAt);}}
   if(changed)await saveState(ctx.sql,ctx.state);const portal=await portalSnapshot(ctx.client,ctx.state,env,ctx.session.token);return {provider,status:text(invoice.status).toLowerCase().includes('pago')?'approved':status,state:text(invoice.status),paymentId:text(invoice.bank_payment_id||invoice.bank_charge_id),portal};
 }
 async function refreshPortalForSession(env,data){

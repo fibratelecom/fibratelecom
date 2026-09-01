@@ -1,0 +1,53 @@
+name: Corrigir redirect bancário no Cloudflare
+
+on:
+  push:
+    branches:
+      - cloudflare-provedor-plus
+    paths:
+      - .github/workflows/fix-bank-redirect-cloudflare.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+          fetch-depth: 0
+
+      - name: Corrigir redirect incompatível
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('worker-bank-native.js')
+          text = path.read_text(encoding='utf-8')
+          old = "redirect:'error'"
+          new = "redirect:'manual'"
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'Esperava exatamente 1 ocorrência de {old!r}, encontrei {count}.')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          node --check worker-bank-native.js
+
+      - name: Publicar correção
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add worker-bank-native.js
+          git commit -m "Corrige redirect bancário incompatível com Cloudflare"
+          git push origin HEAD:cloudflare-provedor-plus
+
+      - name: Remover aplicador temporário
+        shell: bash
+        run: |
+          git pull --rebase origin cloudflare-provedor-plus
+          git rm .github/workflows/fix-bank-redirect-cloudflare.yml
+          git commit -m "Remove aplicador temporário do redirect bancário"
+          git push origin HEAD:cloudflare-provedor-plus

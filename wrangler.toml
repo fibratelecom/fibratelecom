@@ -1,5 +1,5 @@
 # Cloudflare Provedor Plus - painel
-# build: 20260901-cashback-balance-layout-final
+# build: 20260901-cashback-pix-extrato-final
 name = "painel"
 main = "worker.js"
 compatibility_date = "2026-08-30"

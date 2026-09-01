@@ -122,7 +122,8 @@ function preservePortalState(incoming,existing){
   }
   if(localClients.length)state.clients=localClients;
   const localInvoices=Array.isArray(state.invoices)?[...state.invoices]:[],remoteInvoices=Array.isArray(remote.invoices)?remote.invoices:[],index=new Map(localInvoices.map((item,i)=>[String(item?.id??''),i]));
-  const bankFields=['bank_provider','bank_environment','bank_charge_id','bank_order_id','bank_payment_id','bank_external_reference','bank_status','bank_status_detail','bank_barcode','bank_digitable_line','bank_ticket_url','bank_pdf_url','bank_pix_code','bank_last_sync_at','cashback_credited_at','cashback_credit_cents','cashback_transaction_id','cashback_mode','cashback_rate'];
+  const bankFields=['bank_provider','bank_environment','bank_charge_id','bank_order_id','bank_payment_id','bank_external_reference','bank_status','bank_status_detail','bank_barcode','bank_digitable_line','bank_ticket_url','bank_pdf_url','bank_pix_code','bank_last_sync_at'];
+  const cashbackFields=['cashback_credited_at','cashback_credit_cents','cashback_transaction_id','cashback_mode','cashback_rate','cashback_discount_applied_cents','cashback_discount_transaction_id','cashback_discount_applied_at','cashback_discount_status','cashback_discount_used_at','cashback_discount_refunded_at','cashback_original_cents','cashback_pix_amount_cents'];
   const missing=value=>value===undefined||value===null||(typeof value==='string'&&!value.trim());
   for(const remoteInvoice of remoteInvoices){
     const key=String(remoteInvoice?.id??''),position=index.get(key);
@@ -138,6 +139,18 @@ function preservePortalState(incoming,existing){
     let merged=localInvoice,changed=false;
     for(const field of bankFields){
       if(missing(localInvoice[field])&&!missing(remoteInvoice?.[field])){
+        if(!changed){merged={...localInvoice};changed=true}
+        merged[field]=remoteInvoice[field];
+      }
+    }
+    for(const field of cashbackFields){
+      if(Object.prototype.hasOwnProperty.call(remoteInvoice||{},field)&&localInvoice[field]!==remoteInvoice[field]){
+        if(!changed){merged={...localInvoice};changed=true}
+        merged[field]=remoteInvoice[field];
+      }
+    }
+    if(remoteInvoice?.cashback_discount_status==='used')for(const field of ['status','payment_method','paid_by','paid_at','payment_origin']){
+      if(Object.prototype.hasOwnProperty.call(remoteInvoice,field)&&localInvoice[field]!==remoteInvoice[field]){
         if(!changed){merged={...localInvoice};changed=true}
         merged[field]=remoteInvoice[field];
       }

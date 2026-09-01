@@ -1,5 +1,5 @@
 # Cloudflare Provedor Plus - painel
-# build: 20260901-boleto-portal-sync-final
+# build: 20260901-portal-session-fix
 name = "painel"
 main = "worker.js"
 compatibility_date = "2026-08-30"

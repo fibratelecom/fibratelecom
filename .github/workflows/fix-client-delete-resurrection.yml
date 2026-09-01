@@ -1,0 +1,112 @@
+name: "Corrigir exclusao definitiva de clientes"
+"on":
+  push:
+    branches: [cloudflare-provedor-plus]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+      - name: "Impedir recriacao de cliente excluido"
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path=Path('cloud-client-store-v2.js')
+          s=path.read_text(encoding='utf-8')
+          old="""  async function reconcile(state){
+    let clients=(Array.isArray(state.clients)?state.clients:[]).map(normalize),remote=[];
+    try{remote=await cloudData('clients.list')}catch(error){console.error('Provedor Plus: falha ao ler clientes normalizados da nuvem.',error);return {state,clients,changed:false}}
+    remote=Array.isArray(remote)?remote.map(normalize):[];
+    let changed=false;
+    for(let i=0;i<clients.length;i++){
+      let local=clients[i],cloud=remote.find(r=>sameIdentity(local,r));
+      if(!cloud){
+        try{cloud=normalize(await cloudData('clients.save',local));remote.push(cloud);changed=true}catch(error){console.error('Provedor Plus: falha ao normalizar cliente na nuvem.',error);continue}
+      }
+      if(cloud?.id&&Number(local.id)!==Number(cloud.id)){remapClientReferences(state,local.id,cloud.id);local={...local,id:Number(cloud.id)};changed=true}
+      const merged=overlayCloudFields(local,cloud);
+      if(JSON.stringify(merged)!==JSON.stringify(clients[i]))changed=true;
+      clients[i]=merged;
+    }
+    for(const cloud of remote)if(!clients.some(c=>sameIdentity(c,cloud))){clients.push(normalize(cloud));changed=true}
+    const deduped=dedupeClients(clients);
+    if(deduped.length!==clients.length||JSON.stringify(deduped)!==JSON.stringify(clients))changed=true;
+    clients=deduped;
+    clients.sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'pt-BR'));
+    if(changed){state={...state,clients};state=await writeState(state)}
+    return {state,clients:Array.isArray(state.clients)?dedupeClients(state.clients):clients,changed};
+  }
+"""
+          new="""  async function reconcile(state){
+    const localClients=(Array.isArray(state.clients)?state.clients:[]).map(normalize);let remote=[];
+    try{remote=await cloudData('clients.list')}catch(error){console.error('Provedor Plus: falha ao ler clientes normalizados da nuvem.',error);return {state,clients:localClients,changed:false}}
+    remote=Array.isArray(remote)?remote.map(normalize):[];
+    const clients=[];
+    for(const cloud of remote){
+      let local=localClients.find(row=>sameIdentity(row,cloud))||null;
+      if(local&&cloud?.id&&Number(local.id)!==Number(cloud.id)){remapClientReferences(state,local.id,cloud.id);local={...local,id:Number(cloud.id)}}
+      clients.push(local?overlayCloudFields(local,cloud):normalize(cloud));
+    }
+    const deduped=dedupeClients(clients);
+    deduped.sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'pt-BR'));
+    const changed=JSON.stringify(deduped)!==JSON.stringify(dedupeClients(localClients));
+    if(changed){state={...state,clients:deduped};state=await writeState(state)}
+    return {state,clients:Array.isArray(state.clients)?dedupeClients(state.clients):deduped,changed};
+  }
+"""
+          if s.count(old)!=1:
+              raise SystemExit(f'Bloco reconcile encontrado {s.count(old)} vez(es); abortando.')
+          s=s.replace(old,new)
+
+          old_remove="""  async function remove(id){
+    id=Number(id)||0;if(!id)return {deleted:false,id};
+    await cloudData('clients.delete',{id});
+    let state=await readState();
+    state.clients=(Array.isArray(state.clients)?state.clients:[]).filter(c=>Number(c?.id)!==id);
+    state.invoices=(Array.isArray(state.invoices)?state.invoices:[]).map(row=>Number(row?.client_id)===id?{...row,client_id:null}:row);
+    await writeState(state);
+    return {deleted:true,id};
+  }
+"""
+          new_remove="""  async function remove(id){
+    id=Number(id)||0;if(!id)return {deleted:false,id};
+    await cloudData('clients.delete',{id});
+    const remaining=await cloudData('clients.list');
+    if((Array.isArray(remaining)?remaining:[]).some(c=>Number(c?.id)===id))throw new Error('O cliente ainda existe na nuvem após a exclusão. Tente novamente.');
+    let state=await readState();
+    state.clients=(Array.isArray(state.clients)?state.clients:[]).filter(c=>Number(c?.id)!==id);
+    state.invoices=(Array.isArray(state.invoices)?state.invoices:[]).map(row=>Number(row?.client_id)===id?{...row,client_id:null}:row);
+    await writeState(state);
+    return {deleted:true,id};
+  }
+"""
+          if s.count(old_remove)!=1:
+              raise SystemExit(f'Bloco remove encontrado {s.count(old_remove)} vez(es); abortando.')
+          path.write_text(s.replace(old_remove,new_remove),encoding='utf-8')
+
+          boot=Path('bootstrap.js')
+          b=boot.read_text(encoding='utf-8')
+          oldv="/cloud-client-store-v2.js?v=1017-cloud17-audit1"
+          newv="/cloud-client-store-v2.js?v=1017-cloud17-delete1"
+          if b.count(oldv)!=1:
+              raise SystemExit(f'Referencia de cache encontrada {b.count(oldv)} vez(es); abortando.')
+          boot.write_text(b.replace(oldv,newv),encoding='utf-8')
+          PY
+          node --check cloud-client-store-v2.js
+          node --check bootstrap.js
+          grep -q "const clients=\[\]" cloud-client-store-v2.js
+          ! grep -q "cloudData('clients.save',local)" cloud-client-store-v2.js
+          grep -q "1017-cloud17-delete1" bootstrap.js
+      - name: "Publicar correcao e remover aplicador"
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/fix-client-delete-resurrection.yml
+          git add cloud-client-store-v2.js bootstrap.js
+          git commit -m "Corrige exclusao definitiva de clientes"
+          git push origin HEAD:cloudflare-provedor-plus

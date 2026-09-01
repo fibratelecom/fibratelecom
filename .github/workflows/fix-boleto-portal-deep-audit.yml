@@ -1,0 +1,165 @@
+name: Corrigir boleto e Área do Cliente após auditoria
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: ['.github/workflows/fix-boleto-portal-deep-audit.yml']
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+      - name: Aplicar correções auditadas
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_function(src,name,new_code):
+              token=f'function {name}'
+              pos=src.find(token)
+              if pos<0: raise SystemExit(f'função {name} não encontrada')
+              start=src.find('{',pos)
+              depth=0; quote=None; esc=False; i=start
+              while i<len(src):
+                  ch=src[i]
+                  if quote:
+                      if esc: esc=False
+                      elif ch=='\\': esc=True
+                      elif ch==quote: quote=None
+                  else:
+                      if ch in "'\"`": quote=ch
+                      elif ch=='{': depth+=1
+                      elif ch=='}':
+                          depth-=1
+                          if depth==0:
+                              return src[:pos]+new_code+src[i+1:]
+                  i+=1
+              raise SystemExit(f'fim da função {name} não encontrado')
+
+          p=Path('worker-native-api.js')
+          src=p.read_text()
+          new_preserve=r'''function preservePortalState(incoming,existing){
+            const state=incoming&&typeof incoming==='object'&&!Array.isArray(incoming)?{...incoming}:{},remote=existing&&typeof existing==='object'&&!Array.isArray(existing)?existing:{};
+            const localNegotiations=Array.isArray(state.negotiations)?[...state.negotiations]:[],remoteNegotiations=Array.isArray(remote.negotiations)?remote.negotiations:[],known=new Set(localNegotiations.map(item=>String(item?.id||'')).filter(Boolean));
+            for(const item of remoteNegotiations){const id=String(item?.id||'');if(id&&!known.has(id)){localNegotiations.push(item);known.add(id)}}
+            if(localNegotiations.length)state.negotiations=localNegotiations;
+            const localInvoices=Array.isArray(state.invoices)?[...state.invoices]:[],remoteInvoices=Array.isArray(remote.invoices)?remote.invoices:[],index=new Map(localInvoices.map((item,i)=>[String(item?.id??''),i]));
+            const bankFields=['bank_provider','bank_environment','bank_charge_id','bank_order_id','bank_payment_id','bank_external_reference','bank_status','bank_status_detail','bank_barcode','bank_digitable_line','bank_ticket_url','bank_pdf_url','bank_pix_code','bank_last_sync_at'];
+            const missing=value=>value===undefined||value===null||(typeof value==='string'&&!value.trim());
+            for(const remoteInvoice of remoteInvoices){
+              const key=String(remoteInvoice?.id??''),position=index.get(key);
+              if(remoteInvoice?.negotiation_id){
+                if(position===undefined){index.set(key,localInvoices.length);localInvoices.push(remoteInvoice);continue}
+                const localInvoice=localInvoices[position];
+                if(!localInvoice?.negotiation_id||String(localInvoice.negotiation_id)!==String(remoteInvoice.negotiation_id))localInvoices[position]=remoteInvoice;
+                continue;
+              }
+              if(position===undefined)continue;
+              const localInvoice=localInvoices[position];
+              if(!localInvoice||typeof localInvoice!=='object')continue;
+              let merged=localInvoice,changed=false;
+              for(const field of bankFields){
+                if(missing(localInvoice[field])&&!missing(remoteInvoice?.[field])){
+                  if(!changed){merged={...localInvoice};changed=true}
+                  merged[field]=remoteInvoice[field];
+                }
+              }
+              if(changed)localInvoices[position]=merged;
+            }
+            if(localInvoices.length)state.invoices=localInvoices;
+            const maxInvoiceId=Math.max(Number(state?.seq?.invoices)||0,...localInvoices.map(item=>Number(item?.id)||0));if(maxInvoiceId)state.seq={...(state.seq||{}),invoices:maxInvoiceId};
+            return state;
+          }'''
+          src=replace_function(src,'preservePortalState',new_preserve)
+          p.write_text(src)
+
+          p=Path('worker.js')
+          src=p.read_text()
+          helpers=['formatDate','invoiceCents','brlCents','invoiceReference','mapInvoice','mapPlan','sameClient']
+          for name in helpers:
+              patterns=[rf'function\s+{name}\b',rf'async\s+function\s+{name}\b',rf'(?:const|let|var)\s+{name}\s*=']
+              if any(re.search(pat,src) for pat in patterns):
+                  raise SystemExit(f'helper {name} já existe; abortando para evitar duplicidade')
+
+          helper_block=r'''
+          function formatDate(value){
+            const raw=text(value).slice(0,10),match=raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            return match?`${match[3]}/${match[2]}/${match[1]}`:text(value);
+          }
+          function invoiceCents(row){
+            const centsKeys=['amount_cents','total_cents','value_cents','price_cents','service_amount_cents'];
+            for(const key of centsKeys){const n=number(row?.[key]);if(n!==null)return Math.max(0,Math.round(n));}
+            const valueKeys=['amount','total','value','price','service_amount'];
+            for(const key of valueKeys){const n=number(row?.[key]);if(n!==null)return Math.max(0,Math.round(n*100));}
+            return 0;
+          }
+          function brlCents(value){return new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format((Number(value)||0)/100);}
+          function invoiceReference(row){
+            const explicit=text(row?.reference||row?.competency||row?.competence||row?.month||row?.period);
+            if(explicit)return explicit;
+            const raw=text(row?.due_date||row?.dueDate).slice(0,10),match=raw.match(/^(\d{4})-(\d{2})-/);
+            return match?`${match[2]}/${match[1]}`:'';
+          }
+          function mapInvoice(row,client,state){
+            const cents=invoiceCents(row),total=brlCents(cents),planName=text(client.plan_name||client.plan||state?.plans?.find?.(p=>Number(p?.id)===Number(client.plan_id))?.name)||'Serviço de internet',company=state?.settings||state?.company||{};
+            const pdfUrl=text(row?.bank_pdf_url||row?.bank_ticket_url||row?.pdf_url||row?.invoice_pdf_url||row?.boleto_pdf_url||row?.bank_slip_pdf_url);
+            const ticketUrl=text(row?.bank_ticket_url||row?.bank_pdf_url||row?.pdf_url||row?.invoice_pdf_url||row?.boleto_pdf_url||row?.bank_slip_pdf_url);
+            const digitableLine=text(row?.bank_digitable_line||row?.digitable_line||row?.linha_digitavel);
+            return {
+              id:row?.id??null,reference:invoiceReference(row),dueDate:formatDate(row?.due_date||row?.dueDate),dueDateRaw:text(row?.due_date||row?.dueDate),
+              total,totalNumber:cents/100,amountCents:cents,status:text(row?.status)||'Pendente',serviceName:planName,serviceAmount:total,serviceAmountRaw:total,subtotal:total,quantity:'1',unitAmount:total,
+              customerName:text(client.name),customerDocument:text(client.document),customerAddress:[client.address||client.street,client.city,client.state].map(text).filter(Boolean).join(' - '),customerWhatsapp:text(client.phone||client.whatsapp),contract:text(client.contract_number),
+              companyName:text(company.company_name||company.companyName||company.name)||'Fibra+',companyCnpj:text(company.cnpj||company.company_cnpj),companyIe:text(company.ie||company.state_registration||company.inscricao_estadual),companyWhatsapp:text(company.whatsapp||company.phone)||'(92) 98486-7428',
+              pixPaymentUrl:text(row?.pix_payment_url||row?.pixPaymentUrl||row?.pix_url||row?.pixUrl),pixCopyPaste:text(row?.pix_copy_paste||row?.pixCopyPaste||row?.pix_payload||row?.pixPayload||row?.bank_pix_code),pixQrImage:text(row?.pix_qr_image||row?.pixQrImage||row?.pix_qr_url||row?.qr_code_url),cardPaymentUrl:text(row?.card_payment_url||row?.cardPaymentUrl||row?.checkout_url||row?.payment_url),
+              pdfUrl,ticketUrl,digitableLine,barcode:text(row?.bank_barcode||row?.barcode||row?.barcode_content),barcodeImage:text(row?.barcode_image||row?.barcode_url),bankCode:text(row?.bank_code||row?.bankCode),ourNumber:text(row?.our_number||row?.nosso_numero),documentNumber:text(row?.document_number||row?.number||row?.id),bankProvider:text(row?.bank_provider),bankStatus:text(row?.bank_status),
+              cashbackEnabled:row?.cashback_enabled!==false,cashbackRate:number(row?.cashback_rate??state?.settings?.cashback_rate)??null,cashbackPending:number(row?.cashback_pending)??null,cashbackBalance:number(client?.cashback_balance)??0
+            };
+          }
+          function mapPlan(plan){
+            const cents=number(plan?.price_cents),plain=number(plan?.price??plan?.amount);
+            return {id:plan?.id??null,name:text(plan?.name||plan?.title)||'Plano Fibra+',speed:text(plan?.speed||plan?.bandwidth),description:text(plan?.description),price:cents!==null?cents/100:(plain??0),highlight:plan?.highlight===true,badge:text(plan?.badge||plan?.category)||'Plano Fibra+'};
+          }
+          function sameClient(client,{document='',cpf='',cnpj='',contract=''}){
+            const requestedDocument=digits(document||cpf||cnpj),storedDocument=digits(client?.document),storedContract=text(client?.contract_number),contractDigits=digits(storedContract);
+            const byDocument=requestedDocument?storedDocument===requestedDocument:false;
+            const byContract=contract?(storedContract===contract||contractDigits===digits(contract)):false;
+            if(requestedDocument&&contract)return byDocument&&byContract;
+            return byDocument||byContract;
+          }
+
+          '''
+          marker='function portalClientData(client){'
+          if marker not in src: raise SystemExit('ponto de inserção portalClientData não encontrado')
+          src=src.replace(marker,helper_block+marker,1)
+          p.write_text(src)
+          PY
+          node --check worker.js
+          node --check worker-native-api.js
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          src=Path('worker.js').read_text()
+          for name in ['formatDate','invoiceCents','brlCents','invoiceReference','mapInvoice','mapPlan','sameClient']:
+              defs=len(re.findall(rf'function\s+{name}\b',src))
+              if defs!=1: raise SystemExit(f'{name}: esperado 1 definition, encontrado {defs}')
+          native=Path('worker-native-api.js').read_text()
+          for field in ['bank_ticket_url','bank_pdf_url','bank_digitable_line','bank_barcode','bank_charge_id']:
+              if field not in native: raise SystemExit(f'campo bancário ausente da preservação: {field}')
+          if "pdfUrl=text(row?.bank_pdf_url||row?.bank_ticket_url" not in src.replace(' ',''):
+              raise SystemExit('mapInvoice não prioriza URL bancária')
+          print('VALIDACAO_OK')
+          PY
+      - name: Publicar e remover aplicador
+        shell: bash
+        run: |
+          rm -f .github/workflows/fix-boleto-portal-deep-audit.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add worker.js worker-native-api.js .github/workflows/fix-boleto-portal-deep-audit.yml
+          git commit -m 'Corrige persistencia do boleto e Area do Cliente'
+          git push origin HEAD:cloudflare-provedor-plus

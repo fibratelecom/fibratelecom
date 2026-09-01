@@ -6,6 +6,10 @@ main = "worker.js"
 compatibility_date = "2026-08-30"
 workers_dev = true
 
+[[mtls_certificates]]
+binding = "EFI_MTLS"
+certificate_id = "c48560c1-b904-4cdd-9d4d-297f34075e9d"
+
 [assets]
 directory = "."
 binding = "ASSETS"

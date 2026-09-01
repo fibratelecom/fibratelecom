@@ -298,7 +298,10 @@ async function refreshBankClientRequest(request,env){
   if(!body?.client||typeof body.client!=='object')return request;
   const clientId=Number(body.client?.id||body.invoice?.client_id||body.invoice?.clientId)||0;
   if(!clientId)return request;
-  const sql=neon(env.DATABASE_URL),rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code FROM pp_clients WHERE id=${clientId} LIMIT 1`,fresh=Array.isArray(rows)?rows[0]:null;
+  const sql=neon(env.DATABASE_URL),contract=text(body.client?.contract_number||body.invoice?.client_contract_number||body.invoice?.contract_number);let rows=[];
+  if(contract)rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,updated_at FROM pp_clients WHERE id=${clientId} OR contract_number=${contract} ORDER BY updated_at DESC NULLS LAST,CASE WHEN id=${clientId} THEN 0 ELSE 1 END LIMIT 1`;
+  else rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,updated_at FROM pp_clients WHERE id=${clientId} LIMIT 1`;
+  const fresh=Array.isArray(rows)?rows[0]:null;
   if(!fresh)throw Object.assign(new Error('Cliente não encontrado na nuvem. Salve o cadastro antes de emitir a cobrança.'),{statusCode:404});
   const current=body.client||{},freshAddress=text(fresh.address),freshZip=text(fresh.zip_code);
   body.client={

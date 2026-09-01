@@ -1,0 +1,59 @@
+name: Corrigir estado da Área do Cliente
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: ['.github/workflows/fix-portal-parse-state.yml']
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+      - name: Restaurar parser de estado perdido
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('worker.js')
+          s=p.read_text()
+          if re.search(r'function\s+parseStateValue\b',s):
+              raise SystemExit('parseStateValue já existe; abortando para evitar duplicidade')
+          marker="const number=value=>{const n=Number(value);return Number.isFinite(n)?n:null};\n"
+          helper="""const number=value=>{const n=Number(value);return Number.isFinite(n)?n:null};
+function parseStateValue(value){
+  if(value&&typeof value==='object'&&!Array.isArray(value))return value;
+  if(typeof value==='string'){
+    try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{return {}}
+  }
+  return {};
+}
+"""
+          if marker not in s:
+              raise SystemExit('ponto de inserção não encontrado')
+          s=s.replace(marker,helper,1)
+          p.write_text(s)
+          PY
+          node --check worker.js
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          s=Path('worker.js').read_text()
+          defs=len(re.findall(r'function\s+parseStateValue\b',s))
+          refs=len(re.findall(r'\bparseStateValue\b',s))
+          print('PARSE_STATE_DEFS',defs)
+          print('PARSE_STATE_REFS',refs)
+          if defs!=1 or refs<2: raise SystemExit('validação de parseStateValue falhou')
+          PY
+      - name: Publicar e remover aplicador
+        shell: bash
+        run: |
+          rm -f .github/workflows/fix-portal-parse-state.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add worker.js .github/workflows/fix-portal-parse-state.yml
+          git commit -m 'Restaura leitura do estado da Area do Cliente'
+          git push origin HEAD:cloudflare-provedor-plus

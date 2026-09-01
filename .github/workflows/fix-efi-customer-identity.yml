@@ -1,0 +1,73 @@
+name: Corrigir identidade do cliente Efí
+on:
+  push:
+    branches: [cloudflare-provedor-plus]
+    paths: ['.github/workflows/fix-efi-customer-identity.yml']
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cloudflare-provedor-plus
+      - name: Corrigir seleção e diagnóstico do cliente
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          worker = Path('worker.js')
+          text = worker.read_text()
+          old = """  const sql=neon(env.DATABASE_URL),contract=text(body.client?.contract_number||body.invoice?.client_contract_number||body.invoice?.contract_number);let rows=[];
+  if(contract)rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,updated_at FROM pp_clients WHERE id=${clientId} OR contract_number=${contract} ORDER BY updated_at DESC NULLS LAST,CASE WHEN id=${clientId} THEN 0 ELSE 1 END LIMIT 1`;
+  else rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,updated_at FROM pp_clients WHERE id=${clientId} LIMIT 1`;
+"""
+          new = """  const sql=neon(env.DATABASE_URL);
+  const rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,updated_at FROM pp_clients WHERE id=${clientId} LIMIT 1`;
+"""
+          if old not in text:
+              raise SystemExit('Trecho de seleção bancária não encontrado')
+          text = text.replace(old, new, 1)
+          worker.write_text(text)
+
+          bank = Path('worker-bank-native.js')
+          text = bank.read_text()
+          anchor = "function digits(v){return String(v||'').replace(/\\D/g,'');}\n"
+          helper = """function maskEmail(value){const raw=String(value||'').trim();const at=raw.indexOf('@');if(at<1)return raw?'***':'(vazio)';const local=raw.slice(0,at),domain=raw.slice(at+1);return `${local.slice(0,1)}***@${domain}`;}
+function shortName(value){const parts=String(value||'').trim().replace(/\\s+/g,' ').split(' ').filter(Boolean);if(!parts.length)return '(vazio)';if(parts.length===1)return parts[0];return `${parts[0]} ${parts[parts.length-1].slice(0,1)}.`;}
+function efiSamePersonError(message,c,client){const id=Number(client?.id)||0,contract=String(client?.contract_number||client?.client_contract_number||'').trim();return `${message} A Efí também compara nome e e-mail enviados no customer. Cliente ${id?`#${id}`:'selecionado'}${contract?` · contrato ${contract}`:''}: documento termina em ${String(c.document||'').slice(-4)}, nome ${shortName(c.name)}, e-mail ${maskEmail(c.email)}. Confirme que nome, e-mail e CPF/CNPJ pertencem ao cliente e são diferentes dos dados do titular da conta Efí.`;}
+"""
+          if 'function efiSamePersonError(' not in text:
+              if anchor not in text:
+                  raise SystemExit('Âncora de diagnóstico Efí não encontrada')
+              text = text.replace(anchor, anchor + helper, 1)
+
+          old_err = "if(/recebedor.*cliente.*mesma pessoa|cliente.*recebedor.*mesma pessoa/i.test(message))throw new Error(`${message} Documento do cliente enviado termina em ${c.document.slice(-4)}.`);"
+          new_err = "if(/recebedor.*cliente.*mesma pessoa|cliente.*recebedor.*mesma pessoa/i.test(message))throw new Error(efiSamePersonError(message,c,client));"
+          if old_err not in text:
+              raise SystemExit('Diagnóstico antigo do boleto Efí não encontrado')
+          text = text.replace(old_err, new_err, 1)
+
+          old_carnet = "if(r.status<200||r.status>=300||!r.data?.data?.carnet_id||!Array.isArray(r.data?.data?.charges))throw new Error(errMsg('Efí Carnê',r.status,r.data));"
+          new_carnet = "if(r.status<200||r.status>=300||!r.data?.data?.carnet_id||!Array.isArray(r.data?.data?.charges)){const message=errMsg('Efí Carnê',r.status,r.data);if(/recebedor.*cliente.*mesma pessoa|cliente.*recebedor.*mesma pessoa/i.test(message))throw new Error(efiSamePersonError(message,c,client));throw new Error(message)}"
+          if old_carnet not in text:
+              raise SystemExit('Tratamento do carnê Efí não encontrado')
+          text = text.replace(old_carnet, new_carnet, 1)
+          bank.write_text(text)
+          PY
+          node --check worker.js
+          node --check worker-bank-native.js
+          grep -F 'FROM pp_clients WHERE id=${clientId} LIMIT 1' worker.js >/dev/null
+          ! grep -F 'OR contract_number=${contract}' worker.js
+          grep -F 'function efiSamePersonError' worker-bank-native.js >/dev/null
+      - name: Publicar correção e remover aplicador
+        shell: bash
+        run: |
+          rm -f .github/workflows/fix-efi-customer-identity.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add worker.js worker-bank-native.js .github/workflows/fix-efi-customer-identity.yml
+          git commit -m 'Corrige seleção da identidade enviada à Efí'
+          git push origin HEAD:cloudflare-provedor-plus

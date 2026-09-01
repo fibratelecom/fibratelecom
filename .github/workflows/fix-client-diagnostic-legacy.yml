@@ -19,24 +19,22 @@ jobs:
           from pathlib import Path
           p=Path('worker.js')
           s=p.read_text()
-          old="""async function connectionTestForSession(env,data){
-  const portal=await refreshPortalForSession(env,data),connection=portal?.connection||{};
-  return {...portal,diagnostic:{ok:!connection.connectionError,status:connection.connectionError?'error':'complete',message:connection.connectionError||'Diagnóstico concluído.',checkedAt:connection.checkedAt||new Date().toISOString()}};
-}"""
-          new="""function completedPortalDiagnostic(connection={}){
-  const failed=Boolean(text(connection.connectionError)),checkedAt=connection.checkedAt||new Date().toISOString(),message=connection.connectionError||'Diagnóstico concluído.';
-  return {ok:!failed,success:!failed,status:failed?'error':'success',state:failed?'error':'complete',phase:failed?'error':'complete',complete:!failed,completed:!failed,done:!failed,finished:!failed,running:false,loading:false,checking:false,isChecking:false,message,detail:message,checkedAt,checkedAtLabel:portalDateLabel(checkedAt)};
-}
-function withCompletedPortalDiagnostic(portal={}){
-  const connection=portal?.connection||{},diagnostic=completedPortalDiagnostic(connection),failed=!diagnostic.ok;
-  return {...portal,success:!failed,complete:!failed,completed:!failed,done:!failed,finished:!failed,running:false,loading:false,checking:false,isChecking:false,diagnosticStatus:diagnostic.status,diagnosticMessage:diagnostic.message,diagnostic,connection:{...connection,diagnosticStatus:diagnostic.status,diagnosticState:diagnostic.state,diagnosticMessage:diagnostic.message,diagnosticComplete:diagnostic.complete,diagnosticCompleted:diagnostic.completed,diagnosticDone:diagnostic.done,diagnosticRunning:false,diagnosticLoading:false,checking:false,isChecking:false,diagnostic}};
-}
-async function connectionTestForSession(env,data){
-  return withCompletedPortalDiagnostic(await refreshPortalForSession(env,data));
-}"""
-          if s.count(old)!=1:
-              raise SystemExit(f'bloco connectionTest esperado não encontrado de forma única: {s.count(old)}')
-          s=s.replace(old,new,1)
+          start=s.index('async function connectionTestForSession(env,data){')
+          end=s.index('\n\nasync function handleNativeCustomerPortal',start)
+          block='\n'.join([
+            'function completedPortalDiagnostic(connection={}){',
+            "  const failed=Boolean(text(connection.connectionError)),checkedAt=connection.checkedAt||new Date().toISOString(),message=connection.connectionError||'Diagnóstico concluído.';",
+            "  return {ok:!failed,success:!failed,status:failed?'error':'success',state:failed?'error':'complete',phase:failed?'error':'complete',complete:!failed,completed:!failed,done:!failed,finished:!failed,running:false,loading:false,checking:false,isChecking:false,message,detail:message,checkedAt,checkedAtLabel:portalDateLabel(checkedAt)};",
+            '}',
+            'function withCompletedPortalDiagnostic(portal={}){',
+            '  const connection=portal?.connection||{},diagnostic=completedPortalDiagnostic(connection),failed=!diagnostic.ok;',
+            '  return {...portal,success:!failed,complete:!failed,completed:!failed,done:!failed,finished:!failed,running:false,loading:false,checking:false,isChecking:false,diagnosticStatus:diagnostic.status,diagnosticMessage:diagnostic.message,diagnostic,connection:{...connection,diagnosticStatus:diagnostic.status,diagnosticState:diagnostic.state,diagnosticMessage:diagnostic.message,diagnosticComplete:diagnostic.complete,diagnosticCompleted:diagnostic.completed,diagnosticDone:diagnostic.done,diagnosticRunning:false,diagnosticLoading:false,checking:false,isChecking:false,diagnostic}};',
+            '}',
+            'async function connectionTestForSession(env,data){',
+            '  return withCompletedPortalDiagnostic(await refreshPortalForSession(env,data));',
+            '}'
+          ])
+          s=s[:start]+block+s[end:]
           old_route="else if(['connection-test','test-connection','connection-status','connection-diagnostic','diagnostic','diagnose','connection-check','check-connection','diagnostic-connection'].includes(action))result=await connectionTestForSession(env,data);"
           new_route="else if(['connection-test','test-connection','connection-status','connection-diagnostic','diagnostic','diagnose','connection-check','check-connection','diagnostic-connection'].includes(action)||/(connection|diagnostic|diagnose|diagnost|conex[aã]o|teste.*conex)/i.test(action))result=await connectionTestForSession(env,data);"
           if s.count(old_route)!=1:

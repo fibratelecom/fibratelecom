@@ -140,6 +140,7 @@ async function writeBankSettings(env,value){
 function mergeEfiBank(current,data={}){
   const previous=current?.efi||emptyBankSettings().efi;
   const certificateBase64=data.removeCertificate===true?'':data.certificateBase64===undefined?String(previous.certificateBase64||''):String(data.certificateBase64||'');
+  const resetTest=data.clientId!==undefined||data.clientSecret!==undefined||data.certificatePassword!==undefined||data.certificateBase64!==undefined||data.removeCertificate===true;
   if(certificateBase64.length>2500000)throw Object.assign(new Error('Certificado Efí muito grande. Selecione o arquivo P12/PFX original.'),{statusCode:400});
   return {
     enabled:data.enabled===undefined?Boolean(previous.enabled):Boolean(data.enabled),
@@ -153,18 +154,19 @@ function mergeEfiBank(current,data={}){
     pixAutoReceiverAgency:data.pixAutoReceiverAgency===undefined?text(previous.pixAutoReceiverAgency):digits(data.pixAutoReceiverAgency),
     pixAutoReceiverAccount:data.pixAutoReceiverAccount===undefined?text(previous.pixAutoReceiverAccount):digits(data.pixAutoReceiverAccount),
     webhookUrl:data.webhookUrl===undefined?text(previous.webhookUrl):text(data.webhookUrl),
-    lastTestStatus:text(previous.lastTestStatus),lastTestMessage:text(previous.lastTestMessage),lastTestAt:text(previous.lastTestAt),webhookConfiguredAt:text(previous.webhookConfiguredAt)
+    lastTestStatus:resetTest?'':text(previous.lastTestStatus),lastTestMessage:resetTest?'':text(previous.lastTestMessage),lastTestAt:resetTest?'':text(previous.lastTestAt),webhookConfiguredAt:resetTest?'':text(previous.webhookConfiguredAt)
   };
 }
 
 function mergeMercadoPagoBank(current,data={}){
   const previous=current?.mercadoPago||emptyBankSettings().mercadoPago;
+  const resetTest=data.accessToken!==undefined;
   return {
     enabled:data.enabled===undefined?Boolean(previous.enabled):Boolean(data.enabled),
     environment:data.environment==='production'?'production':data.environment==='sandbox'?'sandbox':text(previous.environment)||'sandbox',
     publicKey:data.publicKey===undefined?text(previous.publicKey):text(data.publicKey),
     accessToken:data.accessToken===undefined?text(previous.accessToken):text(data.accessToken),
-    lastTestStatus:text(previous.lastTestStatus),lastTestMessage:text(previous.lastTestMessage),lastTestAt:text(previous.lastTestAt)
+    lastTestStatus:resetTest?'':text(previous.lastTestStatus),lastTestMessage:resetTest?'':text(previous.lastTestMessage),lastTestAt:resetTest?'':text(previous.lastTestAt)
   };
 }
 

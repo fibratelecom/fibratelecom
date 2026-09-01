@@ -305,7 +305,7 @@ async function refreshBankClientRequest(request,env){
   const clientId=Number(body.client?.id||body.invoice?.client_id||body.invoice?.clientId)||0;
   if(!clientId)return request;
   const sql=neon(env.DATABASE_URL);
-  const rows=await sql`SELECT id,name,document,contract_number,plan,mplan_id,due_day,status,email,phone,address,city,state,zip_code,updated_at FROM pp_clients WHERE id=${clientId} LIMIT 1`;
+  const rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,updated_at FROM pp_clients WHERE id=${clientId} LIMIT 1`;
   const fresh=Array.isArray(rows)?rows[0]:null;
   if(!fresh)throw Object.assign(new Error('Cliente não encontrado na nuvem. Salve o cadastro antes de emitir a cobrança.'),{statusCode:404});
   const current=body.client||{},freshAddress=text(fresh.address),freshZip=text(fresh.zip_code);

@@ -3,7 +3,13 @@
     window.__ProvedorPlusLegacyClientMarkerInstalled=true;
     window.__ProvedorPlusClientHubInstalled=true;
     const normalizeLabel=value=>String(value??'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
+    const removeClientPdfButton=()=>{
+      document.querySelectorAll('button,a,[role="button"]').forEach(node=>{
+        if(normalizeLabel(node.textContent)==='baixar pdf')node.remove();
+      });
+    };
     const markLegacyClient=()=>{
+      removeClientPdfButton();
       const nav=document.querySelector('.app-shell .sidebar nav[aria-label="Menu principal"],.app-shell .sidebar nav,.app-shell aside nav[aria-label="Menu principal"],.app-shell aside nav,.sidebar nav,aside nav');
       if(!nav)return;
       const item=[...nav.querySelectorAll('button,a,[role="button"]')].find(node=>{

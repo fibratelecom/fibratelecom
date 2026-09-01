@@ -144,8 +144,8 @@ function mergeEfiBank(current,data={}){
   return {
     enabled:data.enabled===undefined?Boolean(previous.enabled):Boolean(data.enabled),
     environment:data.environment==='production'?'production':data.environment==='sandbox'?'sandbox':text(previous.environment)||'sandbox',
-    clientId:text(data.clientId)||text(previous.clientId),
-    clientSecret:text(data.clientSecret)||text(previous.clientSecret),
+    clientId:data.clientId===undefined?text(previous.clientId):text(data.clientId),
+    clientSecret:data.clientSecret===undefined?text(previous.clientSecret):text(data.clientSecret),
     certificatePassword:data.certificatePassword===undefined?String(previous.certificatePassword||''):String(data.certificatePassword||''),
     certificateBase64,
     certificateName:data.removeCertificate===true?'':data.certificateName===undefined?text(previous.certificateName):text(data.certificateName),
@@ -163,7 +163,7 @@ function mergeMercadoPagoBank(current,data={}){
     enabled:data.enabled===undefined?Boolean(previous.enabled):Boolean(data.enabled),
     environment:data.environment==='production'?'production':data.environment==='sandbox'?'sandbox':text(previous.environment)||'sandbox',
     publicKey:data.publicKey===undefined?text(previous.publicKey):text(data.publicKey),
-    accessToken:text(data.accessToken)||text(previous.accessToken),
+    accessToken:data.accessToken===undefined?text(previous.accessToken):text(data.accessToken),
     lastTestStatus:text(previous.lastTestStatus),lastTestMessage:text(previous.lastTestMessage),lastTestAt:text(previous.lastTestAt)
   };
 }
@@ -188,6 +188,10 @@ async function handleBankSettings(request,env){
       const current=await readBankSettings(env),next={...current,efi:mergeEfiBank(current,data)};result=await writeBankSettings(env,next);
     }else if(action==='save-mercado-pago'){
       const current=await readBankSettings(env),next={...current,mercadoPago:mergeMercadoPagoBank(current,data)};result=await writeBankSettings(env,next);
+    }else if(action==='delete-efi'){
+      const current=await readBankSettings(env),next={...current,efi:emptyBankSettings().efi};result=await writeBankSettings(env,next);
+    }else if(action==='delete-mercado-pago'){
+      const current=await readBankSettings(env),next={...current,mercadoPago:emptyBankSettings().mercadoPago};result=await writeBankSettings(env,next);
     }else if(action==='save-default'){
       if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Neon não configurada.'),{statusCode:503});
       const provider=['efi','mercadoPago'].includes(text(data.provider))?text(data.provider):'',sql=neon(env.DATABASE_URL),state=await loadState(sql);

@@ -267,7 +267,7 @@ if(prepareOutcome.kind==='timeout'){
   }
   const stableShell=document.querySelector('.app-shell'),stableNav=stableShell?.querySelector('.sidebar nav,aside nav'),stableContent=stableShell?.querySelector('.content');
   if(!stableShell||!stableNav||!stableContent||!baseUiStableSince||Date.now()-baseUiStableSince<700)throw new Error('A estrutura base do painel não estabilizou antes da montagem da interface atual.');
-  await loadScript('/dashboard-transition-guard.js?v=20260831-uiatomic5');
+  await loadScript('/dashboard-transition-guard.js?v=20260901-bankdelete1');
   await loadScriptStable('/dashboard-enhancements.js?v=20260831-uiatomic5',{dropCharacterData:true,observerTargetSelector:'.app-shell',ignoreWithin:['.pp-dashboard-root-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-new-plans-layer']});
   const coreUiDeadline=Date.now()+12000;
   const adminNeedsIntegration=String(auth?.user?.role||'').toLowerCase()==='admin';

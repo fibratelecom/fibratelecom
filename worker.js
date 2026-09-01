@@ -25,6 +25,17 @@ function parseStateValue(value){
 }
 const bankUtf8=new TextEncoder();
 const portalUtf8=new TextEncoder();
+function base64Url(value){
+  const bytes=value instanceof Uint8Array?value:new Uint8Array(value);
+  let binary='';
+  for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,Math.min(i+0x8000,bytes.length)));
+  return btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+function base64UrlBytes(value){
+  const raw=text(value).replace(/-/g,'+').replace(/_/g,'/'),padded=raw+'='.repeat((4-raw.length%4)%4),binary=atob(padded),out=new Uint8Array(binary.length);
+  for(let i=0;i<binary.length;i++)out[i]=binary.charCodeAt(i);
+  return out;
+}
 
 function json(data,status=200,headers={}){
   return new Response(JSON.stringify(data),{

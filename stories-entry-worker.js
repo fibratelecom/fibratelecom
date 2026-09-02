@@ -17,18 +17,33 @@ async function repairFinancialConsistency(env){
   let transactions=Array.isArray(state.cashback_transactions)?state.cashback_transactions:[],changed=false;
   const now=new Date().toISOString();
 
+  state.settings={...(state.settings||{})};
+  if(Number(state.settings.negotiation_policy_version)!==2){state.settings.negotiation_policy_version=2;changed=true}
+
   for(const invoice of invoices){
-    const invoiceId=String(invoice?.id??''),clientId=Number(invoice?.client_id)||0,discount=Math.max(0,Math.round(Number(invoice?.cashback_discount_applied_cents)||0));
-    if(discount>0&&text(invoice?.cashback_discount_status).toLowerCase()==='applied'){
-      const legacy=transactions.filter(item=>text(item?.source)==='pix_discount'&&String(item?.invoice_id??'')===invoiceId);
+    const invoiceId=String(invoice?.id??''),clientId=Number(invoice?.client_id)||0,discount=Math.max(0,Math.round(Number(invoice?.cashback_discount_applied_cents)||0)),discountStatus=text(invoice?.cashback_discount_status).toLowerCase();
+    const matchingDiscounts=transactions.filter(item=>text(item?.source)==='pix_discount'&&String(item?.invoice_id??'')===invoiceId);
+
+    if(discount>0&&discountStatus==='applied'){
       const clientIndex=clients.findIndex(item=>Number(item?.id)===clientId);
-      if(legacy.length&&clientIndex>=0){
+      if(matchingDiscounts.length&&clientIndex>=0){
         const current=clients[clientIndex],next=balanceCents(current)+discount;
         clients[clientIndex]={...current,cashback_balance_cents:next,cashback_balance:next/100,cashback_updated_at:now};
         transactions=transactions.filter(item=>!(text(item?.source)==='pix_discount'&&String(item?.invoice_id??'')===invoiceId));
         Object.assign(invoice,{cashback_discount_transaction_id:'',cashback_discount_status:'reserved',cashback_discount_reserved_at:text(invoice?.cashback_discount_applied_at)||now,cashback_discount_migrated_at:now});
         changed=true;
       }
+    }else if(discount>0&&discountStatus==='used'&&matchingDiscounts.length>1){
+      const linkedId=text(invoice?.cashback_discount_transaction_id),keep=matchingDiscounts.find(item=>linkedId&&text(item?.id)===linkedId)||[...matchingDiscounts].sort((a,b)=>String(b?.created_at||'').localeCompare(String(a?.created_at||'')))[0],keepId=text(keep?.id);
+      let kept=false;
+      transactions=transactions.filter(item=>{
+        const same=text(item?.source)==='pix_discount'&&String(item?.invoice_id??'')===invoiceId;
+        if(!same)return true;
+        if(!kept&&((keepId&&text(item?.id)===keepId)||(!keepId&&item===keep))){kept=true;return true}
+        return false;
+      });
+      if(keepId&&linkedId!==keepId)invoice.cashback_discount_transaction_id=keepId;
+      changed=true;
     }
 
     if(paidStatus(invoice?.status)&&text(invoice?.paid_at)&&conflictingBankStatus(invoice?.bank_status)){
@@ -47,8 +62,8 @@ async function repairFinancialConsistency(env){
 }
 
 async function fetchWithFinancialConsistency(request,env,ctx){
-  const path=new URL(request.url).pathname;
-  if(path!== '/api/customer-portal'||request.method!=='POST')return baseWorker.fetch(request,env,ctx);
+  const path=new URL(request.url).pathname,reviewPath=path==='/api/customer-portal'||path==='/api/cloud-state';
+  if(!reviewPath||request.method!=='POST')return baseWorker.fetch(request,env,ctx);
   try{await repairFinancialConsistency(env)}catch(error){console.error('Provedor Plus: falha ao revisar consistência financeira antes da ação.',error)}
   const response=await baseWorker.fetch(request,env,ctx);
   if(response?.ok)try{await repairFinancialConsistency(env)}catch(error){console.error('Provedor Plus: falha ao revisar consistência financeira após a ação.',error)}

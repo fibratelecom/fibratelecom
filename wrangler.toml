@@ -1,13 +1,13 @@
 # Cloudflare Provedor Plus - painel
-# build: 20260902-billing-cron
+# build: 20260902-trust-release-48h
 # Efí Pix: mTLS usa binding EFI_MTLS; o certificado precisa estar cadastrado no Cloudflare.
 name = "painel"
-main = "billing-cron.js"
+main = "trust-release-worker.js"
 compatibility_date = "2026-08-30"
 workers_dev = true
 
 [triggers]
-crons = [ "5 6 * * *" ]
+crons = [ "*/15 * * * *", "5 6 * * *" ]
 
 [[mtls_certificates]]
 binding = "EFI_MTLS"

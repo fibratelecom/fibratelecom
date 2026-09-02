@@ -27,15 +27,15 @@ function isoOrEmpty(value){const raw=text(value);if(!raw)return '';const date=ne
 function clampInt(value,min,max,fallback=0){const n=Math.round(Number(value));return Number.isFinite(n)?Math.max(min,Math.min(max,n)):fallback}
 function uniqueIds(value){return [...new Set((Array.isArray(value)?value:[]).map(Number).filter(Number.isFinite))].slice(-10000)}
 function normalizeStory(input={},existing={}){
-  const now=new Date().toISOString(),mediaType=text(input.mediaType||existing.mediaType)==='video'?'video':'image',mediaUrl=safeHttps(input.mediaUrl===undefined?existing.mediaUrl:input.mediaUrl),actionUrl=safeHttps(input.actionUrl===undefined?existing.actionUrl:input.actionUrl),audience=['all','active','blocked'].includes(text(input.audience||existing.audience))?text(input.audience||existing.audience):'all';
+  const now=new Date().toISOString(),rawType=text(input.mediaType===undefined?existing.mediaType:input.mediaType),mediaType=rawType==='video'?'video':rawType==='text'?'text':'image',mediaUrl=mediaType==='text'?'':safeHttps(input.mediaUrl===undefined?existing.mediaUrl:input.mediaUrl),actionUrl=safeHttps(input.actionUrl===undefined?existing.actionUrl:input.actionUrl),audience=['all','active','blocked'].includes(text(input.audience||existing.audience))?text(input.audience||existing.audience):'all',rawBackground=text(input.backgroundStyle===undefined?existing.backgroundStyle:input.backgroundStyle),backgroundStyle=['brand','orange','dark','light'].includes(rawBackground)?rawBackground:'brand';
   if(!text(input.title===undefined?existing.title:input.title))throw Object.assign(new Error('Informe o título do story.'),{statusCode:400});
-  if(!mediaUrl)throw Object.assign(new Error('Informe uma URL HTTPS válida para a imagem ou vídeo.'),{statusCode:400});
+  if(mediaType!=='text'&&!mediaUrl)throw Object.assign(new Error('Informe uma URL HTTPS válida para a imagem ou vídeo.'),{statusCode:400});
   const startAt=isoOrEmpty(input.startAt===undefined?existing.startAt:input.startAt),endAt=isoOrEmpty(input.endAt===undefined?existing.endAt:input.endAt);if(startAt&&endAt&&new Date(endAt)<=new Date(startAt))throw Object.assign(new Error('A data final precisa ser posterior à data inicial.'),{statusCode:400});
   return {
     id:text(existing.id)||text(input.id)||crypto.randomUUID(),
     title:text(input.title===undefined?existing.title:input.title).slice(0,80),
     message:text(input.message===undefined?existing.message:input.message).slice(0,400),
-    mediaType,mediaUrl,
+    mediaType,mediaUrl,backgroundStyle,
     actionLabel:text(input.actionLabel===undefined?existing.actionLabel:input.actionLabel).slice(0,40),
     actionUrl,
     active:input.active===undefined?(existing.active!==false):Boolean(input.active),
@@ -49,7 +49,7 @@ function normalizeStory(input={},existing={}){
   };
 }
 function adminStory(story){return {...story,viewerIds:undefined,clickerIds:undefined,uniqueViews:uniqueIds(story.viewerIds).length,uniqueClicks:uniqueIds(story.clickerIds).length}}
-function publicStory(story){return {id:text(story.id),title:text(story.title),message:text(story.message),mediaType:story.mediaType==='video'?'video':'image',mediaUrl:text(story.mediaUrl),actionLabel:text(story.actionLabel),actionUrl:text(story.actionUrl),order:Number(story.order)||0}}
+function publicStory(story){const mediaType=story.mediaType==='video'?'video':story.mediaType==='text'?'text':'image';return {id:text(story.id),title:text(story.title),message:text(story.message),mediaType,mediaUrl:mediaType==='text'?'':text(story.mediaUrl),backgroundStyle:['brand','orange','dark','light'].includes(text(story.backgroundStyle))?text(story.backgroundStyle):'brand',actionLabel:text(story.actionLabel),actionUrl:text(story.actionUrl),order:Number(story.order)||0}}
 function isBlockedStatus(value){const status=normalize(value);return ['bloqueado','suspenso','atrasado','inadimplente'].some(term=>status.includes(term))}
 function isActiveStatus(value){const status=normalize(value);return !['cancelado','inativo','bloqueado','suspenso'].some(term=>status.includes(term))}
 function visibleTo(story,client,now=Date.now()){

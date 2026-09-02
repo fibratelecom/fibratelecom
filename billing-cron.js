@@ -65,8 +65,9 @@ function addMonthsDue(value,months,dueDay){const date=dateFromKey(value);if(!dat
 function daysBetween(fromKey,toKey){const a=dateFromKey(fromKey),b=dateFromKey(toKey);return a&&b?Math.round((b-a)/DAY):9999}
 function activeClient(client){return !/bloqueado|cancelado|inativo|suspenso/i.test(text(client?.status))}
 function planFor(client,state){return (Array.isArray(state?.plans)?state.plans:[]).find(plan=>Number(plan?.id)===Number(client?.plan_id))||null}
-function invoiceActive(row){return normalize(row?.status)!=='cancelado'&&normalize(row?.status)!=='canceled'}
+function invoiceActive(row){return !['cancelado','canceled'].includes(normalize(row?.status))}
 function invoiceForDue(state,clientId,dueDate){return (Array.isArray(state?.invoices)?state.invoices:[]).find(row=>Number(row?.client_id)===Number(clientId)&&text(row?.due_date).slice(0,10)===dueDate&&invoiceActive(row))||null}
+function hasAnyInvoice(state,clientId){return (Array.isArray(state?.invoices)?state.invoices:[]).some(row=>Number(row?.client_id)===Number(clientId)&&invoiceActive(row))}
 function firstInvoiceExists(state,clientId){return (Array.isArray(state?.invoices)?state.invoices:[]).some(row=>Number(row?.client_id)===Number(clientId)&&(row?.billing_origin==='first_prorated'||row?.prorated_first_invoice===true)&&invoiceActive(row))}
 function nextInvoiceId(state){const invoices=Array.isArray(state?.invoices)?state.invoices:[],max=Math.max(Number(state?.seq?.invoices)||0,...invoices.map(row=>Number(row?.id)||0)),id=max+1;state.seq={...(state.seq||{}),invoices:id};return id}
 
@@ -133,7 +134,7 @@ async function issueRealBoleto(env,invoice,client,state,vault){
   const provider=providerFor(client,state,vault,invoice.bank_provider),secrets=bankSecrets(vault),source={...invoice,bank_provider:provider,client_name:client.name,client_contract_number:client.contract_number};
   const remote=await bankAction(env,{action:'issue',provider,invoice:source,client,efi:secrets.efi,mercadoPago:secrets.mercadoPago,pixAutoRecord:null});
   Object.assign(invoice,{bank_provider:provider},remote||{});
-  return {provider,secrets};
+  return invoice;
 }
 
 async function cancelIssued(env,invoice,client,vault){
@@ -143,18 +144,14 @@ async function cancelIssued(env,invoice,client,vault){
 }
 
 function currentDueCandidate(client,today,daysBefore){
-  const p=brazilParts(dateFromKey(today)||new Date()),candidate=dueKey(p.year,p.month,client.due_day),installation=dateFromKey(client.installation_date||client.created_at);
-  let due=candidate;
+  const p=brazilParts(dateFromKey(today)||new Date()),installation=dateFromKey(client.installation_date||client.created_at);
+  let due=dueKey(p.year,p.month,client.due_day);
   if(installation&&dateFromKey(due)?.getTime()<=installation.getTime()){
-    const installKey=keyFromParts(installation.getUTCFullYear(),installation.getUTCMonth()+1,installation.getUTCDate());
     due=dueKey(installation.getUTCFullYear(),installation.getUTCMonth()+1,client.due_day);
     if(dateFromKey(due)?.getTime()<=installation.getTime())due=addMonthsDue(due,1,client.due_day);
-    if(daysBetween(today,due)<0)return null;
-    if(daysBetween(today,due)>daysBefore)return null;
-    return due;
   }
   const diff=daysBetween(today,due);
-  if(diff<0||diff>daysBefore)return null;
+  if(diff<1||diff>daysBefore)return null;
   return due;
 }
 
@@ -180,12 +177,14 @@ function makeInvoice(state,client,dueDate,amountCents,{first=false,serviceDays=0
   };
 }
 
-async function persistIssued(sql,state,invoice,client,vault){
-  state.invoices=Array.isArray(state.invoices)?state.invoices:[];
-  state.invoices.push(invoice);
+async function issueAndSave(env,sql,state,invoice,client,vault,isExisting){
+  const before={...invoice};
+  await issueRealBoleto(env,invoice,client,state,vault);
+  if(!isExisting){state.invoices=Array.isArray(state.invoices)?state.invoices:[];state.invoices.push(invoice)}
   try{await saveState(sql,state)}catch(error){
-    state.invoices=state.invoices.filter(row=>String(row?.id)!==String(invoice.id));
-    try{await cancelIssued(null,invoice,client,vault)}catch{}
+    try{await cancelIssued(env,invoice,client,vault)}catch{}
+    if(isExisting)Object.assign(invoice,before);
+    else state.invoices=state.invoices.filter(row=>String(row?.id)!==String(invoice.id));
     throw error;
   }
 }
@@ -195,7 +194,7 @@ async function runBillingCron(env){
   const sql=neon(env.DATABASE_URL),state=await loadState(sql);state.settings={...(state.settings||{})};
   const enabled=state.settings.billing_auto_enabled!==false&&String(state.settings.billing_auto_enabled)!=='false';
   if(!enabled)return {enabled:false,generated:0,issued:0,failed:0};
-  const todayParts=brazilParts(),today=keyFromParts(todayParts.year,todayParts.month,todayParts.day),daysBefore=Math.max(1,Math.min(30,Math.floor(num(state.settings.billing_auto_days_before)||7));
+  const todayParts=brazilParts(),today=keyFromParts(todayParts.year,todayParts.month,todayParts.day),daysBefore=Math.max(1,Math.min(30,Math.floor(num(state.settings.billing_auto_days_before)||7)));
   if(text(state.settings.billing_cloudflare_last_run)===today)return {alreadyRan:true,date:today};
   const vault=await readBankSettings(env,sql),rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code FROM pp_clients ORDER BY id ASC`;
   let generated=0,issued=0,skipped=0,failed=0;const errors=[];
@@ -204,20 +203,21 @@ async function runBillingCron(env){
     const plan=planFor(client,state);if(!plan||num(plan.price_cents)<=0){failed++;errors.push(`${client.name||client.id}: cliente sem plano com valor.`);continue}
     try{
       let dueDate='',existing=null,invoice=null;
-      if(!firstInvoiceExists(state,client.id)&&dateFromKey(client.installation_date||client.created_at)){
+      const brandNew=!hasAnyInvoice(state,client.id)&&!firstInvoiceExists(state,client.id)&&dateFromKey(client.installation_date||client.created_at);
+      if(brandNew){
         const calc=firstProrated(client,plan);if(!calc){skipped++;continue}
         const diff=daysBetween(today,calc.due);if(diff<1||diff>30){skipped++;continue}
         dueDate=calc.due;existing=invoiceForDue(state,client.id,dueDate);
-        if(existing)invoice=existing;else invoice=makeInvoice(state,client,dueDate,calc.amount,{first:true,serviceDays:calc.serviceDays,cycleDays:calc.cycleDays,baseAmount:calc.base});
+        invoice=existing||makeInvoice(state,client,dueDate,calc.amount,{first:true,serviceDays:calc.serviceDays,cycleDays:calc.cycleDays,baseAmount:calc.base});
       }else{
         dueDate=currentDueCandidate(client,today,daysBefore);if(!dueDate){skipped++;continue}
         existing=invoiceForDue(state,client.id,dueDate);
-        if(existing)invoice=existing;else invoice=makeInvoice(state,client,dueDate,Math.max(1,Math.round(num(plan.price_cents))),{baseAmount:plan.price_cents});
+        invoice=existing||makeInvoice(state,client,dueDate,Math.max(1,Math.round(num(plan.price_cents))),{baseAmount:plan.price_cents});
       }
-      if(text(invoice.status).toLowerCase().includes('pago')||text(invoice.bank_charge_id)){skipped++;continue}
-      await issueRealBoleto(env,invoice,client,state,vault);issued++;
-      if(!existing){state.invoices=Array.isArray(state.invoices)?state.invoices:[];state.invoices.push(invoice);generated++}
-      await saveState(sql,state);
+      const inactive=['pago','paid','baixado','renegociado','renegotiated','substituido','substituida'].some(value=>normalize(invoice.status).includes(value));
+      if(inactive||text(invoice.bank_charge_id)){skipped++;continue}
+      await issueAndSave(env,sql,state,invoice,client,vault,Boolean(existing));
+      issued++;if(!existing)generated++;
     }catch(error){failed++;errors.push(`${client.name||client.id}: ${error instanceof Error?error.message:String(error)}`)}
   }
   state.settings.billing_auto_enabled=true;

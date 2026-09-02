@@ -1,8 +1,8 @@
 # Cloudflare Provedor Plus - painel
-# build: 20260902-trust-release-48h
+# build: 20260902-due-date-protocols
 # Efí Pix: mTLS usa binding EFI_MTLS; o certificado precisa estar cadastrado no Cloudflare.
 name = "painel"
-main = "trust-release-worker.js"
+main = "customer-service-worker.js"
 compatibility_date = "2026-08-30"
 workers_dev = true
 

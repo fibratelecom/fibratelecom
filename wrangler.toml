@@ -1,5 +1,5 @@
 # Cloudflare Provedor Plus - painel
-# build: 20260902-stories
+# build: 20260902-stories3
 # Efí Pix: mTLS usa binding EFI_MTLS; o certificado precisa estar cadastrado no Cloudflare.
 name = "painel"
 main = "stories-entry-worker.js"

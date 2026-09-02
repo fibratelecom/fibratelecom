@@ -1,8 +1,8 @@
 # Cloudflare Provedor Plus - painel
-# build: 20260902-negotiation-interest
+# build: 20260902-stories
 # Efí Pix: mTLS usa binding EFI_MTLS; o certificado precisa estar cadastrado no Cloudflare.
 name = "painel"
-main = "negotiation-worker.js"
+main = "stories-entry-worker.js"
 compatibility_date = "2026-08-30"
 workers_dev = true
 

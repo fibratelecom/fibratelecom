@@ -35,12 +35,12 @@ async function enhance(card){
     minDays:clamp(Math.floor(number(current.negotiation_min_overdue_days,5)),0,365),
     cash:clamp(number(current.negotiation_cash_discount_percent,5),0,100),
     interest:clamp(number(current.negotiation_installment_interest_percent,1.5),0,20),
-    max:clamp(Math.floor(number(current.negotiation_max_installments,3)),2,3),
+    max:clamp(Math.floor(number(current.negotiation_max_installments,3)),2,4),
     entry:clamp(number(current.negotiation_entry_percent,30),0,90),
     first:clamp(Math.floor(number(current.negotiation_first_due_days,0)),0,30)
   }:{minDays:5,cash:5,interest:1.5,max:3,entry:30,first:0};
   setValue(card,'.pp-neg-min-days',values.minDays);setValue(card,'.pp-neg-cash',values.cash);setValue(card,'.pp-neg-interest',values.interest);setValue(card,'.pp-neg-max',values.max);setValue(card,'.pp-neg-entry',values.entry);setValue(card,'.pp-neg-first-due',values.first);if(oldDiscount)oldDiscount.value='0';
-  const max=field(card,'.pp-neg-max');if(max){max.min='2';max.max='3'}
+  const max=field(card,'.pp-neg-max');if(max){max.min='2';max.max='4'}
   const entry=field(card,'.pp-neg-entry');if(entry)entry.max='90';
 }
 
@@ -53,7 +53,7 @@ async function save(card){
     negotiation_cash_discount_percent:clamp(number(field(card,'.pp-neg-cash')?.value,5),0,100),
     negotiation_installment_discount_percent:0,
     negotiation_installment_interest_percent:clamp(number(field(card,'.pp-neg-interest')?.value,1.5),0,20),
-    negotiation_max_installments:clamp(Math.floor(number(field(card,'.pp-neg-max')?.value,3)),2,3),
+    negotiation_max_installments:clamp(Math.floor(number(field(card,'.pp-neg-max')?.value,3)),2,4),
     negotiation_entry_percent:clamp(number(field(card,'.pp-neg-entry')?.value,30),0,90),
     negotiation_first_due_days:clamp(Math.floor(number(field(card,'.pp-neg-first-due')?.value,0)),0,30)
   };

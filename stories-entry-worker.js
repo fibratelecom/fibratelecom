@@ -1,4 +1,4 @@
-import baseWorker from './negotiation-worker.js';
+import baseWorker from './push-worker.js';
 import {handleStoriesRequest,isStoriesPath} from './stories-worker.js';
 import {handleStoryReactionsRequest,isStoryReactionsPath} from './story-reactions-worker.js';
 import {neon} from '@neondatabase/serverless';

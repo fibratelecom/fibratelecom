@@ -2,12 +2,12 @@
 # build: 20260902-stories3
 # Efí Pix: mTLS usa binding EFI_MTLS; o certificado precisa estar cadastrado no Cloudflare.
 name = "painel"
-main = "operations-entry-worker.js"
+main = "notification-center-entry-worker.js"
 compatibility_date = "2026-08-30"
 workers_dev = true
 
 [triggers]
-crons = [ "*/15 * * * *", "5 6 * * *" ]
+crons = [ "* * * * *", "*/15 * * * *", "5 6 * * *" ]
 
 [[mtls_certificates]]
 binding = "EFI_MTLS"

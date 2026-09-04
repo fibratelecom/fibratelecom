@@ -6,6 +6,7 @@ const OPS_PATH='/api/push-operations';
 const STATE_KEY='web_state_v1017';
 const VAPID_KEY='push_vapid_v1';
 const OPS_SETTINGS_KEY='push_operational_settings_v1';
+const CUSTOM_TEMPLATES_KEY='push_custom_templates_v1';
 const CLIENT_APP_ORIGIN='https://cliente.fibramais.workers.dev';
 const text=value=>String(value??'').trim();
 const normalize=value=>text(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
@@ -31,6 +32,8 @@ function brDateTime(value){const d=new Date(value);return Number.isNaN(d.getTime
 function paidStatus(value){const status=normalize(value);return ['pago','paga','paid','baixado','recebido','recebida','quitado','quitada'].some(item=>status.includes(item))}
 function blockedStatus(value){const status=normalize(value);return status.includes('bloqueado')||status.includes('suspenso')}
 function safeSettings(value){const source=parseObject(value),next={};for(const key of Object.keys(DEFAULT_SETTINGS))next[key]=source[key]===undefined?DEFAULT_SETTINGS[key]:source[key]===true||String(source[key]).toLowerCase()==='true';return next}
+function safeTemplateUrl(value){const raw=text(value);return ['/','/#faturas','/#conexao','/#perfil','/#cashback'].includes(raw)?raw:'/'}
+function normalizeSavedTemplate(value){const id=text(value?.id).slice(0,80),name=text(value?.name).slice(0,60),title=text(value?.title).slice(0,90),body=text(value?.body).slice(0,500),url=safeTemplateUrl(value?.url),createdAt=text(value?.createdAt),updatedAt=text(value?.updatedAt);return id&&name&&title&&body?{id,name,title,body,url,createdAt,updatedAt}:null}
 function normalizeClickUrl(value='/'){const raw=text(value);return raw.startsWith('/')?`${CLIENT_APP_ORIGIN}${raw}`:`${CLIENT_APP_ORIGIN}/`}
 function notificationPayload(title,body,url,tag){return {title:text(title)||'Fibra+',body:text(body),icon:`${CLIENT_APP_ORIGIN}/icons/fibra-app-192.png?v=15`,badge:`${CLIENT_APP_ORIGIN}/icons/fibra-app-192.png?v=15`,tag:text(tag)||'fibra-plus',lang:'pt-BR',data:{url:normalizeClickUrl(url)}}}
 
@@ -96,6 +99,9 @@ async function ensureTables(sql){
 async function loadState(sql){const rows=await sql`SELECT value FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`;return parseObject(rows?.[0]?.value)}
 async function loadSettings(sql){const rows=await sql`SELECT value FROM pp_settings WHERE key=${OPS_SETTINGS_KEY} LIMIT 1`;return safeSettings(rows?.[0]?.value)}
 async function saveSettings(sql,value){const next=safeSettings(value),raw=JSON.stringify(next),at=new Date().toISOString();await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${OPS_SETTINGS_KEY},${raw}::jsonb,${at}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at`;return next}
+async function loadTemplates(sql){const rows=await sql`SELECT value FROM pp_settings WHERE key=${CUSTOM_TEMPLATES_KEY} LIMIT 1`;let value=rows?.[0]?.value;if(typeof value==='string')try{value=JSON.parse(value)}catch{value=[]}const source=Array.isArray(value)?value:Array.isArray(value?.items)?value.items:[];return source.map(normalizeSavedTemplate).filter(Boolean).slice(0,30)}
+async function saveTemplates(sql,items){const safe=(Array.isArray(items)?items:[]).map(normalizeSavedTemplate).filter(Boolean).slice(0,30),raw=JSON.stringify(safe),at=new Date().toISOString();await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${CUSTOM_TEMPLATES_KEY},${raw}::jsonb,${at}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at`;return safe}
+function newTemplateId(){const random=crypto.getRandomValues(new Uint32Array(1))[0].toString(36);return `tpl-${Date.now().toString(36)}-${random}`}
 
 async function pushCryptoKey(env){const secret=text(env.BANK_SECRET_KEY)||text(env.PORTAL_SESSION_SECRET)||text(env.DATABASE_URL);if(!secret)throw new Error('Chave de proteção das notificações não configurada.');const raw=await crypto.subtle.digest('SHA-256',enc.encode(`provedor-plus-push-v1|${secret}`));return crypto.subtle.importKey('raw',raw,{name:'AES-GCM'},false,['decrypt'])}
 async function readVapid(env,sql){const rows=await sql`SELECT value FROM pp_settings WHERE key=${VAPID_KEY} LIMIT 1`,record=rows?.[0]?.value;if(!record?.iv||!record?.data)return null;const key=await pushCryptoKey(env),plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:base64UrlBytes(record.iv)},key,base64UrlBytes(record.data));return JSON.parse(new TextDecoder().decode(plain))}
@@ -219,8 +225,15 @@ async function handleOperations(request,env,ctx){
   if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405);
   try{
     await verifyPanelAdmin(request,env,ctx);if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Neon não configurada.'),{statusCode:503});let body={};try{body=await request.json()}catch{}const action=text(body?.action),data=body?.data||{},sql=neon(env.DATABASE_URL);await ensureTables(sql);
-    if(action==='get')return json({ok:true,data:{settings:await loadSettings(sql),financialAutomatic:['Fatura gerada','Vence amanhã','Fatura vencida','Pagamento confirmado','Cashback recebido']}});
+    if(action==='get')return json({ok:true,data:{settings:await loadSettings(sql),templates:await loadTemplates(sql),financialAutomatic:['Fatura gerada','Vence amanhã','Fatura vencida','Pagamento confirmado','Cashback recebido']}});
     if(action==='save'){const current=await loadSettings(sql),next={...current};for(const key of Object.keys(DEFAULT_SETTINGS))if(data?.settings&&Object.prototype.hasOwnProperty.call(data.settings,key))next[key]=Boolean(data.settings[key]);return json({ok:true,data:{settings:await saveSettings(sql,next)}})}
+    if(action==='save-template'){
+      const name=text(data?.name).slice(0,60),title=text(data?.title).slice(0,90),message=text(data?.body).slice(0,500),url=safeTemplateUrl(data?.url),requestedId=text(data?.id).slice(0,80);if(!name||!title||!message)throw Object.assign(new Error('Informe o nome, título e mensagem do modelo.'),{statusCode:400});
+      const templates=await loadTemplates(sql),existingIndex=requestedId?templates.findIndex(item=>item.id===requestedId):-1,now=new Date().toISOString();if(existingIndex<0&&templates.length>=30)throw Object.assign(new Error('Limite de 30 modelos personalizados atingido.'),{statusCode:409});const id=existingIndex>=0?templates[existingIndex].id:newTemplateId(),createdAt=existingIndex>=0?templates[existingIndex].createdAt||now:now,next={id,name,title,body:message,url,createdAt,updatedAt:now};if(existingIndex>=0)templates[existingIndex]=next;else templates.unshift(next);return json({ok:true,data:{template:next,templates:await saveTemplates(sql,templates)}})
+    }
+    if(action==='delete-template'){
+      const id=text(data?.id).slice(0,80);if(!id)throw Object.assign(new Error('Modelo inválido.'),{statusCode:400});const templates=await loadTemplates(sql),next=templates.filter(item=>item.id!==id);if(next.length===templates.length)throw Object.assign(new Error('Modelo não encontrado.'),{statusCode:404});return json({ok:true,data:{templates:await saveTemplates(sql,next)}})
+    }
     if(action==='scan-now')return json({ok:true,data:await scanOperationalEvents(env)});
     throw Object.assign(new Error('Ação de notificações operacionais não permitida.'),{statusCode:400});
   }catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500)}

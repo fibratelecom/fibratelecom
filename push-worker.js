@@ -175,8 +175,8 @@ function invoiceAutomaticEvents(invoice,today,tomorrow,yesterday){
 function cashbackAutomaticEvents(state){
   const transactions=Array.isArray(state?.cashback_transactions)?state.cashback_transactions:[],events=[];
   for(const item of transactions){
-    if(text(item?.source)!=='pix_paid'||text(item?.type).toLowerCase()!=='credit'||!recentTimestamp(item?.created_at,36))continue;
-    const clientId=Number(item?.client_id)||0,amount=Math.max(0,Math.round(Number(item?.amount_cents)||0)),balance=Math.max(0,Math.round(Number(item?.balance_after_cents)||0)),id=text(item?.id)||`${item?.invoice_id||'pix'}:${item?.created_at||''}`;
+    if(text(item?.type).toLowerCase()!=='credit'||!recentTimestamp(item?.created_at,36))continue;
+    const clientId=Number(item?.client_id)||0,amount=Math.max(0,Math.round(Number(item?.amount_cents)||0)),balance=Math.max(0,Math.round(Number(item?.balance_after_cents)||0)),id=text(item?.id)||`${item?.invoice_id||'cashback'}:${item?.created_at||''}`;
     if(!clientId||!amount)continue;
     events.push({key:`cashback:${id}`,clientId,type:'cashback recebido',title:'Cashback recebido',body:`Você recebeu ${brl(amount)} de cashback. Seu saldo agora é ${brl(balance)}.`,url:'/#cashback'});
   }

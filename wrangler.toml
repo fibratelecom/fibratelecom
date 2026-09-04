@@ -2,7 +2,7 @@
 # build: 20260902-stories3
 # Efí Pix: mTLS usa binding EFI_MTLS; o certificado precisa estar cadastrado no Cloudflare.
 name = "painel"
-main = "stories-entry-worker.js"
+main = "operations-entry-worker.js"
 compatibility_date = "2026-08-30"
 workers_dev = true
 

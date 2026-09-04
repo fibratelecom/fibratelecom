@@ -118,9 +118,12 @@ async function enhancePortalResponse(response,env){
 async function fetchWithFinancialConsistency(request,env,ctx){
   const path=new URL(request.url).pathname,reviewPath=path==='/api/customer-portal'||path==='/api/cloud-state';
   if(!reviewPath||request.method!=='POST')return baseWorker.fetch(request,env,ctx);
-  try{await repairFinancialConsistency(env)}catch(error){console.error('Provedor Plus: falha ao revisar consistência financeira antes da ação.',error)}
+  let action='';
+  if(path==='/api/customer-portal')try{const body=await request.clone().json();action=text(body?.action)}catch{}
+  const loginRead=path==='/api/customer-portal'&&action==='login';
+  if(!loginRead)try{await repairFinancialConsistency(env)}catch(error){console.error('Provedor Plus: falha ao revisar consistência financeira antes da ação.',error)}
   let response=await baseWorker.fetch(request,env,ctx);
-  if(response?.ok)try{await repairFinancialConsistency(env)}catch(error){console.error('Provedor Plus: falha ao revisar consistência financeira após a ação.',error)}
+  if(response?.ok&&!loginRead)try{await repairFinancialConsistency(env)}catch(error){console.error('Provedor Plus: falha ao revisar consistência financeira após a ação.',error)}
   if(path==='/api/customer-portal'&&response?.ok)response=await enhancePortalResponse(response,env);
   return response;
 }

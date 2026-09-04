@@ -167,9 +167,14 @@ function safeAuditDetails(action,requestData,responseData,base={}){
 }
 async function clientIdForAudit(body,responseData,env){const direct=Number(responseData?.client?.id)||0;if(direct)return direct;const token=body?.data?.session;if(token)try{return (await verifySession(token,env)).clientId}catch{}return 0}
 async function augmentResponseWithProtocol(response,protocol){if(!protocol)return response;let body={};try{body=await response.clone().json()}catch{return response}if(!body||typeof body!=='object')return response;body.data=body.data&&typeof body.data==='object'?{...body.data,protocol:protocol.protocol,protocolRecord:protocol}:{protocol:protocol.protocol,protocolRecord:protocol};const headers=new Headers(response.headers);headers.delete('content-length');headers.delete('content-encoding');headers.delete('etag');return new Response(JSON.stringify(body),{status:response.status,statusText:response.statusText,headers})}
+async function recordAuditProtocol(body,action,definition,response,env){let responseData={};try{const parsed=await response.clone().json();responseData=parsed?.data||{}}catch{}const clientId=await clientIdForAudit(body,responseData,env);if(!clientId)return null;return createProtocol(neon(env.DATABASE_URL),{clientId,category:definition.category,subject:definition.subject,status:'Concluído',details:safeAuditDetails(action,body?.data||{},responseData,definition.details||{})})}
 async function auditedBaseFetch(request,env,ctx){
   let body={};try{body=await request.clone().json()}catch{}const action=text(body?.action),path=new URL(request.url).pathname,definition=portalAuditDefinition(path,action),response=await baseWorker.fetch(request,env,ctx);if(!definition||!response.ok||!env.DATABASE_URL)return response;
-  try{let responseData={};try{const parsed=await response.clone().json();responseData=parsed?.data||{}}catch{}const clientId=await clientIdForAudit(body,responseData,env);if(!clientId)return response;const protocol=await createProtocol(neon(env.DATABASE_URL),{clientId,category:definition.category,subject:definition.subject,status:'Concluído',details:safeAuditDetails(action,body?.data||{},responseData,definition.details||{})});return augmentResponseWithProtocol(response,protocol)}catch(error){console.error('Provedor Plus: ação da Área do Cliente concluída, mas o protocolo não pôde ser registrado.',error);return response}
+  if(action==='login'&&typeof ctx?.waitUntil==='function'){
+    ctx.waitUntil(recordAuditProtocol(body,action,definition,response,env).catch(error=>console.error('Provedor Plus: login concluído, mas o protocolo não pôde ser registrado em segundo plano.',error)));
+    return response;
+  }
+  try{const protocol=await recordAuditProtocol(body,action,definition,response,env);return augmentResponseWithProtocol(response,protocol)}catch(error){console.error('Provedor Plus: ação da Área do Cliente concluída, mas o protocolo não pôde ser registrado.',error);return response}
 }
 
 export default {

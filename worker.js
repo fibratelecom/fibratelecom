@@ -177,7 +177,6 @@ function mergeEfiBank(current,data={}){
     lastTestStatus:resetTest?'':text(previous.lastTestStatus),lastTestMessage:resetTest?'':text(previous.lastTestMessage),lastTestAt:resetTest?'':text(previous.lastTestAt),webhookConfiguredAt:resetTest?'':text(previous.webhookConfiguredAt)
   };
 }
-
 function mergeMercadoPagoBank(current,data={}){
   const previous=current?.mercadoPago||emptyBankSettings().mercadoPago;
   const resetTest=data.accessToken!==undefined;
@@ -567,7 +566,7 @@ async function portalLiveConnection(env,sql,client){
     return {...fallback,status:'Indisponível',quality:'Indisponível',checkedAt,lastConnection:portalDateLabel(checkedFallback||checkedAt),lastConnectionIso:checkedFallback||checkedAt,lastConnectionLabel:portalDateLabel(checkedFallback||checkedAt),diagnosticStatus:'error',diagnosticMessage:message,checking:false,isChecking:false,source:'mikrotik-error',connectionError:message};
   }
 }
-async function portalSnapshot(client,state,env,sessionToken='',connectionOverride=null){
+async function portalSnapshot(client,state,env,sessionToken='',connectionOverride=null,{includeProtocols=true}={}){
   const invoices=(Array.isArray(state.invoices)?state.invoices:[])
     .filter(row=>Number(row?.client_id)===Number(client.id))
     .map(row=>mapInvoice(row,client,state))
@@ -584,7 +583,7 @@ async function portalSnapshot(client,state,env,sessionToken='',connectionOverrid
     .filter(item=>Number(item?.client_id)===Number(client.id))
     .slice(-20).reverse().map(safeNegotiation);
   let protocols=[];
-  try{if(env.DATABASE_URL)protocols=await listProtocolRecords(neon(env.DATABASE_URL),client.id,20)}catch{}
+  if(includeProtocols)try{if(env.DATABASE_URL)protocols=await listProtocolRecords(neon(env.DATABASE_URL),client.id,20)}catch{}
   return {
     session:sessionToken||await portalSession(client,env),
     client:portalClientData(client),
@@ -868,16 +867,19 @@ async function nativePortalLogin(env,data){
   if(!document&&!contract)throw Object.assign(new Error('Informe CPF, CNPJ ou contrato.'),{statusCode:400});
   if(document&&![11,14].includes(document.length))throw Object.assign(new Error('CPF ou CNPJ inválido.'),{statusCode:400});
   if(contract&&digits(contract).length<6)throw Object.assign(new Error('Contrato inválido.'),{statusCode:400});
-  const sql=neon(env.DATABASE_URL);
+  const sql=neon(env.DATABASE_URL),contractDigits=digits(contract),hasDocument=Boolean(document),hasContract=Boolean(contract);
   const clients=await sql`
     SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,
            router_id,connection_type,pppoe_username,ip,mikrotik_status,mikrotik_last_sync
-    FROM pp_clients ORDER BY id ASC
+    FROM pp_clients
+    WHERE (${hasDocument}=false OR regexp_replace(COALESCE(document,''),'[^0-9]','','g')=${document})
+      AND (${hasContract}=false OR contract_number=${contract} OR regexp_replace(COALESCE(contract_number,''),'[^0-9]','','g')=${contractDigits})
+    LIMIT 1
   `;
-  const client=(Array.isArray(clients)?clients:[]).find(item=>sameClient(item,{document,contract}));
+  const client=Array.isArray(clients)?clients[0]||null:null;
   if(!client)throw Object.assign(new Error('Cliente não encontrado. Confira o CPF, CNPJ ou contrato informado.'),{statusCode:404});
   const state=await loadState(sql);if(repairLegacyPendingCashback(state,client))await saveState(sql,state);
-  return portalSnapshot(client,state,env);
+  return portalSnapshot(client,state,env,'',null,{includeProtocols:false});
 }
 
 function portalPaymentInactiveStatus(value){

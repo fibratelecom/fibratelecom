@@ -70,6 +70,7 @@ function invoiceForDue(state,clientId,dueDate){return (Array.isArray(state?.invo
 function hasAnyInvoice(state,clientId){return (Array.isArray(state?.invoices)?state.invoices:[]).some(row=>Number(row?.client_id)===Number(clientId)&&invoiceActive(row))}
 function firstInvoiceExists(state,clientId){return (Array.isArray(state?.invoices)?state.invoices:[]).some(row=>Number(row?.client_id)===Number(clientId)&&(row?.billing_origin==='first_prorated'||row?.prorated_first_invoice===true)&&invoiceActive(row))}
 function nextInvoiceId(state){const invoices=Array.isArray(state?.invoices)?state.invoices:[],max=Math.max(Number(state?.seq?.invoices)||0,...invoices.map(row=>Number(row?.id)||0)),id=max+1;state.seq={...(state.seq||{}),invoices:id};return id}
+function deferredNegotiationInstallment(row){return row?.bank_issue_deferred===true&&Number(row?.installment_number)>1&&Boolean(text(row?.negotiation_id))}
 
 function clientLocal(state,id){return (Array.isArray(state?.clients)?state.clients:[]).find(row=>Number(row?.id)===Number(id))||{}}
 function mergedClient(remote,state){
@@ -177,13 +178,19 @@ function makeInvoice(state,client,dueDate,amountCents,{first=false,serviceDays=0
   };
 }
 
+function prepareCombinedMonthly(invoice,plan,dueDate){
+  const monthlyCents=Math.max(1,Math.round(num(plan?.price_cents))),agreementCents=Math.max(1,Math.round(num(invoice?.negotiation_installment_amount_cents))),reference=dueDate.slice(0,7),part=Math.max(2,Math.round(num(invoice?.installment_number))),total=Math.max(part,Math.round(num(invoice?.installment_total)||part));
+  Object.assign(invoice,{due_date:dueDate,amount_cents:monthlyCents+agreementCents,status:'Pendente',billing_type:'Mensalidade + Renegociação',description:`Mensalidade ${reference} + Acordo ${text(invoice?.negotiation_id)} · Parcela ${part}/${total}`,billing_origin:'monthly_auto_combined',auto_generated:true,competency:reference,reference,base_amount_cents:monthlyCents,monthly_amount_cents:monthlyCents,negotiation_installment_amount_cents:agreementCents,cashback_base_cents:monthlyCents,combined_billing:true,bank_issue_deferred:false,cashback_eligible:false,cashback_enabled:false,cashback_reason:'mensalidade_com_renegociacao',billing_items:[{type:'monthly',label:`Mensalidade ${reference}`,amount_cents:monthlyCents},{type:'negotiation',label:`Parcela ${part}/${total} do acordo`,amount_cents:agreementCents,installment_number:part,installment_total:total,negotiation_id:text(invoice?.negotiation_id)}]});
+  return invoice;
+}
+
 async function issueAndSave(env,sql,state,invoice,client,vault,isExisting){
-  const before={...invoice};
+  const before=JSON.parse(JSON.stringify(invoice));
   await issueRealBoleto(env,invoice,client,state,vault);
   if(!isExisting){state.invoices=Array.isArray(state.invoices)?state.invoices:[];state.invoices.push(invoice)}
   try{await saveState(sql,state)}catch(error){
     try{await cancelIssued(env,invoice,client,vault)}catch{}
-    if(isExisting)Object.assign(invoice,before);
+    if(isExisting){for(const key of Object.keys(invoice))delete invoice[key];Object.assign(invoice,before)}
     else state.invoices=state.invoices.filter(row=>String(row?.id)!==String(invoice.id));
     throw error;
   }
@@ -216,6 +223,7 @@ async function runBillingCron(env){
       }
       const inactive=['pago','paid','baixado','renegociado','renegotiated','substituido','substituida'].some(value=>normalize(invoice.status).includes(value));
       if(inactive||text(invoice.bank_charge_id)){skipped++;continue}
+      if(existing&&deferredNegotiationInstallment(invoice))prepareCombinedMonthly(invoice,plan,dueDate);
       await issueAndSave(env,sql,state,invoice,client,vault,Boolean(existing));
       issued++;if(!existing)generated++;
     }catch(error){failed++;errors.push(`${client.name||client.id}: ${error instanceof Error?error.message:String(error)}`)}

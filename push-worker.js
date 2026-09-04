@@ -88,7 +88,7 @@ function notificationPayload(title,body,url,tag='fibra-plus'){return {title:text
 async function sendOne(sql,row,vapid,payload){
   try{
     const built=await buildPushHTTPRequest({privateJWK:vapid.privateJWK,subscription:{endpoint:row.endpoint,keys:{p256dh:row.p256dh,auth:row.auth}},message:{payload,adminContact:vapid.subject||'mailto:adrianomoreirausuarios@gmail.com',options:{ttl:86400,urgency:'normal',topic:text(payload.tag).replace(/[^A-Za-z0-9_-]/g,'').slice(0,32)||'fibra-plus'}}});
-    const response=await fetch(built.endpoint,{method:'POST',headers:built.headers,body:built.body,redirect:'error'}),now=new Date().toISOString();
+    const response=await fetch(built.endpoint,{method:'POST',headers:built.headers,body:built.body,redirect:'manual'}),now=new Date().toISOString();
     if(response.ok){await sql`UPDATE pp_push_subscriptions SET active=true,last_success_at=${now},last_error=NULL,updated_at=${now} WHERE id=${Number(row.id)}`;return {ok:true}}
     const error=`Push HTTP ${response.status}`;if(response.status===404||response.status===410)await sql`UPDATE pp_push_subscriptions SET active=false,last_error=${error},updated_at=${now} WHERE id=${Number(row.id)}`;else await sql`UPDATE pp_push_subscriptions SET last_error=${error},updated_at=${now} WHERE id=${Number(row.id)}`;return {ok:false,error};
   }catch(error){const message=error instanceof Error?error.message:String(error),now=new Date().toISOString();try{await sql`UPDATE pp_push_subscriptions SET last_error=${message.slice(0,500)},updated_at=${now} WHERE id=${Number(row.id)}`}catch{}return {ok:false,error:message}}

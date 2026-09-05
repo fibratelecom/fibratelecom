@@ -100,9 +100,13 @@
       }
     }
 
-    async function routerRecord(id){const list=await base.routers.list(),r=(list||[]).find(x=>Number(x.id)===Number(id));if(!r)throw Error('MikroTik cadastrado não encontrado.');return r}
-    async function routerAuth(id,password=''){
-      const entered=String(password||'').trim(),r=await routerRecord(id);let stored='';
+    async function routerRecord(id){
+      const cached=(Array.isArray(window.ProvedorPlusCloudState?.getState?.()?.routers)?window.ProvedorPlusCloudState.getState().routers:[]).find(x=>Number(x.id)===Number(id));
+      if(cached)return cached;
+      const list=await base.routers.list(),r=(list||[]).find(x=>Number(x.id)===Number(id));if(!r)throw Error('MikroTik cadastrado não encontrado.');return r
+    }
+    async function routerAuth(id,password='',record=null){
+      const entered=String(password||'').trim(),r=record||await routerRecord(id);let stored='';
       if(!entered){
         try{stored=await secretGet(id)}
         catch(error){throw Error(`Não foi possível consultar a credencial do MikroTik: ${error instanceof Error?error.message:String(error)}`)}
@@ -195,7 +199,7 @@
       const list=await base.routers.list();
       return Promise.all((list||[]).map(async r=>{
         let hasPassword=Boolean(r.has_password),credentialError='';
-        try{hasPassword=Boolean(await secretGet(r.id))||hasPassword}catch(error){credentialError=error instanceof Error?error.message:String(error)}
+        if(!hasPassword){try{hasPassword=Boolean(await secretGet(r.id))}catch(error){credentialError=error instanceof Error?error.message:String(error)}}
         return {...r,connection_method:'rest',port:Number(r.port)===8728?443:(Number(r.port)||443),has_password:hasPassword,credential_status:credentialError?'unavailable':hasPassword?'configured':'missing',credential_error:credentialError};
       }));
     };
@@ -217,12 +221,12 @@
     };
     api.routers.delete=async id=>{const r=await base.routers.delete(id);await secretDelete(id);return r};
 
-    api.mikrotik.sync=async routerId=>{const r=await routerRecord(routerId),result=await cloudRead('router.sync',{router:await routerAuth(routerId)});return {...result,routerId:Number(routerId),routerName:r.name}};
-    api.mikrotik.metrics=async routerId=>{const r=await routerRecord(routerId),result=await cloudCall('router.metrics',{router:await routerAuth(routerId)},17500);return {...result,routerId:Number(routerId),routerName:r.name}};
-    api.mikrotik.profiles=async routerId=>{const r=await routerRecord(routerId),result=await cloudRead('router.profiles',{router:await routerAuth(routerId)});return {...result,routerId:Number(routerId),routerName:r.name}};
-    api.mikrotik.remoteAccess=async routerId=>{const r=await routerRecord(routerId),result=await cloudRead('router.remote',{router:await routerAuth(routerId)});return {...result,routerId:Number(routerId),routerName:r.name}};
-    api.mikrotik.savePppoe=async(routerId,data)=>{const r=await routerRecord(routerId),result=await cloudCall('pppoe.save',{router:await routerAuth(routerId),data:clone(data)});return {...result,routerId:Number(routerId),routerName:r.name}};
-    api.mikrotik.deletePppoe=async(routerId,data)=>{const r=await routerRecord(routerId),result=await cloudCall('pppoe.delete',{router:await routerAuth(routerId),data:clone(data)});return {...result,routerId:Number(routerId),routerName:r.name}};
+    api.mikrotik.sync=async routerId=>{const r=await routerRecord(routerId),result=await cloudRead('router.sync',{router:await routerAuth(routerId,'',r)});return {...result,routerId:Number(routerId),routerName:r.name}};
+    api.mikrotik.metrics=async routerId=>{const r=await routerRecord(routerId),result=await cloudCall('router.metrics',{router:await routerAuth(routerId,'',r)},17500);return {...result,routerId:Number(routerId),routerName:r.name}};
+    api.mikrotik.profiles=async routerId=>{const r=await routerRecord(routerId),result=await cloudRead('router.profiles',{router:await routerAuth(routerId,'',r)});return {...result,routerId:Number(routerId),routerName:r.name}};
+    api.mikrotik.remoteAccess=async routerId=>{const r=await routerRecord(routerId),result=await cloudRead('router.remote',{router:await routerAuth(routerId,'',r)});return {...result,routerId:Number(routerId),routerName:r.name}};
+    api.mikrotik.savePppoe=async(routerId,data)=>{const r=await routerRecord(routerId),result=await cloudCall('pppoe.save',{router:await routerAuth(routerId,'',r),data:clone(data)});return {...result,routerId:Number(routerId),routerName:r.name}};
+    api.mikrotik.deletePppoe=async(routerId,data)=>{const r=await routerRecord(routerId),result=await cloudCall('pppoe.delete',{router:await routerAuth(routerId,'',r),data:clone(data)});return {...result,routerId:Number(routerId),routerName:r.name}};
 
     api.clients.status=async id=>{
       const baseStatus=await base.clients.status(id),client=baseStatus?.client||await clientRecord(id);

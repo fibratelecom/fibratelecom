@@ -24,7 +24,7 @@
     return body.data;
   }
   async function secretSet(id,password){return dataCall('routers.secret.save',{id:Number(id),password:String(password||'')})}
-  async function secretGet(id){try{return String((await dataCall('routers.secret.get',{id:Number(id)}))?.password||'')}catch{return ''}}
+  async function secretGet(id){return String((await dataCall('routers.secret.get',{id:Number(id)}))?.password||'')}
   async function secretDelete(id){try{return await dataCall('routers.secret.delete',{id:Number(id)})}catch{return {deleted:false,id:Number(id)||0}}}
   async function trafficRecord(clientId,live){return dataCall('traffic.record',{clientId:Number(clientId),month:localMonthKey(),live:clone(live)})}
 
@@ -92,10 +92,13 @@
 
     async function routerRecord(id){const list=await base.routers.list(),r=(list||[]).find(x=>Number(x.id)===Number(id));if(!r)throw Error('MikroTik cadastrado não encontrado.');return r}
     async function routerAuth(id,password=''){
-      const entered=String(password||'').trim();
-      const [r,stored]=await Promise.all([routerRecord(id),entered?Promise.resolve(''):secretGet(id)]);
+      const entered=String(password||'').trim(),r=await routerRecord(id);let stored='';
+      if(!entered){
+        try{stored=await secretGet(id)}
+        catch(error){throw Error(`Não foi possível consultar a credencial do MikroTik: ${error instanceof Error?error.message:String(error)}`)}
+      }
       const pass=entered||stored;
-      if(!pass)throw Error('A credencial deste MikroTik não está disponível na nuvem. Edite o MikroTik, informe a senha e clique em Salvar e conectar.');
+      if(!pass)throw Error('A credencial deste MikroTik não está cadastrada. Edite o MikroTik, informe a senha e clique em Salvar e conectar.');
       return normalizeRouter(r,pass);
     }
     async function clientRecord(id){const list=await base.clients.list(),c=(list||[]).find(x=>Number(x.id)===Number(id));if(!c)throw Error('Cliente não encontrado.');return c}
@@ -214,9 +217,21 @@
       api.banks.testMercadoPago=async(...args)=>{await hydrateBankSettings({strict:true});return base.banks.testMercadoPago(...args)};
     }
 
-    api.routers.list=async()=>{const list=await base.routers.list();return Promise.all((list||[]).map(async r=>({...r,connection_method:'rest',port:Number(r.port)===8728?443:(Number(r.port)||443),has_password:Boolean(await secretGet(r.id))||Boolean(r.has_password)})))};
+    api.routers.list=async()=>{
+      const list=await base.routers.list();
+      return Promise.all((list||[]).map(async r=>{
+        let hasPassword=Boolean(r.has_password),credentialError='';
+        try{hasPassword=Boolean(await secretGet(r.id))||hasPassword}catch(error){credentialError=error instanceof Error?error.message:String(error)}
+        return {...r,connection_method:'rest',port:Number(r.port)===8728?443:(Number(r.port)||443),has_password:hasPassword,credential_status:credentialError?'unavailable':hasPassword?'configured':'missing',credential_error:credentialError};
+      }));
+    };
     api.routers.save=async data=>{
-      const entered=String(data?.password||'').trim(),existing=data?.id?await secretGet(data.id):'',password=entered||existing;
+      const entered=String(data?.password||'').trim();let existing='';
+      if(data?.id&&!entered){
+        try{existing=await secretGet(data.id)}
+        catch(error){throw Error(`Não foi possível consultar a credencial atual do MikroTik: ${error instanceof Error?error.message:String(error)}`)}
+      }
+      const password=entered||existing;
       if(!password)throw Error('Informe a senha do MikroTik.');
       const candidate=normalizeRouter(data,password);
       if(!candidate.host||!candidate.username)throw Error('Informe o DNS público/IP público, usuário e senha do MikroTik.');

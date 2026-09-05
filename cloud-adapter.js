@@ -4,6 +4,20 @@
   const bool=(v,fallback=false)=>{if(v===undefined||v===null||v==='')return fallback;if(typeof v==='boolean')return v;if(typeof v==='number')return v!==0;const x=String(v).trim().toLowerCase();if(['true','1','sim','yes','on'].includes(x))return true;if(['false','0','nao','não','no','off'].includes(x))return false;return fallback};
   const localMonthKey=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`};
   const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const BANK_TIMEOUT_MS=15000;
+  const nativeFetch=window.fetch.bind(window);
+  if(!window.__ProvedorPlusBankTimeoutFetchInstalled){
+    window.fetch=async(input,init={})=>{
+      const rawUrl=typeof input==='string'?input:String(input?.url||'');let pathname='';
+      try{pathname=new URL(rawUrl,location.href).pathname}catch{}
+      if(pathname!=='/api/bank-settings'||init?.signal||input?.signal)return nativeFetch(input,init);
+      const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),BANK_TIMEOUT_MS);
+      try{return await nativeFetch(input,{...init,signal:ctl.signal})}
+      catch(error){if(error?.name==='AbortError')throw Error('Tempo limite ao consultar a integração bancária. Tente novamente.');throw error}
+      finally{clearTimeout(timer)}
+    };
+    Object.defineProperty(window,'__ProvedorPlusBankTimeoutFetchInstalled',{value:true,enumerable:false});
+  }
 
   async function dataCall(action,data={}){
     const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),8000);

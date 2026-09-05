@@ -248,7 +248,37 @@
     };
     api.clients.block=async id=>runClientControl(id,true);
     api.clients.unblock=async id=>runClientControl(id,false);
-    api.clients.trustRelease=async(id,hours=48)=>{const before=await base.clients.status(id);if(before?.trust?.usedThisMonth)throw Error('A liberação em confiança já foi utilizada neste mês para este cliente.');const c=before?.client||await clientRecord(id),r=await routerAuth(c.router_id);await cloudCall('client.unblock',{router:r,data:clone(c)});try{return await base.clients.trustRelease(id,hours)}catch(error){try{await cloudCall('client.block',{router:r,data:clone(c)})}catch{}throw error}};
+    api.clients.trustRelease=async(id,hours=48)=>{
+      const before=await base.clients.status(id);
+      if(before?.trust?.usedThisMonth)throw Error('A liberação em confiança já foi utilizada neste mês para este cliente.');
+      const c=before?.client||await clientRecord(id),r=await routerAuth(c.router_id);
+      let commandError=null;
+      try{await cloudCall('client.unblock',{router:r,data:clone(c)})}catch(error){commandError=error}
+      let truth;
+      try{truth=await controlTruth(r,c)}catch(error){if(commandError)throw commandError;throw error}
+      if(truth.blocked){
+        try{await persistControlTruth(id,truth)}catch(persistError){throw new Error(`O MikroTik não confirmou a liberação e o painel não pôde ser realinhado: ${persistError instanceof Error?persistError.message:String(persistError)}`)}
+        if(commandError)throw commandError;
+        throw Error('O MikroTik não confirmou a liberação em confiança. O painel foi mantido de acordo com o estado real do PPPoE.');
+      }
+      try{
+        let saved=await base.clients.trustRelease(id,hours);
+        if(base.clients.setMikrotikState)saved=await base.clients.setMikrotikState(id,{secretId:truth.secretId||'',status:'Sincronizado',lastSync:now()});
+        return saved;
+      }catch(error){
+        let rollbackError=null;
+        try{await cloudCall('client.block',{router:r,data:clone(c)})}catch(compensationError){rollbackError=compensationError}
+        try{
+          const repairedTruth=await controlTruth(r,c);
+          await persistControlTruth(id,repairedTruth);
+          if(rollbackError)console.error('Provedor Plus: a compensação da liberação em confiança falhou, mas o painel foi realinhado ao estado real.',rollbackError);
+        }catch(reconcileError){
+          const original=error instanceof Error?error.message:String(error),detail=reconcileError instanceof Error?reconcileError.message:String(reconcileError);
+          throw new Error(`${original} Não foi possível confirmar e realinhar o estado entre o painel e o MikroTik: ${detail}`);
+        }
+        throw error;
+      }
+    };
 
     api.vpn.status=async()=>({installed:true,web:true,mode:'cloud-rest',message:'A conexão web usa REST HTTPS pelo MikroTik Cloud.'});
     api.vpn.activate=async()=>({queued:false,mode:'cloud-rest',message:'O acesso é feito diretamente pela integração REST HTTPS em nuvem.'});

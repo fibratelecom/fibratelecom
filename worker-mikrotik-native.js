@@ -97,16 +97,24 @@ function normalizeActiveRow(row={}){const [downloadBytes,uploadBytes]=counterPai
 async function activeSessions(router,username=''){
   const props=['.id','name','service','caller-id','address','uptime','encoding','bytes','bytes-in','bytes-out','session-id','limit-bytes-in','limit-bytes-out'];
   const query=username?[`name=${username}`]:[];
-  let list=[];
-  try{list=await print(router,'ppp/active',props,query,{stats:''})}catch{}
+  let list=[],completed=false,lastError=null;
+  try{list=await print(router,'ppp/active',props,query,{stats:''});completed=true}catch(error){lastError=error}
   const missingStats=list.length&&list.every(row=>!text(row?.bytes)&&!Number.isFinite(Number(row?.['bytes-in']))&&!Number.isFinite(Number(row?.['bytes-out'])));
   if(!list.length||missingStats){
     try{
       const detailed=await print(router,'ppp/active',[],query,{stats:''});
+      completed=true;
       if(detailed.length)list=detailed;
-    }catch{}
+    }catch(error){lastError=error}
   }
-  if(!list.length){try{const all=rows(await request(router,'ppp/active'));list=username?all.filter(x=>text(x?.name)===username):all}catch{}}
+  if(!list.length){
+    try{
+      const all=rows(await request(router,'ppp/active'));
+      completed=true;
+      list=username?all.filter(x=>text(x?.name)===username):all;
+    }catch(error){lastError=error}
+  }
+  if(!completed)throw lastError||Error('Não foi possível consultar as sessões PPPoE ativas no MikroTik.');
   return list.map(normalizeActiveRow);
 }
 async function pppSecrets(router){

@@ -184,26 +184,43 @@ async function saveClient(sql,data){const p=clientPayload(data);if(!p.name)throw
   }
   if(p.pppoe_password)rows=await sql`INSERT INTO pp_clients (name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,pppoe_user,pppoe_password,auto_block,block_after_days,notes,router_id,connection_type,pppoe_username,mikrotik_profile,ip,mac_address,mikrotik_secret_id,mikrotik_status,mikrotik_last_sync,updated_at) VALUES (${p.name},${p.document},${p.contract_number},${p.plan},${p.plan_id},${p.due_day},${p.status},${p.email},${p.phone},${p.address},${p.city},${p.state},${p.zip_code},${p.pppoe_user},${p.pppoe_password},${p.auto_block},${p.block_after_days},${p.notes},${p.router_id},${p.connection_type},${p.pppoe_username},${p.mikrotik_profile},${p.ip},${p.mac_address},${p.mikrotik_secret_id},${p.mikrotik_status},${p.mikrotik_last_sync},${p.updated_at}) RETURNING *`;
   else rows=await sql`INSERT INTO pp_clients (name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,pppoe_user,auto_block,block_after_days,notes,router_id,connection_type,pppoe_username,mikrotik_profile,ip,mac_address,mikrotik_secret_id,mikrotik_status,mikrotik_last_sync,updated_at) VALUES (${p.name},${p.document},${p.contract_number},${p.plan},${p.plan_id},${p.due_day},${p.status},${p.email},${p.phone},${p.address},${p.city},${p.state},${p.zip_code},${p.pppoe_user},${p.auto_block},${p.block_after_days},${p.notes},${p.router_id},${p.connection_type},${p.pppoe_username},${p.mikrotik_profile},${p.ip},${p.mac_address},${p.mikrotik_secret_id},${p.mikrotik_status},${p.mikrotik_last_sync},${p.updated_at}) RETURNING *`;return rows[0];}
-async function secretContext(request,sql,routerId){const current=await currentSession(request,sql);if(!current?.user?.id)throw Object.assign(new Error('Sessão expirada ou não autenticada.'),{statusCode:401});const users=await sql`SELECT password_hash FROM pp_users WHERE id=${Number(current.user.id)} LIMIT 1`,passwordHash=text(users[0]?.password_hash);if(!passwordHash)throw Object.assign(new Error('Não foi possível proteger a credencial do MikroTik.'),{statusCode:500});const key=await sha256Bytes(`provedor-plus-router-secret-v1|${current.user.id}|${passwordHash}`);return {userId:Number(current.user.id),key,settingKey:`router_secret_v1_${Number(current.user.id)}_${Number(routerId)}`};}
 async function encryptSecret(value,keyBytes){const iv=randomBytes(12),key=await crypto.subtle.importKey('raw',keyBytes,{name:'AES-GCM'},false,['encrypt']),combined=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},key,utf8.encode(String(value))));const tag=combined.slice(combined.length-16),data=combined.slice(0,combined.length-16);return {v:1,iv:bytesToB64(iv),tag:bytesToB64(tag),data:bytesToB64(data)};}
 async function decryptSecret(record,keyBytes){try{if(!record?.iv||!record?.tag||!record?.data)return '';const data=b64ToBytes(record.data),tag=b64ToBytes(record.tag),combined=new Uint8Array(data.length+tag.length);combined.set(data);combined.set(tag,data.length);const key=await crypto.subtle.importKey('raw',keyBytes,{name:'AES-GCM'},false,['decrypt']),plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:b64ToBytes(record.iv)},key,combined);return new TextDecoder().decode(plain)}catch{return ''}}
-async function routerSecretGet(request,sql,routerId){const id=num(routerId);if(!id)throw Object.assign(new Error('MikroTik inválido.'),{statusCode:400});const ctx=await secretContext(request,sql,id),row=await getSetting(sql,ctx.settingKey),password=await decryptSecret(row?.value,ctx.key);return {configured:Boolean(password),password};}
-async function routerSecretSave(request,sql,routerId,password){const id=num(routerId),value=String(password||'');if(!id)throw Object.assign(new Error('MikroTik inválido.'),{statusCode:400});if(!value)throw Object.assign(new Error('Informe a senha do MikroTik.'),{statusCode:400});const ctx=await secretContext(request,sql,id);await setSetting(sql,ctx.settingKey,await encryptSecret(value,ctx.key));return {configured:true,id};}
-async function routerSecretDelete(request,sql,routerId){const id=num(routerId);if(!id)return {deleted:false,id:null};const ctx=await secretContext(request,sql,id);await deleteSetting(sql,ctx.settingKey);return {deleted:true,id};}
+const routerSecretV2SettingKey=routerId=>`router_secret_v2_${Number(routerId)}`;
+async function routerSharedSecretKey(env){const secret=text(env?.BANK_SECRET_KEY)||text(env?.PORTAL_SESSION_SECRET)||text(env?.DATABASE_URL);if(!secret)throw Object.assign(new Error('Chave de proteção das credenciais do MikroTik não configurada.'),{statusCode:503});return sha256Bytes(`provedor-plus-router-secret-v2|${secret}`)}
+async function legacyRouterSecret(sql,routerId){
+  const id=num(routerId);if(!id)return '';
+  const users=await sql`SELECT id,password_hash,role FROM pp_users ORDER BY CASE WHEN role='admin' THEN 0 ELSE 1 END,id ASC`;
+  for(const user of Array.isArray(users)?users:[]){
+    const userId=Number(user?.id)||0,passwordHash=text(user?.password_hash);if(!userId||!passwordHash)continue;
+    const row=await getSetting(sql,`router_secret_v1_${userId}_${id}`),record=row?.value;if(!record||typeof record!=='object')continue;
+    const key=await sha256Bytes(`provedor-plus-router-secret-v1|${userId}|${passwordHash}`),password=await decryptSecret(record,key);if(password)return password;
+  }
+  return '';
+}
+async function sharedRouterSecret(env,sql,routerId,{migrateLegacy=true}={}){
+  const id=num(routerId);if(!id)return '';
+  const key=await routerSharedSecretKey(env),row=await getSetting(sql,routerSecretV2SettingKey(id)),stored=await decryptSecret(row?.value,key);if(stored)return stored;
+  if(!migrateLegacy)return '';
+  const legacy=await legacyRouterSecret(sql,id);if(!legacy)return '';
+  await setSetting(sql,routerSecretV2SettingKey(id),await encryptSecret(legacy,key));return legacy;
+}
+async function deleteLegacyRouterSecrets(sql,routerId){
+  const id=num(routerId);if(!id)return;
+  const users=await sql`SELECT id FROM pp_users ORDER BY id ASC`;
+  for(const user of Array.isArray(users)?users:[]){const userId=Number(user?.id)||0;if(userId)await deleteSetting(sql,`router_secret_v1_${userId}_${id}`)}
+}
+async function routerSecretGet(env,sql,routerId){const id=num(routerId);if(!id)throw Object.assign(new Error('MikroTik inválido.'),{statusCode:400});const password=await sharedRouterSecret(env,sql,id);return {configured:Boolean(password),password};}
+async function routerSecretSave(env,sql,routerId,password){const id=num(routerId),value=String(password||'');if(!id)throw Object.assign(new Error('MikroTik inválido.'),{statusCode:400});if(!value)throw Object.assign(new Error('Informe a senha do MikroTik.'),{statusCode:400});const key=await routerSharedSecretKey(env);await setSetting(sql,routerSecretV2SettingKey(id),await encryptSecret(value,key));return {configured:true,id};}
+async function routerSecretDelete(env,sql,routerId){const id=num(routerId);if(!id)return {deleted:false,id:null};await deleteSetting(sql,routerSecretV2SettingKey(id));await deleteLegacyRouterSecrets(sql,id);return {deleted:true,id};}
 export async function resolveRouterForService(env,routerId){
   const sql=sqlFor(env),id=num(routerId);
   if(!id)throw Object.assign(new Error('MikroTik do cliente não está configurado.'),{statusCode:409});
   const routers=await sql`SELECT id,name,host,port,username,allow_self_signed,active FROM pp_routers WHERE id=${id} LIMIT 1`,router=Array.isArray(routers)?routers[0]:null;
   if(!router)throw Object.assign(new Error('MikroTik vinculado ao cliente não foi encontrado.'),{statusCode:404});
   if(router.active===false)throw Object.assign(new Error('O MikroTik vinculado ao cliente está desativado.'),{statusCode:409});
-  const users=await sql`SELECT id,password_hash,role FROM pp_users ORDER BY CASE WHEN role='admin' THEN 0 ELSE 1 END,id ASC`;
-  for(const user of Array.isArray(users)?users:[]){
-    const userId=Number(user?.id)||0,passwordHash=text(user?.password_hash);if(!userId||!passwordHash)continue;
-    const row=await getSetting(sql,`router_secret_v1_${userId}_${id}`),record=row?.value;
-    if(!record||typeof record!=='object')continue;
-    const key=await sha256Bytes(`provedor-plus-router-secret-v1|${userId}|${passwordHash}`),password=await decryptSecret(record,key);
-    if(password)return {id:Number(router.id),name:text(router.name)||'MikroTik',host:text(router.host),port:num(router.port)||443,username:text(router.username),password,allow_self_signed:bool(router.allow_self_signed,false)};
-  }
+  const password=await sharedRouterSecret(env,sql,id);
+  if(password)return {id:Number(router.id),name:text(router.name)||'MikroTik',host:text(router.host),port:num(router.port)||443,username:text(router.username),password,allow_self_signed:bool(router.allow_self_signed,false)};
   throw Object.assign(new Error('A credencial segura deste MikroTik não está disponível para o diagnóstico do cliente.'),{statusCode:409});
 }
 export async function recordTrafficForService(env,clientId,live){return trafficRecord(sqlFor(env),{clientId,live});}
@@ -230,9 +247,9 @@ export async function handleNativeCloudData(request,env){
     if(action==='routers.list')result=await sql`SELECT * FROM pp_routers ORDER BY id ASC`;
     else if(action==='routers.save')result=await saveRouter(sql,data);
     else if(action==='routers.delete'){const id=num(data.id);if(!id)throw Object.assign(new Error('MikroTik inválido.'),{statusCode:400});await sql`DELETE FROM pp_routers WHERE id=${id}`;result={deleted:true,id};}
-    else if(action==='routers.secret.get')result=await routerSecretGet(request,sql,data.id);
-    else if(action==='routers.secret.save')result=await routerSecretSave(request,sql,data.id,data.password);
-    else if(action==='routers.secret.delete')result=await routerSecretDelete(request,sql,data.id);
+    else if(action==='routers.secret.get')result=await routerSecretGet(env,sql,data.id);
+    else if(action==='routers.secret.save')result=await routerSecretSave(env,sql,data.id,data.password);
+    else if(action==='routers.secret.delete')result=await routerSecretDelete(env,sql,data.id);
     else if(action==='clients.list')result=await sql`SELECT * FROM pp_clients ORDER BY id ASC`;
     else if(action==='clients.save')result=await saveClient(sql,data);
     else if(action==='clients.delete'){const id=num(data.id);if(!id)throw Object.assign(new Error('Cliente inválido.'),{statusCode:400});await sql`DELETE FROM pp_clients WHERE id=${id}`;result={deleted:true,id};}

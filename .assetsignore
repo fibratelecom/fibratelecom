@@ -1,5 +1,17 @@
 node_modules/
 .github/
+notification-center-entry-worker.js
+operations-entry-worker.js
+stories-entry-worker.js
+push-worker.js
+negotiation-worker.js
+customer-service-worker.js
+trust-release-worker.js
+billing-cron.js
+stories-worker.js
+story-reactions-worker.js
+worker-bank-native.js
+worker-mikrotik-native.js
 worker.js
 worker-native-api.js
 wrangler.toml

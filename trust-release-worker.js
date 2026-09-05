@@ -36,6 +36,21 @@ async function verifySession(token,env){const parts=text(token).split('.');if(pa
 function corsFor(request){const origin=text(request.headers.get('origin'));if(!PORTAL_ORIGINS.has(origin))return {'Vary':'Origin'};return {'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Methods':'POST, OPTIONS','Access-Control-Allow-Headers':'Content-Type','Access-Control-Max-Age':'86400','Vary':'Origin'}}
 function json(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store, max-age=0',...headers}})}
 async function mikrotikAction(env,action,client){const router=await resolveRouterForService(env,client.router_id),request=new Request('https://painel.fibramais.workers.dev/api/mikrotik-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,router,data:client})}),response=await handleMikrotikProxy(request);let body={};try{body=await response.json()}catch{}if(!response.ok||!body.ok)throw Object.assign(new Error(text(body?.error)||`Falha no MikroTik (HTTP ${response.status}).`),{statusCode:409});return body.data||{}}
+async function mikrotikTruth(env,client){
+  const snapshot=await mikrotikAction(env,'router.sync',client),username=text(client?.pppoe_username||client?.pppoe_user);
+  const secret=(Array.isArray(snapshot?.pppSecrets)?snapshot.pppSecrets:[]).find(item=>text(item?.name)===username);
+  if(!secret)throw Object.assign(new Error('Não foi possível confirmar o acesso PPPoE deste cliente no MikroTik.'),{statusCode:409});
+  return {blocked:Boolean(secret.disabled),secretId:text(secret.id)};
+}
+async function alignNetworkTruth(sql,state,clientId,truth,{clearTrust=false}={}){
+  const index=localClientIndex(state,clientId),at=new Date().toISOString(),status=truth.blocked?'Bloqueado':hasOverdue(state,clientId)?'Em atraso':'Ativo',mikrotikStatus=truth.blocked?'Bloqueado no MikroTik':'Sincronizado';
+  if(index>=0){
+    state.clients[index]={...state.clients[index],status,mikrotik_secret_id:truth.secretId||state.clients[index]?.mikrotik_secret_id||'',mikrotik_status:mikrotikStatus,mikrotik_last_sync:at,last_mikrotik_sync:at,...(clearTrust?{trust_release_until:''}:{})};
+    await saveState(sql,state);
+  }
+  await sql`UPDATE pp_clients SET status=${status},mikrotik_secret_id=COALESCE(NULLIF(${truth.secretId},''),mikrotik_secret_id),mikrotik_status=${mikrotikStatus},mikrotik_last_sync=${at},updated_at=${at} WHERE id=${Number(clientId)}`;
+  return status;
+}
 
 function trustInfo(remote,local,state){
   const merged={...(local||{}),...(remote||{})},untilRaw=text(local?.trust_release_until),until=untilRaw?new Date(untilRaw):null,active=Boolean(until&&!Number.isNaN(until.getTime())&&until.getTime()>Date.now()),usedMonth=text(local?.trust_release_used_month)||text(local?.trust_release_at).slice(0,7),usedThisMonth=usedMonth===monthKey(),status=normalize(merged.status),nextAvailableAt=usedThisMonth?nextMonthIso():'';
@@ -66,13 +81,23 @@ async function handleTrust(request,env){
     let unblocked=false;
     try{
       await mikrotikAction(env,'client.unblock',merged);unblocked=true;
-      state.clients[index]={...state.clients[index],status:nextStatus,trust_release_used_month:releaseMonth,trust_release_at:at.toISOString(),trust_release_until:until.toISOString(),trust_release_source:'area-cliente',access_history:appendAccessHistory(state.clients[index],'Liberação em confiança','Liberação temporária de 48 horas solicitada pela Área do Cliente')};
+      const truth=await mikrotikTruth(env,merged);if(truth.blocked)throw Object.assign(new Error('O MikroTik não confirmou a liberação do acesso PPPoE.'),{statusCode:409});
+      state.clients[index]={...state.clients[index],status:nextStatus,mikrotik_secret_id:truth.secretId||state.clients[index]?.mikrotik_secret_id||'',mikrotik_status:'Sincronizado',mikrotik_last_sync:at.toISOString(),last_mikrotik_sync:at.toISOString(),trust_release_used_month:releaseMonth,trust_release_at:at.toISOString(),trust_release_until:until.toISOString(),trust_release_source:'area-cliente',access_history:appendAccessHistory(state.clients[index],'Liberação em confiança','Liberação temporária de 48 horas solicitada pela Área do Cliente')};
       await saveState(sql,state);
-      await sql`UPDATE pp_clients SET status=${nextStatus},mikrotik_status='Sincronizado',mikrotik_last_sync=${at.toISOString()},updated_at=${at.toISOString()} WHERE id=${Number(remote.id)}`;
+      await sql`UPDATE pp_clients SET status=${nextStatus},mikrotik_secret_id=COALESCE(NULLIF(${truth.secretId},''),mikrotik_secret_id),mikrotik_status='Sincronizado',mikrotik_last_sync=${at.toISOString()},updated_at=${at.toISOString()} WHERE id=${Number(remote.id)}`;
     }catch(error){
-      if(unblocked)try{await mikrotikAction(env,'client.block',merged)}catch{}
-      try{await saveState(sql,before)}catch{}
-      try{await sql`UPDATE pp_clients SET status='Bloqueado',updated_at=${new Date().toISOString()} WHERE id=${Number(remote.id)}`}catch{}
+      let rollbackError=null;
+      if(unblocked)try{await mikrotikAction(env,'client.block',merged)}catch(compensationError){rollbackError=compensationError}
+      let reconciliationError=null;
+      try{
+        const truth=await mikrotikTruth(env,merged);
+        await alignNetworkTruth(sql,before,remote.id,truth,{clearTrust:true});
+      }catch(reconcileError){reconciliationError=reconcileError;try{await saveState(sql,before)}catch{}}
+      if(reconciliationError){
+        const original=error instanceof Error?error.message:String(error),detail=reconciliationError instanceof Error?reconciliationError.message:String(reconciliationError);
+        throw Object.assign(new Error(`${original} Não foi possível confirmar e realinhar o painel com o estado real do MikroTik: ${detail}`),{statusCode:409});
+      }
+      if(rollbackError)console.error('Provedor Plus: a compensação da liberação em confiança falhou, mas o painel foi realinhado ao estado real do MikroTik.',rollbackError);
       throw error;
     }
     const freshLocal=localClient(state,remote.id),fresh={...remote,status:nextStatus};return json({ok:true,data:trustInfo(fresh,freshLocal,state)},200,cors);
@@ -92,8 +117,8 @@ async function processExpiredTrust(env){
         const at=new Date().toISOString();state.clients[index]={...state.clients[index],status:'Ativo',trust_release_until:'',trust_release_completed_at:at,trust_release_completion_reason:'payment',access_history:appendAccessHistory(state.clients[index],'Fim da liberação em confiança','Prazo encerrado sem novo bloqueio porque não há fatura vencida')};
         await sql`UPDATE pp_clients SET status='Ativo',updated_at=${at} WHERE id=${id}`;releasedByPayment++;changed=true;continue;
       }
-      const merged={...state.clients[index],...remote};await mikrotikAction(env,'client.block',merged);const at=new Date().toISOString();state.clients[index]={...state.clients[index],status:'Bloqueado',trust_release_until:'',trust_release_reblocked_at:at,trust_release_completion_reason:'expired',access_history:appendAccessHistory(state.clients[index],'Fim da liberação em confiança','48 horas encerradas; acesso PPPoE bloqueado novamente')};
-      await sql`UPDATE pp_clients SET status='Bloqueado',mikrotik_status='Sincronizado',mikrotik_last_sync=${at},updated_at=${at} WHERE id=${id}`;reblocked++;changed=true;
+      const merged={...state.clients[index],...remote};await mikrotikAction(env,'client.block',merged);const truth=await mikrotikTruth(env,merged);if(!truth.blocked)throw Error('O MikroTik não confirmou o re-bloqueio do acesso PPPoE.');const at=new Date().toISOString();state.clients[index]={...state.clients[index],status:'Bloqueado',mikrotik_secret_id:truth.secretId||state.clients[index]?.mikrotik_secret_id||'',mikrotik_status:'Bloqueado no MikroTik',mikrotik_last_sync:at,last_mikrotik_sync:at,trust_release_until:'',trust_release_reblocked_at:at,trust_release_completion_reason:'expired',access_history:appendAccessHistory(state.clients[index],'Fim da liberação em confiança','48 horas encerradas; acesso PPPoE bloqueado novamente')};
+      await alignNetworkTruth(sql,state,id,truth,{clearTrust:true});reblocked++;changed=true;
     }catch(error){failed++;console.error(`Provedor Plus: falha ao encerrar confiança do cliente ${id}.`,error)}
   }
   if(changed)await saveState(sql,state);

@@ -26,7 +26,7 @@ const __ppStartup={
 window.addEventListener('provedor-plus-react-error',__ppReactErrorListener);
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260905-startupfast1';
+  const BUILD_TOKEN='20260905-startupstable2';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');
@@ -195,16 +195,18 @@ window.addEventListener('provedor-plus-react-error',__ppReactErrorListener);
   const auth=await window.ProvedorPlusAuth.ensure();
   window.__PROVEDOR_PLUS_AUTH__=auth;
 
-  await loadScript('/cloud-state-store.js?v=20260905-startupfast1');
+  await loadScript('/cloud-state-store.js?v=20260905-startupstable2');
 if(!window.ProvedorPlusCloudState?.prepare)throw new Error('A sincronização com o banco da nuvem não foi carregada.');
 const prepareOutcome=await window.ProvedorPlusCloudState.prepare().then(result=>({kind:'ready',result})).catch(error=>({kind:'error',error}));
 if(prepareOutcome.kind==='error'){
   console.warn('Provedor Plus: estado remoto indisponível na abertura; seguindo com o estado local.',prepareOutcome.error);
 }
   const currentState=window.ProvedorPlusCloudState.getState()||{};
-  currentState.settings={...(currentState.settings||{}),current_user_name:auth?.user?.name||currentState.settings?.current_user_name||'Administrador'};
-  localStorage.setItem('provedor_plus_web_1_0_17',JSON.stringify(currentState));
-  window.ProvedorPlusCloudState.forceSync().catch(error=>console.warn('Provedor Plus: sincronizacao inicial continuara depois.',error));
+  const currentUserName=auth?.user?.name||currentState.settings?.current_user_name||'Administrador';
+  if(String(currentState.settings?.current_user_name||'')!==String(currentUserName)){
+    currentState.settings={...(currentState.settings||{}),current_user_name:currentUserName};
+    localStorage.setItem('provedor_plus_web_1_0_17',JSON.stringify(currentState));
+  }
 
   const bridgeB64=await read(['/packed/bridgegz-01.txt','/packed/bridgegz-02.txt','/packed/bridgegz-03.txt','/packed/bridgegz-04.txt']);
   const bridge=await gunzipB64(bridgeB64);
@@ -245,21 +247,18 @@ if(prepareOutcome.kind==='error'){
   try{await import(appUrl)}finally{setTimeout(()=>URL.revokeObjectURL(appUrl),1500)}
   if(__ppReactBootError||window.__PP_REACT_BOOT_ERROR__)throw (__ppReactBootError||window.__PP_REACT_BOOT_ERROR__);
   await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-  const baseUiDeadline=Date.now()+8000;
-  let baseUiReady=false;
+  const baseUiDeadline=Date.now()+10000;
+  let stableShell=null,stableNav=null,stableContent=null;
   while(Date.now()<baseUiDeadline){
     const shell=document.querySelector('.app-shell'),nav=shell?.querySelector('.sidebar nav,aside nav'),content=shell?.querySelector('.content');
-    if(shell&&nav&&content){
-      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-      const nextShell=document.querySelector('.app-shell'),nextNav=nextShell?.querySelector('.sidebar nav,aside nav'),nextContent=nextShell?.querySelector('.content');
-      if(nextShell===shell&&nextNav===nav&&nextContent===content){baseUiReady=true;break}
-    }
+    if(shell&&nav&&content){stableShell=shell;stableNav=nav;stableContent=content;break}
     await new Promise(resolve=>setTimeout(resolve,40));
   }
-  const stableShell=document.querySelector('.app-shell'),stableNav=stableShell?.querySelector('.sidebar nav,aside nav'),stableContent=stableShell?.querySelector('.content');
-  if(!baseUiReady||!stableShell||!stableNav||!stableContent)throw new Error('A estrutura base do painel não ficou disponível para a montagem da interface atual.');
+  if(!stableShell||!stableNav||!stableContent)throw new Error('A estrutura base do painel não ficou disponível para a montagem da interface atual.');
+  document.documentElement.classList.remove('pp-atomic-ui-mounting');
+  uiGateStyle.remove();
   await loadScript('/dashboard-transition-guard.js?v=20260901-bankdelete1');
-  await loadScriptStable('/dashboard-enhancements.js?v=20260831-uiatomic5',{dropCharacterData:true,observerTargetSelector:'.app-shell',ignoreWithin:['.pp-dashboard-root-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-new-plans-layer']});
+  await loadScriptStable('/dashboard-enhancements.js?v=20260905-mikrotikfast1',{dropCharacterData:true,observerTargetSelector:'.app-shell',ignoreWithin:['.pp-dashboard-root-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-new-plans-layer']});
   const coreUiDeadline=Date.now()+12000;
   const adminNeedsIntegration=String(auth?.user?.role||'').toLowerCase()==='admin';
   let coreUiReady=false;
@@ -274,9 +273,7 @@ if(prepareOutcome.kind==='error'){
     }
     await new Promise(resolve=>setTimeout(resolve,50));
   }
-  if(!coreUiReady){const shell=document.querySelector('.app-shell'),nav=shell?.querySelector('.sidebar nav,aside nav'),content=shell?.querySelector('.content');const missing=[];if(!shell)missing.push('estrutura principal');if(!nav)missing.push('navegação');if(!content)missing.push('conteúdo');if(nav&&!nav.querySelector('[data-pp-dashboard-root="1"]'))missing.push('Dashboard');if(nav&&!nav.querySelector('[data-pp-client-hub="1"]'))missing.push('Cliente');if(adminNeedsIntegration&&nav&&!nav.querySelector('[data-pp-integration-hub="1"]'))missing.push('Integração');if(content&&!content.querySelector(':scope>.pp-dashboard-root-layer'))missing.push('camada do Dashboard');throw new Error(`A interface atual do Provedor Plus não concluiu a montagem. Pendência: ${missing.join(', ')||'estado desconhecido'}.`)}
-  document.documentElement.classList.remove('pp-atomic-ui-mounting');
-  uiGateStyle.remove();
+  if(!coreUiReady){const shell=document.querySelector('.app-shell'),nav=shell?.querySelector('.sidebar nav,aside nav'),content=shell?.querySelector('.content');const missing=[];if(!shell)missing.push('estrutura principal');if(!nav)missing.push('navegação');if(!content)missing.push('conteúdo');if(nav&&!nav.querySelector('[data-pp-dashboard-root="1"]'))missing.push('Dashboard');if(nav&&!nav.querySelector('[data-pp-client-hub="1"]'))missing.push('Cliente');if(adminNeedsIntegration&&nav&&!nav.querySelector('[data-pp-integration-hub="1"]'))missing.push('Integração');if(content&&!content.querySelector(':scope>.pp-dashboard-root-layer'))missing.push('camada do Dashboard');console.warn(`Provedor Plus: a interface complementar ainda está montando. Pendência: ${missing.join(', ')||'estado desconhecido'}.`)}
   await loadScript('/ui-runtime-fixes.js?v=20260831-step6-observer1').catch(error=>console.error('Provedor Plus: correcoes de interface nao impediram os demais modulos de carregar.',error));
   await loadScriptStable('/billing-bank-selector.js?v=1017-billingbank3',{ignoreWithin:['.pp-dashboard-root-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.pp-new-plans-layer']}).catch(error=>console.error('Provedor Plus: a seleção do banco emissor não foi carregada.',error));
   await loadScript('/billing-automation.js?v=1017-cashback2').catch(error=>console.error('Provedor Plus: a automação de mensalidades não foi carregada.',error));
@@ -293,9 +290,9 @@ if(prepareOutcome.kind==='error'){
     if(shell&&sidebar&&content){readyShell=shell;break}
     await new Promise(resolve=>setTimeout(resolve,100));
   }
-  if(!readyShell)throw new Error('O painel não concluiu a montagem da navegação e do conteúdo principal.');
+  if(!readyShell){console.warn('Provedor Plus: a estrutura principal continua em montagem após o carregamento dos complementos.');__ppStartup.done();return}
   await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-  if(!readyShell.isConnected||!readyShell.querySelector('.sidebar,aside')||!readyShell.querySelector('.content'))throw new Error('A estrutura principal do painel foi interrompida durante a montagem.');
+  if(!readyShell.isConnected||!readyShell.querySelector('.sidebar,aside')||!readyShell.querySelector('.content'))console.warn('Provedor Plus: a estrutura principal foi atualizada durante a montagem e continuará sendo acompanhada pelos observadores.');
   if(__ppReactBootError||window.__PP_REACT_BOOT_ERROR__)throw (__ppReactBootError||window.__PP_REACT_BOOT_ERROR__);
   __ppStartup.done();
 })().catch(err=>{

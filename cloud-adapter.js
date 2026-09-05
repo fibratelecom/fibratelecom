@@ -37,6 +37,30 @@
     if(!response.ok||!body.ok)throw Error(body.error||`Falha ao salvar a integração bancária (HTTP ${response.status}).`);
     return body.data;
   }
+  function safeBankView(local={},remote={}){
+    const le=local?.efi||{},re=remote?.efi||{},lm=local?.mercadoPago||{},rm=remote?.mercadoPago||{};
+    return {
+      ...local,
+      efi:{...le,...re,clientId:'',clientSecret:'',certificatePassword:'',certificateBase64:'',clientIdConfigured:Boolean(re.clientIdConfigured??le.clientIdConfigured),clientSecretConfigured:Boolean(re.clientSecretConfigured??le.clientSecretConfigured),certificatePasswordConfigured:Boolean(re.certificatePasswordConfigured??le.certificatePasswordConfigured),certificateConfigured:Boolean(re.certificateConfigured??le.certificateConfigured)},
+      mercadoPago:{...lm,...rm,accessToken:'',accessTokenConfigured:Boolean(rm.accessTokenConfigured??lm.accessTokenConfigured)}
+    };
+  }
+  function scrubLocalBankSecrets(){
+    const key='provedor_plus_web_1_0_17';
+    try{
+      const raw=localStorage.getItem(key);if(!raw)return;const state=JSON.parse(raw);if(!state||typeof state!=='object'||!state.banks||typeof state.banks!=='object')return;
+      let changed=false;const banks={...state.banks};
+      if(banks.efi&&typeof banks.efi==='object'){
+        const efi={...banks.efi};
+        for(const name of ['clientSecret','certificatePassword','certificateBase64'])if(efi[name]){efi[name]='';changed=true}
+        banks.efi=efi;
+      }
+      if(banks.mercadoPago&&typeof banks.mercadoPago==='object'){
+        const mp={...banks.mercadoPago};if(mp.accessToken){mp.accessToken='';changed=true}banks.mercadoPago=mp;
+      }
+      if(changed)localStorage.setItem(key,JSON.stringify({...state,banks}));
+    }catch{}
+  }
   async function secretSet(id,password){return dataCall('routers.secret.save',{id:Number(id),password:String(password||'')})}
   async function secretGet(id){return String((await dataCall('routers.secret.get',{id:Number(id)}))?.password||'')}
   async function secretDelete(id){try{return await dataCall('routers.secret.delete',{id:Number(id)})}catch{return {deleted:false,id:Number(id)||0}}}
@@ -68,38 +92,10 @@
     const base={routers:{...api.routers},mikrotik:{...api.mikrotik},clients:{...api.clients},vpn:{...api.vpn},banks:{...api.banks}};
 
     async function hydrateBankSettings({strict=false}={}){
-      if(!base.banks?.get)return null;
-      try{
-        const remote=await bankSettingsCall('get'),local=await base.banks.get();
-        const efi=remote?.efi||{};
-        const hasEfi=Boolean(efi.clientId||efi.clientSecret||efi.certificatePassword||efi.pixKey||efi.pixAutoReceiverAgency||efi.pixAutoReceiverAccount||efi.webhookUrl||efi.enabled);
-        if(base.banks.saveEfi&&hasEfi){
-          await base.banks.saveEfi({
-            enabled:efi.enabled??local?.efi?.enabled,
-            environment:efi.environment||local?.efi?.environment||'sandbox',
-            clientId:efi.clientId||'',
-            clientSecret:efi.clientSecret||'',
-            certificatePassword:efi.certificatePassword||'',
-            pixKey:efi.pixKey??local?.efi?.pixKey??'',
-            pixAutoReceiverAgency:efi.pixAutoReceiverAgency??local?.efi?.pixAutoReceiverAgency??'',
-            pixAutoReceiverAccount:efi.pixAutoReceiverAccount??local?.efi?.pixAutoReceiverAccount??'',
-            webhookUrl:efi.webhookUrl??local?.efi?.webhookUrl??''
-          });
-        }
-        const mercadoPago=remote?.mercadoPago||{};
-        const hasMercadoPago=Boolean(mercadoPago.publicKey||mercadoPago.accessToken||mercadoPago.enabled);
-        if(base.banks.saveMercadoPago&&hasMercadoPago){
-          await base.banks.saveMercadoPago({
-            enabled:mercadoPago.enabled??local?.mercadoPago?.enabled,
-            environment:mercadoPago.environment||local?.mercadoPago?.environment||'sandbox',
-            publicKey:mercadoPago.publicKey??local?.mercadoPago?.publicKey??'',
-            accessToken:mercadoPago.accessToken||''
-          });
-        }
-        return remote;
-      }catch(error){
+      try{const remote=await bankSettingsCall('get-safe');scrubLocalBankSecrets();return remote}
+      catch(error){
         if(strict)throw error;
-        if(!/Somente o administrador|Sessão expirada/i.test(String(error?.message||error)))console.warn('Provedor Plus: credenciais bancárias da nuvem não puderam ser restauradas.',error);
+        if(!/Somente o administrador|Sessão expirada/i.test(String(error?.message||error)))console.warn('Provedor Plus: estado seguro das integrações bancárias não pôde ser restaurado.',error);
         return null;
       }
     }
@@ -156,79 +152,43 @@
       throw new Error(`O MikroTik não confirmou o ${wantBlocked?'bloqueio':'desbloqueio'} solicitado. O painel foi mantido de acordo com o estado real do PPPoE.`);
     }
 
-    hydrateBankSettings().catch(error=>console.warn('Provedor Plus: hidratacao bancaria em segundo plano falhou.',error));
+    hydrateBankSettings().catch(error=>console.warn('Provedor Plus: leitura segura das integrações bancárias em segundo plano falhou.',error));
 
     if(base.banks?.get){
       api.banks.get=async()=>{
-        const local=await base.banks.get();
-        try{
-          const remote=await bankSettingsCall('get'),efi=remote?.efi||{},mercadoPago=remote?.mercadoPago||{};
-          return {
-            ...local,
-            efi:{
-              ...(local?.efi||{}),
-              enabled:efi.enabled??local?.efi?.enabled,
-              environment:efi.environment||local?.efi?.environment,
-              clientId:efi.clientId||'',
-              clientSecret:efi.clientSecret||'',
-              certificatePassword:efi.certificatePassword||'',
-              clientIdConfigured:Boolean(efi.clientId)||Boolean(local?.efi?.clientIdConfigured),
-              clientSecretConfigured:Boolean(efi.clientSecret)||Boolean(local?.efi?.clientSecretConfigured),
-              certificatePasswordConfigured:Boolean(efi.certificatePassword)||Boolean(local?.efi?.certificatePasswordConfigured),
-              pixKey:efi.pixKey??local?.efi?.pixKey,
-              pixAutoReceiverAgency:efi.pixAutoReceiverAgency??local?.efi?.pixAutoReceiverAgency,
-              pixAutoReceiverAccount:efi.pixAutoReceiverAccount??local?.efi?.pixAutoReceiverAccount,
-              webhookUrl:efi.webhookUrl??local?.efi?.webhookUrl
-            },
-            mercadoPago:{
-              ...(local?.mercadoPago||{}),
-              enabled:mercadoPago.enabled??local?.mercadoPago?.enabled,
-              environment:mercadoPago.environment||local?.mercadoPago?.environment,
-              publicKey:mercadoPago.publicKey??local?.mercadoPago?.publicKey,
-              accessToken:mercadoPago.accessToken||'',
-              accessTokenConfigured:Boolean(mercadoPago.accessToken)||Boolean(local?.mercadoPago?.accessTokenConfigured)
-            }
-          };
-        }catch{return local}
+        let local={};try{local=await base.banks.get()||{}}catch{}
+        try{const remote=await bankSettingsCall('get-safe');scrubLocalBankSecrets();return safeBankView(local,remote)}catch{return safeBankView(local,{})}
       };
     }
     if(base.banks?.saveEfi){
       api.banks.saveEfi=async data=>{
-        const remote=await bankSettingsCall('save-efi',data||{}),efi=remote?.efi||{};
-        const saved=await base.banks.saveEfi({
-          ...(data||{}),
-          clientId:String(data?.clientId||'').trim()||efi.clientId||'',
-          clientSecret:String(data?.clientSecret||'').trim()||efi.clientSecret||'',
-          certificatePassword:String(data?.certificatePassword||'')||efi.certificatePassword||''
-        });
-        return {...saved,clientId:efi.clientId||String(data?.clientId||'').trim(),clientSecret:efi.clientSecret||String(data?.clientSecret||'').trim(),certificatePassword:efi.certificatePassword||String(data?.certificatePassword||'')};
+        const remote=await bankSettingsCall('save-efi',data||{}),efi=remote?.efi||{};scrubLocalBankSecrets();
+        return {...efi,clientId:'',clientSecret:'',certificatePassword:'',certificateBase64:''};
       };
     }
     if(base.banks?.saveMercadoPago){
       api.banks.saveMercadoPago=async data=>{
-        const remote=await bankSettingsCall('save-mercado-pago',data||{}),mercadoPago=remote?.mercadoPago||{};
-        const saved=await base.banks.saveMercadoPago({
-          ...(data||{}),
-          publicKey:data?.publicKey??mercadoPago.publicKey??'',
-          accessToken:String(data?.accessToken||'').trim()||mercadoPago.accessToken||''
-        });
-        return {...saved,publicKey:mercadoPago.publicKey??data?.publicKey??'',accessToken:mercadoPago.accessToken||String(data?.accessToken||'').trim()};
+        const remote=await bankSettingsCall('save-mercado-pago',data||{}),mercadoPago=remote?.mercadoPago||{};scrubLocalBankSecrets();
+        return {...mercadoPago,accessToken:''};
       };
     }
     if(typeof base.banks?.testEfi==='function'){
-      api.banks.testEfi=async(...args)=>{await hydrateBankSettings({strict:true});return base.banks.testEfi(...args)};
+      api.banks.testEfi=async()=>{const result=await bankSettingsCall('test-efi');return result?.test||result};
     }
     if(typeof base.banks?.configureEfiWebhooks==='function'){
-      api.banks.configureEfiWebhooks=async(...args)=>{await hydrateBankSettings({strict:true});return base.banks.configureEfiWebhooks(...args)};
+      api.banks.configureEfiWebhooks=async()=>{const result=await bankSettingsCall('configure-efi-webhooks');return result?.test||result};
     }
     if(typeof base.banks?.createEfiPixAutomatic==='function'){
-      api.banks.createEfiPixAutomatic=async(...args)=>{await hydrateBankSettings({strict:true});return base.banks.createEfiPixAutomatic(...args)};
+      api.banks.createEfiPixAutomatic=async(...args)=>{
+        const first=args[0],data=args.length===1&&first&&typeof first==='object'&&first.client?first:{client:first,startDate:args[1],endDate:args[2],amountCents:args[3]};
+        return bankSettingsCall('efi-pix-auto-create',data);
+      };
     }
     if(typeof base.banks?.refreshEfiPixAutomatic==='function'){
-      api.banks.refreshEfiPixAutomatic=async(...args)=>{await hydrateBankSettings({strict:true});return base.banks.refreshEfiPixAutomatic(...args)};
+      api.banks.refreshEfiPixAutomatic=async(...args)=>{const first=args[0],idRec=first&&typeof first==='object'?(first.idRec||first.id_rec||first.id):first;return bankSettingsCall('efi-pix-auto-refresh',{idRec})};
     }
     if(typeof base.banks?.testMercadoPago==='function'){
-      api.banks.testMercadoPago=async(...args)=>{await hydrateBankSettings({strict:true});return base.banks.testMercadoPago(...args)};
+      api.banks.testMercadoPago=async()=>{const result=await bankSettingsCall('test-mercado-pago');return result?.test||result};
     }
 
     api.routers.list=async()=>{

@@ -6,6 +6,8 @@ const CLIENT_PUSH_PATH='/api/customer-push';
 const ADMIN_PUSH_PATH='/api/push-admin';
 const OPS_PATH='/api/push-operations';
 const STATE_KEY='web_state_v1017';
+const STATE_WRITE_LOCK_KEY='web_state_write_lock_v1';
+const STATE_WRITE_LOCK_TTL_MS=60000;
 const VAPID_KEY='push_vapid_v1';
 const CLIENT_APP_ORIGIN='https://cliente.fibramais.workers.dev';
 const CLIENT_ORIGINS=new Set(['https://cliente.fibramais.workers.dev','https://client.fibramais.workers.dev']);
@@ -13,6 +15,7 @@ const VARIABLE_NAMES=['{nome}','{valor}','{vencimento}','{plano}','{contrato}','
 const enc=new TextEncoder();
 const text=value=>String(value??'').trim();
 const digits=value=>text(value).replace(/\D/g,'');
+const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 let schemaReady=false;
 
 function json(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store, max-age=0',...headers}})}
@@ -29,6 +32,53 @@ function brDate(value){const match=text(value).slice(0,10).match(/^(\d{4})-(\d{2
 function base64UrlBytes(value){const raw=text(value).replace(/-/g,'+').replace(/_/g,'/'),padded=raw+'='.repeat((4-raw.length%4)%4),bin=atob(padded),out=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);return out}
 function normalizeClickUrl(value=''){const raw=text(value);if(!raw)return `${CLIENT_APP_ORIGIN}/`;if(raw.startsWith('/'))return `${CLIENT_APP_ORIGIN}${raw}`;try{const url=new URL(raw);return CLIENT_ORIGINS.has(url.origin)?url.toString():`${CLIENT_APP_ORIGIN}/`}catch{return `${CLIENT_APP_ORIGIN}/`}}
 function notificationPayload(title,body,url,tag='fibra-plus'){return {title:text(title)||'Fibra+',body:text(body),icon:`${CLIENT_APP_ORIGIN}/icons/fibra-app-192.png?v=15`,badge:`${CLIENT_APP_ORIGIN}/icons/fibra-app-192.png?v=15`,tag:text(tag)||'fibra-plus',lang:'pt-BR',data:{url:normalizeClickUrl(url)}}}
+
+async function stateMutationRequest(request,path){
+  if(request.method!=='POST')return false;
+  let body={};try{body=await request.clone().json()}catch{return false}
+  const action=text(body?.action);
+  if(path==='/api/cloud-state')return action==='state.save';
+  if(path==='/api/cloud-data')return action==='cashback.wallet.adjust';
+  if(path==='/api/bank-settings')return action==='save-default';
+  if(path==='/api/customer-trust-release')return action==='release';
+  if(path==='/api/customer-due-date')return action==='change';
+  if(path==='/api/customer-portal')return new Set(['login','refresh','payment-config','payment-prepare','payment-pix','payment-card','payment-status','negotiate']).has(action);
+  return false;
+}
+async function acquireStateWriteLock(env,maxWaitMs=20000){
+  if(!env?.DATABASE_URL)return null;
+  const sql=neon(env.DATABASE_URL),token=crypto.randomUUID(),deadline=Date.now()+Math.max(1000,Number(maxWaitMs)||20000);
+  while(Date.now()<deadline){
+    const expiresAt=new Date(Date.now()+STATE_WRITE_LOCK_TTL_MS).toISOString(),raw=JSON.stringify({token,expires_at:expiresAt});
+    const rows=await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${STATE_WRITE_LOCK_KEY},${raw}::jsonb,now()) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at WHERE COALESCE(NULLIF(pp_settings.value->>'expires_at','')::timestamptz,to_timestamp(0))<=now() RETURNING value`;
+    if(text(rows?.[0]?.value?.token)===token){
+      let stopped=false,renewTimer=null;
+      const renew=async()=>{
+        if(stopped)return;
+        try{const nextExpiry=new Date(Date.now()+STATE_WRITE_LOCK_TTL_MS).toISOString(),nextRaw=JSON.stringify({token,expires_at:nextExpiry});await sql`UPDATE pp_settings SET value=${nextRaw}::jsonb,updated_at=now() WHERE key=${STATE_WRITE_LOCK_KEY} AND value->>'token'=${token}`}catch(error){console.error('Provedor Plus: não foi possível renovar a trava de estado.',error)}
+        if(!stopped)renewTimer=setTimeout(renew,20000);
+      };
+      renewTimer=setTimeout(renew,20000);
+      return async()=>{stopped=true;if(renewTimer)clearTimeout(renewTimer);try{await sql`DELETE FROM pp_settings WHERE key=${STATE_WRITE_LOCK_KEY} AND value->>'token'=${token}`}catch(error){console.error('Provedor Plus: não foi possível liberar a trava de estado.',error)}};
+    }
+    await wait(120+Math.floor(Math.random()*160));
+  }
+  throw Object.assign(new Error('O Provedor Plus está concluindo outra atualização de dados. Tente novamente em alguns segundos.'),{statusCode:409});
+}
+async function withStateWriteLock(env,fn,maxWaitMs=20000){
+  const release=await acquireStateWriteLock(env,maxWaitMs);
+  try{return await fn()}finally{if(release)await release()}
+}
+function stateLockErrorResponse(request,error){
+  const origin=text(request.headers.get('origin')),headers=CLIENT_ORIGINS.has(origin)?clientCors(request):{};
+  return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||503,headers);
+}
+function scheduledLockContext(ctx,tasks){
+  return {
+    waitUntil(promise){tasks.push(Promise.resolve(promise))},
+    passThroughOnException(){if(typeof ctx?.passThroughOnException==='function')ctx.passThroughOnException()}
+  };
+}
 
 async function ensureTables(sql){
   if(schemaReady)return;
@@ -258,14 +308,21 @@ export default {
     if(path===CLIENT_PUSH_PATH){const response=await handleCustomerPush(request,env);if(response)return response}
     if(path===ADMIN_PUSH_PATH){const response=await handleAdminSend(request,env,ctx);if(response)return response}
     if(path===OPS_PATH){const response=await handleOperations(request,env,ctx);if(response)return response}
-    const response=await baseWorker.fetch(request,env,ctx);
-    return response;
+    try{
+      if(await stateMutationRequest(request,path))return await withStateWriteLock(env,()=>baseWorker.fetch(request,env,ctx));
+      return await baseWorker.fetch(request,env,ctx);
+    }catch(error){return stateLockErrorResponse(request,error)}
   },
-  scheduled(controller,env,ctx){
+  async scheduled(controller,env,ctx){
     const cron=text(controller?.cron);
     if(cron==='* * * * *'){if(env?.DATABASE_URL&&typeof ctx?.waitUntil==='function')ctx.waitUntil(processDueSchedules(env).catch(error=>console.error('Provedor Plus: falha nos agendamentos de notificações.',error)));return}
-    const result=baseWorker.scheduled(controller,env,ctx);
+    try{
+      await withStateWriteLock(env,async()=>{
+        const tasks=[],lockedCtx=scheduledLockContext(ctx,tasks),result=baseWorker.scheduled(controller,env,lockedCtx);
+        if(result&&typeof result.then==='function')await result;
+        if(tasks.length)await Promise.allSettled(tasks);
+      },60000);
+    }catch(error){console.error('Provedor Plus: rotina agendada aguardou outra gravação de estado e não pôde iniciar.',error)}
     if(env?.DATABASE_URL&&typeof ctx?.waitUntil==='function')ctx.waitUntil(processDueSchedules(env).catch(error=>console.error('Provedor Plus: falha nos agendamentos de notificações.',error)));
-    return result;
   }
 };

@@ -166,7 +166,12 @@ export async function handleNativeCloudState(request,env){
   if(request.method!=='POST')return apiJson({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-native-state'});const sql=sqlFor(env);
   try{await requireAuth(request,sql);const body=await bodyOf(request),action=text(body?.action),data=body?.data||{};let result;
     if(action==='state.get'){const row=await getSetting(sql,STATE_KEY);result=row?{state:sanitize(row.value||{}),updated_at:row.updated_at||null}:{state:null,updated_at:null};}
-    else if(action==='state.save'){if(!data.state||typeof data.state!=='object'||Array.isArray(data.state))throw Object.assign(new Error('Estado do gerenciador inválido.'),{statusCode:400});const previous=await getSetting(sql,STATE_KEY),merged=preservePortalState(data.state,previous?.value),clean=sanitize(merged),row=await setSetting(sql,STATE_KEY,clean);result={state:row?.value||clean,updated_at:row?.updated_at||new Date().toISOString()};}
+    else if(action==='state.save'){
+      if(!data.state||typeof data.state!=='object'||Array.isArray(data.state))throw Object.assign(new Error('Estado do gerenciador inválido.'),{statusCode:400});
+      const previous=await getSetting(sql,STATE_KEY),expectedAt=text(data.baseUpdatedAt),actualAt=text(previous?.updated_at),expectedTime=Date.parse(expectedAt),actualTime=Date.parse(actualAt);
+      if(expectedAt&&actualAt&&Number.isFinite(expectedTime)&&Number.isFinite(actualTime)&&expectedTime!==actualTime)throw Object.assign(new Error('O estado foi atualizado em outro acesso. Recarregando para mesclar as alterações.'),{statusCode:409});
+      const merged=preservePortalState(data.state,previous?.value),clean=sanitize(merged),row=await setSetting(sql,STATE_KEY,clean);result={state:row?.value||clean,updated_at:row?.updated_at||new Date().toISOString()};
+    }
     else if(action==='health'){const row=await getSetting(sql,STATE_KEY);result={online:true,hasState:Boolean(row?.value),updated_at:row?.updated_at||null};}
     else throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});return apiJson({ok:true,data:result},200,{'x-provedor-plus-edge':'cloudflare-native-state'});
   }catch(error){return apiJson({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,{'x-provedor-plus-edge':'cloudflare-native-state'});}

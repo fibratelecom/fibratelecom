@@ -97,25 +97,19 @@ function normalizeActiveRow(row={}){const [downloadBytes,uploadBytes]=counterPai
 async function activeSessions(router,username=''){
   const props=['.id','name','service','caller-id','address','uptime','encoding','bytes','bytes-in','bytes-out','session-id','limit-bytes-in','limit-bytes-out'];
   const query=username?[`name=${username}`]:[];
-  let list=[],completed=false,lastError=null;
-  try{list=await print(router,'ppp/active',props,query,{stats:''});completed=true}catch(error){lastError=error}
-  const missingStats=list.length&&list.every(row=>!text(row?.bytes)&&!Number.isFinite(Number(row?.['bytes-in']))&&!Number.isFinite(Number(row?.['bytes-out'])));
-  if(!list.length||missingStats){
-    try{
-      const detailed=await print(router,'ppp/active',[],query,{stats:''});
-      completed=true;
-      if(detailed.length)list=detailed;
-    }catch(error){lastError=error}
+  let list=[],lastError=null,firstCompleted=false;
+  try{list=await print(router,'ppp/active',props,query,{stats:''});firstCompleted=true}catch(error){lastError=error}
+  if(firstCompleted){
+    if(!list.length)return [];
+    const missingStats=list.every(row=>!text(row?.bytes)&&!Number.isFinite(Number(row?.['bytes-in']))&&!Number.isFinite(Number(row?.['bytes-out'])));
+    if(missingStats){
+      try{const detailed=await print(router,'ppp/active',[],query,{stats:''});if(detailed.length)list=detailed}catch(error){lastError=error}
+    }
+    return list.map(normalizeActiveRow);
   }
-  if(!list.length){
-    try{
-      const all=rows(await request(router,'ppp/active'));
-      completed=true;
-      list=username?all.filter(x=>text(x?.name)===username):all;
-    }catch(error){lastError=error}
-  }
-  if(!completed)throw lastError||Error('Não foi possível consultar as sessões PPPoE ativas no MikroTik.');
-  return list.map(normalizeActiveRow);
+  try{const detailed=await print(router,'ppp/active',[],query,{stats:''});return detailed.map(normalizeActiveRow)}catch(error){lastError=error}
+  try{const all=rows(await request(router,'ppp/active')),filtered=username?all.filter(x=>text(x?.name)===username):all;return filtered.map(normalizeActiveRow)}catch(error){lastError=error}
+  throw lastError||Error('Não foi possível consultar as sessões PPPoE ativas no MikroTik.');
 }
 async function pppSecrets(router){
   let list=[];
@@ -282,15 +276,27 @@ async function pppoeMonitor(router,ref){
   }catch{return null}
 }
 async function pppoeTopology(router,username,callerId=''){
-  let dynamic=null,host=null,servers=[],vlans=[],bridgeVlans=[];
-  try{const list=await print(router,'interface/pppoe-server',['.id','name','user','service','caller-id','uptime','encoding','mtu','mru','local-address','remote-address','vlan-id','vid'],[`user=${username}`]);dynamic=list[0]||null;if(!dynamic){const all=await print(router,'interface/pppoe-server',['.id','name','user','service','caller-id','uptime','encoding','mtu','mru','local-address','remote-address','vlan-id','vid']);dynamic=all.find(x=>text(x?.user)===username)||null}}catch{}
-  try{const all=rows(await request(router,'interface/pppoe-server'));const full=all.find(x=>text(x?.user)===username);if(full)dynamic={...full,...(dynamic||{})}}catch{}
-  const monitor=dynamic?await pppoeMonitor(router,text(dynamic?.['.id'])||text(dynamic?.name)):null;
+  let dynamic=null;
+  try{
+    const list=await print(router,'interface/pppoe-server',['.id','name','user','service','caller-id','uptime','encoding','mtu','mru','local-address','remote-address','vlan-id','vid'],[`user=${username}`]);
+    dynamic=list[0]||null;
+    if(!dynamic){const all=await print(router,'interface/pppoe-server',['.id','name','user','service','caller-id','uptime','encoding','mtu','mru','local-address','remote-address','vlan-id','vid']);dynamic=all.find(x=>text(x?.user)===username)||null}
+  }catch{}
+  if(!dynamic){try{const all=rows(await request(router,'interface/pppoe-server'));dynamic=all.find(x=>text(x?.user)===username)||null}catch{}}
   const mac=text(callerId||dynamic?.['caller-id']).toUpperCase();
-  if(mac){try{host=(await print(router,'interface/bridge/host',['mac-address','vid','on-interface','bridge'],[`mac-address=${mac}`]))[0]||null}catch{}if(!host){try{const all=await print(router,'interface/bridge/host',['mac-address','vid','on-interface','bridge']);host=all.find(x=>text(x?.['mac-address']).toUpperCase()===mac)||null}catch{}}}
-  try{servers=await print(router,'interface/pppoe-server/server',['.id','service-name','interface','max-mtu','max-mru','pppoe-over-vlan-range','disabled'])}catch{}
-  try{vlans=await print(router,'interface/vlan',['.id','name','interface','vlan-id'])}catch{}
-  try{bridgeVlans=await print(router,'interface/bridge/vlan',['bridge','vlan-ids','tagged','untagged','current-tagged','current-untagged'])}catch{}
+  const hostPromise=mac?(async()=>{
+    let host=null;
+    try{host=(await print(router,'interface/bridge/host',['mac-address','vid','on-interface','bridge'],[`mac-address=${mac}`]))[0]||null}catch{}
+    if(!host){try{const all=await print(router,'interface/bridge/host',['mac-address','vid','on-interface','bridge']);host=all.find(x=>text(x?.['mac-address']).toUpperCase()===mac)||null}catch{}}
+    return host;
+  })():Promise.resolve(null);
+  const [monitor,host,servers,vlans,bridgeVlans]=await Promise.all([
+    dynamic?pppoeMonitor(router,text(dynamic?.['.id'])||text(dynamic?.name)):Promise.resolve(null),
+    hostPromise,
+    print(router,'interface/pppoe-server/server',['.id','service-name','interface','max-mtu','max-mru','pppoe-over-vlan-range','disabled']).catch(()=>[]),
+    print(router,'interface/vlan',['.id','name','interface','vlan-id']).catch(()=>[]),
+    print(router,'interface/bridge/vlan',['bridge','vlan-ids','tagged','untagged','current-tagged','current-untagged']).catch(()=>[])
+  ]);
   const hostVid=numberValue(host?.vid)||0,dynamicVid=numberValue(dynamic?.['vlan-id'],dynamic?.vid,monitor?.['vlan-id'],monitor?.vid)||0,dynamicService=text(dynamic?.service||dynamic?.['service-name']);
   const monitoredInterface=text(monitor?.interface);
   let server=dynamicService?servers.find(x=>text(x?.['service-name'])===dynamicService&&(!monitoredInterface||text(x?.interface)===monitoredInterface)):null;

@@ -197,12 +197,8 @@ window.addEventListener('provedor-plus-react-error',__ppReactErrorListener);
 
   await loadScript('/cloud-state-store.js?v=20260831-step5-dedupe1');
 if(!window.ProvedorPlusCloudState?.prepare)throw new Error('A sincronização com o banco da nuvem não foi carregada.');
-const prepareTask=window.ProvedorPlusCloudState.prepare().then(result=>({kind:'ready',result})).catch(error=>({kind:'error',error}));
-const prepareOutcome=await Promise.race([prepareTask,new Promise(resolve=>setTimeout(()=>resolve({kind:'timeout'}),1200))]);
-if(prepareOutcome.kind==='timeout'){
-  window.ProvedorPlusCloudState.cancelPrepare?.();
-  console.warn('Provedor Plus: resposta atrasada do banco remoto foi invalidada; seguindo com o estado local.');
-}else if(prepareOutcome.kind==='error'){
+const prepareOutcome=await window.ProvedorPlusCloudState.prepare().then(result=>({kind:'ready',result})).catch(error=>({kind:'error',error}));
+if(prepareOutcome.kind==='error'){
   console.warn('Provedor Plus: estado remoto indisponível na abertura; seguindo com o estado local.',prepareOutcome.error);
 }
   const currentState=window.ProvedorPlusCloudState.getState()||{};

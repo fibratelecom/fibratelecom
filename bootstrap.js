@@ -26,14 +26,14 @@ const __ppStartup={
 window.addEventListener('provedor-plus-react-error',__ppReactErrorListener);
 (async()=>{
   window.__PROVEDOR_PLUS_CLOUD__=true;
-  const BUILD_TOKEN='20260831-uiatomic5';
+  const BUILD_TOKEN='20260905-startupfast1';
   window.__PROVEDOR_PLUS_BUILD__=BUILD_TOKEN;
   const assetUrl=value=>{
     const src=String(value||'');
     if(!src.startsWith('/'))return src;
     return `${src}${src.includes('?')?'&':'?'}ppbuild=${encodeURIComponent(BUILD_TOKEN)}`;
   };
-  const read=async(paths)=>{const parts=await Promise.all(paths.map(async p=>{const url=assetUrl(p),r=await fetch(url,{cache:'no-store'});if(!r.ok)throw new Error(`Falha ao carregar ${p}: ${r.status}`);return r.text()}));return parts.join('')};
+  const read=async(paths)=>{const parts=await Promise.all(paths.map(async p=>{const url=assetUrl(p),r=await fetch(url,{cache:'default'});if(!r.ok)throw new Error(`Falha ao carregar ${p}: ${r.status}`);return r.text()}));return parts.join('')};
   const loadScript=src=>new Promise((resolve,reject)=>{const s=document.createElement('script');s.src=assetUrl(src);s.onload=resolve;s.onerror=()=>reject(new Error(`Falha ao carregar ${src}`));document.head.appendChild(s)});
   const loadStyle=(href,id)=>new Promise((resolve,reject)=>{const existing=document.getElementById(id);if(existing){resolve();return}const link=document.createElement('link');link.rel='stylesheet';link.href=assetUrl(href);link.id=id;link.onload=resolve;link.onerror=()=>reject(new Error(`Falha ao carregar ${href}`));document.head.appendChild(link)});
   const loadScriptStable=async(src,{dropCharacterData=false,ignoreWithin=[],observerTargetSelector=null}={})=>{
@@ -195,7 +195,7 @@ window.addEventListener('provedor-plus-react-error',__ppReactErrorListener);
   const auth=await window.ProvedorPlusAuth.ensure();
   window.__PROVEDOR_PLUS_AUTH__=auth;
 
-  await loadScript('/cloud-state-store.js?v=20260831-step5-dedupe1');
+  await loadScript('/cloud-state-store.js?v=20260905-startupfast1');
 if(!window.ProvedorPlusCloudState?.prepare)throw new Error('A sincronização com o banco da nuvem não foi carregada.');
 const prepareOutcome=await window.ProvedorPlusCloudState.prepare().then(result=>({kind:'ready',result})).catch(error=>({kind:'error',error}));
 if(prepareOutcome.kind==='error'){
@@ -246,23 +246,18 @@ if(prepareOutcome.kind==='error'){
   if(__ppReactBootError||window.__PP_REACT_BOOT_ERROR__)throw (__ppReactBootError||window.__PP_REACT_BOOT_ERROR__);
   await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
   const baseUiDeadline=Date.now()+8000;
-  let baseUiNav=null,baseUiContent=null,baseUiSignature='',baseUiStableSince=0;
+  let baseUiReady=false;
   while(Date.now()<baseUiDeadline){
     const shell=document.querySelector('.app-shell'),nav=shell?.querySelector('.sidebar nav,aside nav'),content=shell?.querySelector('.content');
     if(shell&&nav&&content){
-      const signature=`${nav.children.length}|${String(nav.textContent||'').replace(/\s+/g,' ').trim()}`;
-      if(nav===baseUiNav&&content===baseUiContent&&signature===baseUiSignature){
-        if(Date.now()-baseUiStableSince>=700)break;
-      }else{
-        baseUiNav=nav;baseUiContent=content;baseUiSignature=signature;baseUiStableSince=Date.now();
-      }
-    }else{
-      baseUiNav=null;baseUiContent=null;baseUiSignature='';baseUiStableSince=0;
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      const nextShell=document.querySelector('.app-shell'),nextNav=nextShell?.querySelector('.sidebar nav,aside nav'),nextContent=nextShell?.querySelector('.content');
+      if(nextShell===shell&&nextNav===nav&&nextContent===content){baseUiReady=true;break}
     }
-    await new Promise(resolve=>setTimeout(resolve,50));
+    await new Promise(resolve=>setTimeout(resolve,40));
   }
   const stableShell=document.querySelector('.app-shell'),stableNav=stableShell?.querySelector('.sidebar nav,aside nav'),stableContent=stableShell?.querySelector('.content');
-  if(!stableShell||!stableNav||!stableContent||!baseUiStableSince||Date.now()-baseUiStableSince<700)throw new Error('A estrutura base do painel não estabilizou antes da montagem da interface atual.');
+  if(!baseUiReady||!stableShell||!stableNav||!stableContent)throw new Error('A estrutura base do painel não ficou disponível para a montagem da interface atual.');
   await loadScript('/dashboard-transition-guard.js?v=20260901-bankdelete1');
   await loadScriptStable('/dashboard-enhancements.js?v=20260831-uiatomic5',{dropCharacterData:true,observerTargetSelector:'.app-shell',ignoreWithin:['.pp-dashboard-root-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-new-plans-layer']});
   const coreUiDeadline=Date.now()+12000;
@@ -279,7 +274,7 @@ if(prepareOutcome.kind==='error'){
     }
     await new Promise(resolve=>setTimeout(resolve,50));
   }
-  if(!coreUiReady){const shell=document.querySelector('.app-shell'),nav=shell?.querySelector('.sidebar nav,aside nav'),content=shell?.querySelector('.content');const missing=[];if(!shell)missing.push('estrutura principal');if(!nav)missing.push('navegação');if(!content)missing.push('conteúdo');if(nav&&!nav.querySelector('[data-pp-dashboard-root=\"1\"]'))missing.push('Dashboard');if(nav&&!nav.querySelector('[data-pp-client-hub=\"1\"]'))missing.push('Cliente');if(adminNeedsIntegration&&nav&&!nav.querySelector('[data-pp-integration-hub=\"1\"]'))missing.push('Integração');if(content&&!content.querySelector(':scope>.pp-dashboard-root-layer'))missing.push('camada do Dashboard');throw new Error(`A interface atual do Provedor Plus não concluiu a montagem. Pendência: ${missing.join(', ')||'estado desconhecido'}.`)}
+  if(!coreUiReady){const shell=document.querySelector('.app-shell'),nav=shell?.querySelector('.sidebar nav,aside nav'),content=shell?.querySelector('.content');const missing=[];if(!shell)missing.push('estrutura principal');if(!nav)missing.push('navegação');if(!content)missing.push('conteúdo');if(nav&&!nav.querySelector('[data-pp-dashboard-root="1"]'))missing.push('Dashboard');if(nav&&!nav.querySelector('[data-pp-client-hub="1"]'))missing.push('Cliente');if(adminNeedsIntegration&&nav&&!nav.querySelector('[data-pp-integration-hub="1"]'))missing.push('Integração');if(content&&!content.querySelector(':scope>.pp-dashboard-root-layer'))missing.push('camada do Dashboard');throw new Error(`A interface atual do Provedor Plus não concluiu a montagem. Pendência: ${missing.join(', ')||'estado desconhecido'}.`)}
   document.documentElement.classList.remove('pp-atomic-ui-mounting');
   uiGateStyle.remove();
   await loadScript('/ui-runtime-fixes.js?v=20260831-step6-observer1').catch(error=>console.error('Provedor Plus: correcoes de interface nao impediram os demais modulos de carregar.',error));

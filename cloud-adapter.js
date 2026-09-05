@@ -99,6 +99,45 @@
       return normalizeRouter(r,pass);
     }
     async function clientRecord(id){const list=await base.clients.list(),c=(list||[]).find(x=>Number(x.id)===Number(id));if(!c)throw Error('Cliente não encontrado.');return c}
+    async function controlTruth(router,client){
+      const snapshot=await cloudRead('router.sync',{router}),username=String(client?.pppoe_username||client?.pppoe_user||'').trim();
+      const secret=(Array.isArray(snapshot?.pppSecrets)?snapshot.pppSecrets:[]).find(item=>String(item?.name||'').trim()===username);
+      if(!secret)throw Error('Não foi possível confirmar o acesso PPPoE deste cliente no MikroTik.');
+      return {blocked:Boolean(secret.disabled),secretId:String(secret.id||'')};
+    }
+    async function persistControlTruth(id,truth){
+      let saved=truth.blocked?await base.clients.block(id):await base.clients.unblock(id);
+      if(base.clients.setMikrotikState)saved=await base.clients.setMikrotikState(id,{secretId:truth.secretId||'',status:truth.blocked?'Bloqueado no MikroTik':'Sincronizado',lastSync:now()});
+      return saved;
+    }
+    async function runClientControl(id,wantBlocked){
+      const c=await clientRecord(id),r=await routerAuth(c.router_id),action=wantBlocked?'client.block':'client.unblock',rollback=wantBlocked?'client.unblock':'client.block';
+      let commandError=null;
+      try{await cloudCall(action,{router:r,data:clone(c)})}catch(error){commandError=error}
+      let truth;
+      try{truth=await controlTruth(r,c)}catch(error){if(commandError)throw commandError;throw error}
+      if(truth.blocked===wantBlocked){
+        try{return await persistControlTruth(id,truth)}catch(persistError){
+          let rollbackError=null;
+          try{await cloudCall(rollback,{router:r,data:clone(c)})}catch(error){rollbackError=error}
+          try{
+            const repairedTruth=await controlTruth(r,c);
+            await persistControlTruth(id,repairedTruth);
+            if(rollbackError)console.error('Provedor Plus: a compensação no MikroTik falhou, mas o painel foi realinhado ao estado real.',rollbackError);
+          }catch(reconcileError){
+            const baseMessage=persistError instanceof Error?persistError.message:String(persistError),detail=reconcileError instanceof Error?reconcileError.message:String(reconcileError);
+            throw new Error(`${baseMessage} Não foi possível confirmar e realinhar o estado entre o painel e o MikroTik: ${detail}`);
+          }
+          throw persistError;
+        }
+      }
+      try{await persistControlTruth(id,truth)}catch(error){
+        const detail=error instanceof Error?error.message:String(error);
+        throw new Error(`O MikroTik ficou em um estado diferente do solicitado e o painel não pôde ser realinhado: ${detail}`);
+      }
+      if(commandError)throw commandError;
+      throw new Error(`O MikroTik não confirmou o ${wantBlocked?'bloqueio':'desbloqueio'} solicitado. O painel foi mantido de acordo com o estado real do PPPoE.`);
+    }
 
     hydrateBankSettings().catch(error=>console.warn('Provedor Plus: hidratacao bancaria em segundo plano falhou.',error));
 
@@ -207,18 +246,8 @@
         return {...baseStatus,...live,routerId:Number(client.router_id)||0,routerName:client.router_name||router.name,routerHost:router.host,connectionState:live.online?'online':'offline',connectionError:'',trafficError:'',liveRatesAvailable:Boolean(live.liveRatesAvailable)||(Number.isFinite(trafficDown)&&trafficDown>0)||(Number.isFinite(trafficUp)&&trafficUp>0),downloadBps:Number.isFinite(liveDown)?Math.max(0,liveDown):(Number.isFinite(trafficDown)?Math.max(0,trafficDown):0),uploadBps:Number.isFinite(liveUp)?Math.max(0,liveUp):(Number.isFinite(trafficUp)?Math.max(0,trafficUp):0),traffic:traffic||baseStatus.traffic};
       }catch(error){return {...baseStatus,connectionState:'unavailable',connectionError:error instanceof Error?error.message:String(error),liveRatesAvailable:false}}
     };
-    api.clients.block=async id=>{
-      const c=await clientRecord(id),r=await routerAuth(c.router_id),remote=await cloudCall('client.block',{router:r,data:clone(c)});let saved;
-      try{saved=await base.clients.block(id)}catch(error){try{await cloudCall('client.unblock',{router:r,data:clone(c)})}catch{}throw error}
-      if(base.clients.setMikrotikState)try{saved=await base.clients.setMikrotikState(id,{secretId:remote?.secretId||'',status:'Bloqueado no MikroTik',lastSync:now()})}catch(error){console.error('Provedor Plus: bloqueio aplicado, mas falhou ao registrar o estado do MikroTik.',error)}
-      return saved;
-    };
-    api.clients.unblock=async id=>{
-      const c=await clientRecord(id),r=await routerAuth(c.router_id),remote=await cloudCall('client.unblock',{router:r,data:clone(c)});let saved;
-      try{saved=await base.clients.unblock(id)}catch(error){try{await cloudCall('client.block',{router:r,data:clone(c)})}catch{}throw error}
-      if(base.clients.setMikrotikState)try{saved=await base.clients.setMikrotikState(id,{secretId:remote?.secretId||'',status:'Sincronizado',lastSync:now()})}catch(error){console.error('Provedor Plus: desbloqueio aplicado, mas falhou ao registrar o estado do MikroTik.',error)}
-      return saved;
-    };
+    api.clients.block=async id=>runClientControl(id,true);
+    api.clients.unblock=async id=>runClientControl(id,false);
     api.clients.trustRelease=async(id,hours=48)=>{const before=await base.clients.status(id);if(before?.trust?.usedThisMonth)throw Error('A liberação em confiança já foi utilizada neste mês para este cliente.');const c=before?.client||await clientRecord(id),r=await routerAuth(c.router_id);await cloudCall('client.unblock',{router:r,data:clone(c)});try{return await base.clients.trustRelease(id,hours)}catch(error){try{await cloudCall('client.block',{router:r,data:clone(c)})}catch{}throw error}};
 
     api.vpn.status=async()=>({installed:true,web:true,mode:'cloud-rest',message:'A conexão web usa REST HTTPS pelo MikroTik Cloud.'});

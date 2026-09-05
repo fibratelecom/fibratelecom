@@ -132,8 +132,12 @@
     syncing=true;let failed=false;
     try{await saveRaw(raw);retryDelay=1200}catch(error){
       failed=true;pending=true;retryDelay=Math.min(60000,Math.max(2400,retryDelay*2));
-      console.error('Provedor Plus: falha ao sincronizar estado com a nuvem.',error);
-      window.dispatchEvent(new CustomEvent('provedor-plus-cloud-error',{detail:{message:error?.message||String(error)}}));
+      const message=String(error?.message||error),retryableConflict=Number(error?.statusCode)===409||/estado (?:foi atualizado|mudou simultaneamente).*outro acesso/i.test(message);
+      if(retryableConflict)console.warn('Provedor Plus: o estado mudou durante a sincronização; uma nova tentativa será feita sem interromper o painel.',error);
+      else{
+        console.error('Provedor Plus: falha ao sincronizar estado com a nuvem.',error);
+        window.dispatchEvent(new CustomEvent('provedor-plus-cloud-error',{detail:{message}}));
+      }
     }finally{
       syncing=false;
       if(pending){pending=false;clearTimeout(timer);timer=setTimeout(flush,failed?retryDelay:1200)}

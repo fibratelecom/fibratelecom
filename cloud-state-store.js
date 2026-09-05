@@ -80,7 +80,7 @@
         method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data}),signal:ctl.signal
       });
       let body={};try{body=await response.json()}catch{}
-      if(!response.ok||!body.ok)throw new Error(body.error||`Falha no banco da nuvem (HTTP ${response.status}).`);
+      if(!response.ok||!body.ok){const error=new Error(body.error||`Falha no banco da nuvem (HTTP ${response.status}).`);error.statusCode=response.status;throw error}
       return body.data;
     }catch(error){
       if(error?.name==='AbortError')throw new Error(`Tempo limite ao consultar ${action}.`);
@@ -109,7 +109,9 @@
     for(let attempt=0;attempt<3;attempt++){
       const remote=await cloud('state.get'),remoteState=remote?.state&&typeof remote.state==='object'?remote.state:{};
       state=merge3(baseState,localState,remoteState);
-      const result=await cloud('state.save',{state,baseState,baseUpdatedAt:lastSyncedAt});
+      let result;
+      try{result=await cloud('state.save',{state,baseState,baseUpdatedAt:remote?.updated_at||null})}
+      catch(error){if(Number(error?.statusCode)===409||/estado foi atualizado em outro acesso/i.test(String(error?.message||error)))continue;throw error}
       lastResult=result;
       const savedState=result?.state&&typeof result.state==='object'?result.state:state,savedAt=result?.updated_at||null;
       const confirm=await cloud('state.get'),confirmedState=confirm?.state&&typeof confirm.state==='object'?confirm.state:savedState,confirmedAt=confirm?.updated_at||savedAt;
@@ -119,7 +121,6 @@
         lastSyncedRaw=savedRaw;lastSyncedAt=confirmedAt||savedAt||null;
         return {...(result||{}),state:confirmedState,updated_at:lastSyncedAt};
       }
-      state=merge3(baseState,localState,confirmedState);
     }
     throw new Error(lastResult?.error||'O estado mudou simultaneamente em outro acesso. A sincronização será tentada novamente.');
   }

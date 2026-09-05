@@ -33,6 +33,52 @@ function base64UrlBytes(value){const raw=text(value).replace(/-/g,'+').replace(/
 function normalizeClickUrl(value=''){const raw=text(value);if(!raw)return `${CLIENT_APP_ORIGIN}/`;if(raw.startsWith('/'))return `${CLIENT_APP_ORIGIN}${raw}`;try{const url=new URL(raw);return CLIENT_ORIGINS.has(url.origin)?url.toString():`${CLIENT_APP_ORIGIN}/`}catch{return `${CLIENT_APP_ORIGIN}/`}}
 function notificationPayload(title,body,url,tag='fibra-plus'){return {title:text(title)||'Fibra+',body:text(body),icon:`${CLIENT_APP_ORIGIN}/icons/fibra-app-192.png?v=15`,badge:`${CLIENT_APP_ORIGIN}/icons/fibra-app-192.png?v=15`,tag:text(tag)||'fibra-plus',lang:'pt-BR',data:{url:normalizeClickUrl(url)}}}
 
+function bankFlag(source,flag,secretKey){return Object.prototype.hasOwnProperty.call(source||{},flag)?Boolean(source?.[flag]):Boolean(text(source?.[secretKey]))}
+function safeBankClientSettings(value){
+  const efi=value?.efi||{},mp=value?.mercadoPago||{};
+  return {
+    efi:{
+      enabled:Boolean(efi.enabled),environment:text(efi.environment)||'sandbox',
+      clientIdConfigured:bankFlag(efi,'clientIdConfigured','clientId'),clientSecretConfigured:bankFlag(efi,'clientSecretConfigured','clientSecret'),
+      certificatePasswordConfigured:bankFlag(efi,'certificatePasswordConfigured','certificatePassword'),certificateConfigured:bankFlag(efi,'certificateConfigured','certificateBase64'),
+      certificateName:text(efi.certificateName),pixKey:text(efi.pixKey),pixAutoReceiverAgency:text(efi.pixAutoReceiverAgency),pixAutoReceiverAccount:text(efi.pixAutoReceiverAccount),webhookUrl:text(efi.webhookUrl),
+      lastTestStatus:text(efi.lastTestStatus),lastTestMessage:text(efi.lastTestMessage),lastTestAt:text(efi.lastTestAt),webhookConfiguredAt:text(efi.webhookConfiguredAt)
+    },
+    mercadoPago:{
+      enabled:Boolean(mp.enabled),environment:text(mp.environment)||'sandbox',publicKey:text(mp.publicKey),accessTokenConfigured:bankFlag(mp,'accessTokenConfigured','accessToken'),
+      lastTestStatus:text(mp.lastTestStatus),lastTestMessage:text(mp.lastTestMessage),lastTestAt:text(mp.lastTestAt)
+    }
+  };
+}
+function sanitizeBankPayload(data){
+  if(!data||typeof data!=='object'||Array.isArray(data))return data;
+  if(data.efi||data.mercadoPago)return safeBankClientSettings(data);
+  if(data.settings&&typeof data.settings==='object')return {...data,settings:safeBankClientSettings(data.settings)};
+  return data;
+}
+async function sanitizeBankResponse(response){
+  if(!response)return response;let body={};try{body=await response.clone().json()}catch{return response}
+  if(!body||typeof body!=='object'||!Object.prototype.hasOwnProperty.call(body,'data'))return response;
+  const safe={...body,data:sanitizeBankPayload(body.data)},headers=new Headers(response.headers);headers.set('Content-Type','application/json; charset=utf-8');headers.set('Cache-Control','no-store, max-age=0');
+  return new Response(JSON.stringify(safe),{status:response.status,statusText:response.statusText,headers});
+}
+async function bankRequestBody(request){let body={};try{body=await request.clone().json()}catch{}return {action:text(body?.action),data:body?.data||{}}}
+async function bankVaultSettings(request,env,ctx){
+  const headers=new Headers(request.headers);headers.set('Content-Type','application/json');
+  const internal=new Request(new URL('/api/bank-settings',request.url),{method:'POST',headers,body:JSON.stringify({action:'get',data:{}})}),response=await baseWorker.fetch(internal,env,ctx);let body={};try{body=await response.json()}catch{}
+  if(!response.ok||!body?.ok||!body?.data)throw Object.assign(new Error(body?.error||'Não foi possível abrir as credenciais bancárias no servidor.'),{statusCode:response.status||500});
+  return body.data;
+}
+async function handleBankServiceAction(request,env,ctx){
+  if(request.method!=='POST')return null;const {action,data}=await bankRequestBody(request);if(!['efi-pix-auto-create','efi-pix-auto-refresh'].includes(action))return null;
+  try{
+    const settings=await bankVaultSettings(request,env,ctx),headers=new Headers(request.headers);headers.set('Content-Type','application/json');
+    const proxyData=action==='efi-pix-auto-create'?{action:'efi-pix-auto-create',efi:settings.efi||{},mercadoPago:settings.mercadoPago||{},client:data?.client||{},startDate:data?.startDate,endDate:data?.endDate,amountCents:data?.amountCents}:{action:'efi-pix-auto-refresh',efi:settings.efi||{},mercadoPago:settings.mercadoPago||{},idRec:text(data?.idRec||data?.id)};
+    const internal=new Request(new URL('/api/bank-proxy',request.url),{method:'POST',headers,body:JSON.stringify(proxyData)});
+    return await baseWorker.fetch(internal,env,ctx);
+  }catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,{'x-provedor-plus-edge':'cloudflare-bank-safe-service'})}
+}
+
 async function stateMutationRequest(request,path){
   if(request.method!=='POST')return false;
   let body={};try{body=await request.clone().json()}catch{return false}
@@ -308,9 +354,11 @@ export default {
     if(path===CLIENT_PUSH_PATH){const response=await handleCustomerPush(request,env);if(response)return response}
     if(path===ADMIN_PUSH_PATH){const response=await handleAdminSend(request,env,ctx);if(response)return response}
     if(path===OPS_PATH){const response=await handleOperations(request,env,ctx);if(response)return response}
+    if(path==='/api/bank-settings'){const service=await handleBankServiceAction(request,env,ctx);if(service)return service}
     try{
-      if(await stateMutationRequest(request,path))return await withStateWriteLock(env,()=>baseWorker.fetch(request,env,ctx));
-      return await baseWorker.fetch(request,env,ctx);
+      const forward=async()=>{const response=await baseWorker.fetch(request,env,ctx);return path==='/api/bank-settings'?await sanitizeBankResponse(response):response};
+      if(await stateMutationRequest(request,path))return await withStateWriteLock(env,forward);
+      return await forward();
     }catch(error){return stateLockErrorResponse(request,error)}
   },
   async scheduled(controller,env,ctx){

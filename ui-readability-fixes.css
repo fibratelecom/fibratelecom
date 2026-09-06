@@ -78,3 +78,17 @@
 .bank-integrations .bank-certificate small{font-size:11px!important;line-height:1.45!important;overflow-wrap:anywhere!important}
 .bank-integrations .bank-card button{min-height:38px!important;height:auto!important;padding:8px 12px!important;font-size:12px!important;line-height:1.25!important;white-space:normal!important;overflow-wrap:anywhere!important}
 .bank-integrations .bank-issuer>div:first-child{min-width:0!important}
+
+/* Rodapé da barra lateral: usuário, sair e notificações proporcionais. */
+@media (min-width:761px){
+  .sidebar .user-card{display:grid!important;grid-template-columns:32px minmax(0,1fr) auto!important;align-items:center!important;gap:8px!important;min-height:54px!important;margin-top:6px!important;padding:9px 4px!important;border-top:1px solid #edf1f0!important}
+  .sidebar .user-card>span{display:grid!important;place-items:center!important;width:32px!important;height:32px!important;min-width:32px!important;border-radius:50%!important;font-size:11px!important;line-height:1!important}
+  .sidebar .user-card>div{display:flex!important;flex-direction:column!important;justify-content:center!important;min-width:0!important;gap:1px!important}
+  .sidebar .user-card strong{display:block!important;overflow:hidden!important;font-size:12px!important;line-height:1.2!important;text-overflow:ellipsis!important;white-space:nowrap!important}
+  .sidebar .user-card small{display:block!important;margin:0!important;overflow:hidden!important;font-size:10px!important;line-height:1.2!important;text-overflow:ellipsis!important;white-space:nowrap!important}
+  .sidebar .user-card>button{display:flex!important;align-items:center!important;justify-content:center!important;width:auto!important;min-width:44px!important;height:30px!important;padding:0 9px!important;border:1px solid #dfe7e5!important;border-radius:8px!important;background:#fff!important;color:#607075!important;font-size:11px!important;font-weight:700!important;line-height:1!important}
+  .sidebar .user-card>button:hover{border-color:#bdd6d0!important;background:#f5f9f8!important;color:#0a7566!important}
+  .sidebar>.user-card~button,.sidebar>button[aria-label*="Notifica"],.sidebar>button[title*="Notifica"]{display:flex!important;align-items:center!important;justify-content:flex-start!important;gap:9px!important;width:100%!important;min-height:36px!important;height:36px!important;margin:0!important;padding:0 9px!important;border:0!important;border-top:1px solid #edf1f0!important;border-radius:0!important;background:transparent!important;color:#405954!important;font-size:12px!important;font-weight:700!important;line-height:1!important;text-align:left!important}
+  .sidebar>.user-card~button:hover,.sidebar>button[aria-label*="Notifica"]:hover,.sidebar>button[title*="Notifica"]:hover{background:#f5f9f8!important;color:#0a7566!important}
+  .sidebar>.user-card~button svg,.sidebar>button[aria-label*="Notifica"] svg,.sidebar>button[title*="Notifica"] svg{display:block!important;flex:0 0 16px!important;width:16px!important;height:16px!important;margin:0!important}
+}

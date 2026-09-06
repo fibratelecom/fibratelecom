@@ -7,8 +7,8 @@
   let hookInstalled=false;
   let apiWrapped=false;
   let timer=null;
-  let syncing=false;
-  let pending=false;
+  let retryTimer=null;
+  let syncChain=Promise.resolve();
   let latestRaw=null;
   let lastSyncedRaw=null;
   let retryDelay=1200;
@@ -37,6 +37,19 @@
     for(const key of AUX_KEYS){if(!Object.prototype.hasOwnProperty.call(aux,key))continue;const value=aux[key];nativeSet.call(window.localStorage,key,typeof value==='string'?value:JSON.stringify(value))}
   }
 
+  function transientConflict(error){
+    const message=String(error?.message||error||'');
+    return /simultaneamente|outro acesso|conflito|conflict/i.test(message);
+  }
+
+  function scheduleRetry(){
+    clearTimeout(retryTimer);
+    retryTimer=setTimeout(()=>{
+      retryTimer=null;
+      flush().catch(()=>{});
+    },retryDelay);
+  }
+
   async function saveRaw(raw){
     const state=parse(raw);
     if(!state||typeof state!=='object')throw new Error('O estado do Provedor Plus está inválido e não pode ser sincronizado.');
@@ -45,25 +58,42 @@
     return result;
   }
 
+  function enqueueSync(raw,{notify=true}={}){
+    latestRaw=String(raw??'');
+    const task=syncChain.catch(()=>{}).then(async()=>{
+      const target=latestRaw||localRaw();
+      if(!target||target===lastSyncedRaw)return {saved:false};
+      try{
+        const result=await saveRaw(target);
+        retryDelay=1200;
+        clearTimeout(retryTimer);
+        retryTimer=null;
+        return {saved:true,...(result||{})};
+      }catch(error){
+        retryDelay=Math.min(60000,Math.max(2400,retryDelay*2));
+        scheduleRetry();
+        if(transientConflict(error))console.warn('Provedor Plus: conflito transitório de sincronização; nova tentativa agendada.',error);
+        else{
+          console.error('Provedor Plus: falha ao sincronizar estado com a nuvem.',error);
+          if(notify)window.dispatchEvent(new CustomEvent('provedor-plus-cloud-error',{detail:{message:error?.message||String(error)}}));
+        }
+        throw error;
+      }
+    });
+    syncChain=task.catch(()=>{});
+    return task;
+  }
+
   async function flush(){
-    if(syncing){pending=true;return}
     const raw=latestRaw??localRaw();
-    if(!raw||raw===lastSyncedRaw)return;
-    syncing=true;let failed=false;
-    try{await saveRaw(raw);retryDelay=1200}catch(error){
-      failed=true;pending=true;retryDelay=Math.min(60000,Math.max(2400,retryDelay*2));
-      console.error('Provedor Plus: falha ao sincronizar estado com a nuvem.',error);
-      window.dispatchEvent(new CustomEvent('provedor-plus-cloud-error',{detail:{message:error?.message||String(error)}}));
-    }finally{
-      syncing=false;
-      if(pending){pending=false;clearTimeout(timer);timer=setTimeout(flush,failed?retryDelay:1200)}
-    }
+    if(!raw||raw===lastSyncedRaw)return {saved:false};
+    try{return await enqueueSync(raw,{notify:true})}catch{return {saved:false}}
   }
 
   function queue(raw){
     latestRaw=String(raw??'');
     clearTimeout(timer);
-    timer=setTimeout(flush,180);
+    timer=setTimeout(()=>flush().catch(()=>{}),220);
   }
 
   function installHook(){
@@ -123,18 +153,10 @@
 
   async function forceSync(){
     clearTimeout(timer);
-    latestRaw=localRaw();
-    if(!latestRaw)return {saved:false};
-    if(syncing){
-      pending=true;
-      await new Promise(resolve=>setTimeout(resolve,250));
-      return forceSync();
-    }
-    syncing=true;
-    try{
-      const result=await saveRaw(latestRaw);
-      return {saved:true,...(result||{})};
-    }finally{syncing=false}
+    const raw=localRaw();
+    latestRaw=raw;
+    if(!raw)return {saved:false};
+    return enqueueSync(raw,{notify:true});
   }
 
   function wrapApi(api){

@@ -30,7 +30,7 @@
   if(!window.ProvedorPlusAuth?.ensure)throw new Error('A autenticação do Provedor Plus não foi carregada.');
   const auth=await window.ProvedorPlusAuth.ensure();
 
-  await loadScript('/cloud-state-store.js?v=1017-cloud17-audit3');
+  await loadScript('/cloud-state-store.js?v=1017-cloud17-audit4');
   if(!window.ProvedorPlusCloudState?.prepare)throw new Error('A sincronização com o banco da nuvem não foi carregada.');
   await window.ProvedorPlusCloudState.prepare();
   const currentState=window.ProvedorPlusCloudState.getState()||{};
@@ -47,8 +47,8 @@
   }
 
   await loadScript('/cloud-router-store-v2.js?v=1017-cloud17');
-  await loadScript('/cloud-client-store-v2.js?v=1017-cloud17-audit1');
-  await loadScript('/cloud-adapter.js?v=1017-cloud17-mpserver1');
+  await loadScript('/cloud-client-store-v2.js?v=1017-cloud17-audit2');
+  await loadScript('/cloud-adapter.js?v=1017-cloud17-mpserver2-webhook1');
   if(typeof window.ProvedorPlusInstallCloudAdapter!=='function')throw new Error('A ponte HTTPS do MikroTik não foi carregada.');
   await window.ProvedorPlusInstallCloudAdapter();
 

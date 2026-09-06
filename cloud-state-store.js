@@ -114,6 +114,12 @@
     return raw;
   }
 
+  function mirrorAcceptedState(state,updatedAt){
+    const raw=acceptRemote(state,updatedAt);
+    nativeSet.call(window.localStorage,KEY,raw);restoreAux(state);latestRaw=raw;
+    return clone(state||{});
+  }
+
   async function saveRaw(raw){
     const state=parse(raw);
     if(!state||typeof state!=='object')throw new Error('O estado do Provedor Plus está inválido e não pode ser sincronizado.');
@@ -137,7 +143,7 @@
     latestRaw=String(raw??'');
     const task=syncChain.catch(()=>{}).then(async()=>{
       const target=latestRaw||localRaw();
-      if(!target||target===lastSyncedRaw)return {saved:false};
+      if(!target||target===lastSyncedRaw)return {saved:false,state:clone(lastSyncedState||parse(target)||{})};
       try{
         const result=await saveRaw(target);
         retryDelay=1200;clearTimeout(retryTimer);retryTimer=null;
@@ -159,8 +165,8 @@
   async function flush(){
     clearTimeout(timer);timer=null;
     const raw=latestRaw??localRaw();
-    if(!raw||raw===lastSyncedRaw)return {saved:false};
-    try{return await enqueueSync(raw,{notify:true})}catch{return {saved:false}}
+    if(!raw||raw===lastSyncedRaw)return {saved:false,state:clone(lastSyncedState||parse(raw)||{})};
+    try{return await enqueueSync(raw,{notify:true})}catch{return {saved:false,state:parse(localRaw())||{}}}
   }
 
   function queue(raw){latestRaw=String(raw??'');clearTimeout(timer);timer=setTimeout(()=>flush().catch(()=>{}),220)}
@@ -186,11 +192,25 @@
     };
   }
 
+  async function refresh(){
+    const remote=await cloud('state.get');
+    if(remote?.state&&typeof remote.state==='object')return mirrorAcceptedState(remote.state,remote.updated_at||null);
+    return parse(localRaw())||{};
+  }
+
+  async function replaceAndSync(state){
+    if(!state||typeof state!=='object'||Array.isArray(state))throw new Error('Estado do Provedor Plus inválido.');
+    const raw=JSON.stringify(state);
+    nativeSet.call(window.localStorage,KEY,raw);latestRaw=raw;clearTimeout(timer);timer=null;
+    const result=await enqueueSync(raw,{notify:true});
+    return result?.state&&typeof result.state==='object'?clone(result.state):(parse(localRaw())||clone(state));
+  }
+
   async function prepare(){
     installHook();const local=localRaw();let remote;
     try{remote=await cloud('state.get')}catch(error){throw new Error(`Não foi possível conectar ao banco da nuvem: ${error?.message||error}`)}
     if(remote?.state&&typeof remote.state==='object'){
-      const raw=acceptRemote(remote.state,remote.updated_at||null);nativeSet.call(window.localStorage,KEY,raw);restoreAux(remote.state);latestRaw=raw;
+      mirrorAcceptedState(remote.state,remote.updated_at||null);
       return {source:'cloud',updatedAt:remote.updated_at||null};
     }
     if(local){
@@ -198,7 +218,7 @@
       if(state&&typeof state==='object'){
         state=collectAux(state);remoteUpdatedAt=null;lastSyncedState=null;lastSyncedRaw=null;
         const saved=await cloud('state.save',{state,expected_updated_at:null});
-        const savedState=saved?.state||state,raw=acceptRemote(savedState,saved?.updated_at||null);nativeSet.call(window.localStorage,KEY,raw);latestRaw=raw;
+        const savedState=saved?.state||state;mirrorAcceptedState(savedState,saved?.updated_at||null);
         return {source:'local-migrated',updatedAt:saved?.updated_at||null};
       }
     }
@@ -224,5 +244,5 @@
   }
 
   window.addEventListener('beforeunload',()=>{if(latestRaw&&latestRaw!==lastSyncedRaw)flush().catch(()=>{})});
-  window.ProvedorPlusCloudState={prepare,forceSync,wrapApi,getState:()=>parse(localRaw())};
+  window.ProvedorPlusCloudState={prepare,refresh,replaceAndSync,forceSync,wrapApi,getState:()=>parse(localRaw())};
 })();

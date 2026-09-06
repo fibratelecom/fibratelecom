@@ -56,12 +56,11 @@
     const invoices=window.provedor?.invoices;
     if(!invoices||invoices.__ppPaymentRoutingInstalled)return;
     const adapt=data=>{
-      const next={...(data||{})},provider=String(next.bank_provider||next.bankProvider||next.payment_provider_preference||'').trim().toLowerCase();
+      const next={...(data||{})};
       const state=window.ProvedorPlusCloudState?.getState?.()||{},banks=state?.banks||{},defaultProvider=String(banks.defaultProvider||'').trim();
       const automatic=['monthly_auto','first_prorated'].includes(String(next.billing_origin||''));
-      if(provider==='efi'&&automatic&&defaultProvider==='mercadoPago'){
-        throw new Error('Mercado Pago é o emissor principal. Conecte o Mercado Pago antes da geração automática para não emitir pela Efí por fallback.');
-      }
+      let provider=String(next.bank_provider||next.bankProvider||next.payment_provider_preference||'').trim().toLowerCase();
+      if(automatic&&defaultProvider==='mercadoPago')provider='mercadopago';
       if(provider==='mercadopago'){
         next.payment_provider='mercadoPago';
         next.payment_provider_preference='mercadoPago';

@@ -18,7 +18,7 @@
   let activeSyncRaw=null;
 
   const parse=raw=>{try{return raw?JSON.parse(raw):null}catch{return null}};
-  const clone=value=>value==null?value:JSON.parse(JSON.stringify(v=>v));
+  const clone=value=>value==null?value:JSON.parse(JSON.stringify(value));
   const isObject=value=>Boolean(value)&&typeof value==='object'&&!Array.isArray(value);
   const same=(a,b)=>{try{return JSON.stringify(a)===JSON.stringify(b)}catch{return a===b}};
   const has=(obj,key)=>Object.prototype.hasOwnProperty.call(obj||{},key);
@@ -198,7 +198,7 @@
       if(generation!==prepareGeneration)return {source:'stale-ignored',updatedAt:null};
       const raw=JSON.stringify(saved?.state||state);
       nativeSet.call(window.localStorage,KEY,raw);latestRaw=raw;lastSyncedRaw=raw;lastSyncedAt=saved?.updated_at||null;
-      return {source:'local-migrated',updatedAt:null};
+      return {source:'local-migrated',updatedAt:saved?.updated_at||null};
     }
   }
   return {source:'empty',updatedAt:null};

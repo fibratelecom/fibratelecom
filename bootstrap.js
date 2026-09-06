@@ -48,7 +48,7 @@
 
   await loadScript('/cloud-router-store-v2.js?v=1017-cloud17');
   await loadScript('/cloud-client-store-v2.js?v=1017-cloud17-audit2');
-  await loadScript('/cloud-adapter.js?v=1017-cloud17-mpserver2-webhook2');
+  await loadScript('/cloud-adapter.js?v=1017-cloud17-mpserver2-webhook3');
   if(typeof window.ProvedorPlusInstallCloudAdapter!=='function')throw new Error('A ponte HTTPS do MikroTik não foi carregada.');
   await window.ProvedorPlusInstallCloudAdapter();
 

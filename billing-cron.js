@@ -4,9 +4,6 @@ import { handleBankProxy } from './worker-bank-native.js';
 
 const STATE_KEY='web_state_v1017';
 const BANK_SETTINGS_KEY='bank_credentials_v1';
-const MP_RECONCILE_LOCK_KEY='mp_payment_reconcile_lock_v1';
-const PORTAL_URL='https://painel.fibramais.workers.dev/api/customer-portal';
-const PORTAL_ORIGIN='https://cliente.fibramais.workers.dev';
 const DAY=86400000;
 const utf8=new TextEncoder();
 const text=value=>String(value??'').trim();
@@ -199,48 +196,6 @@ async function issueAndSave(env,sql,state,invoice,client,vault,isExisting){
   }
 }
 
-function mpInvoicePending(row){
-  if(normalize(row?.bank_provider)!=='mercadopago')return false;
-  if(!text(row?.bank_payment_id||row?.bank_charge_id))return false;
-  const status=normalize(row?.status),bank=normalize(row?.bank_status);
-  if(['pago','paid','baixado','cancelado','canceled','renegociado','renegotiated','substituido','substituida'].some(value=>status.includes(value)))return false;
-  if(['approved','paid','pago'].some(value=>bank.includes(value)))return true;
-  const last=new Date(row?.bank_last_sync_at||0).getTime();
-  return !Number.isFinite(last)||Date.now()-last>=45000;
-}
-
-async function acquireMpReconcileLock(sql){
-  const now=new Date().toISOString(),stale=new Date(Date.now()-50000).toISOString(),raw=JSON.stringify({at:now});
-  const rows=await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${MP_RECONCILE_LOCK_KEY},${raw}::jsonb,${now}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at WHERE pp_settings.updated_at<${stale} RETURNING updated_at`;
-  return Array.isArray(rows)&&rows.length>0;
-}
-
-async function portalCall(env,action,data){
-  const request=new Request(PORTAL_URL,{method:'POST',headers:{'Content-Type':'application/json','Origin':PORTAL_ORIGIN},body:JSON.stringify({action,data})});
-  const response=await baseWorker.fetch(request,env);let body={};try{body=await response.json()}catch{}
-  if(!response.ok||!body?.ok)throw new Error(body?.error||`Área do Cliente retornou HTTP ${response.status}.`);
-  return body.data||{};
-}
-
-async function reconcileMercadoPagoPayments(env){
-  if(!env.DATABASE_URL)return {configured:false,checked:0,paid:0,failed:0};
-  const sql=neon(env.DATABASE_URL);if(!(await acquireMpReconcileLock(sql)))return {locked:true,checked:0,paid:0,failed:0};
-  const vault=await readBankSettings(env,sql);if(!vault?.mercadoPago?.enabled||!text(vault?.mercadoPago?.accessToken))return {configured:false,checked:0,paid:0,failed:0};
-  const state=await loadState(sql),candidates=(Array.isArray(state?.invoices)?state.invoices:[]).filter(mpInvoicePending).sort((a,b)=>String(a?.due_date||'').localeCompare(String(b?.due_date||''))).slice(0,40);
-  if(!candidates.length)return {configured:true,checked:0,paid:0,failed:0};
-  const clients=await sql`SELECT id,document,contract_number FROM pp_clients ORDER BY id ASC`,byId=new Map((Array.isArray(clients)?clients:[]).map(client=>[Number(client.id),client])),sessions=new Map();
-  let checked=0,paid=0,failed=0;const errors=[];
-  for(const invoice of candidates){
-    try{
-      const client=byId.get(Number(invoice?.client_id));if(!client)throw new Error('cliente não encontrado');
-      let session=sessions.get(Number(client.id));
-      if(!session){const login=await portalCall(env,'login',{document:text(client.document),contract:text(client.contract_number)});session=text(login?.session);if(!session)throw new Error('sessão interna não gerada');sessions.set(Number(client.id),session)}
-      const result=await portalCall(env,'payment-status',{session,invoiceId:invoice.id,paymentId:text(invoice.bank_payment_id||invoice.bank_charge_id)});checked++;if(normalize(result?.status).includes('approved')||normalize(result?.state).includes('pago'))paid++;
-    }catch(error){failed++;errors.push(`${invoice?.id||'?'}: ${error instanceof Error?error.message:String(error)}`)}
-  }
-  return {configured:true,checked,paid,failed,errors:errors.slice(0,20)};
-}
-
 async function runBillingCron(env){
   if(!env.DATABASE_URL)throw new Error('DATABASE_URL não configurada para a geração automática.');
   const sql=neon(env.DATABASE_URL),state=await loadState(sql);state.settings={...(state.settings||{})};
@@ -282,14 +237,9 @@ async function runBillingCron(env){
   return {date:today,generated,issued,skipped,failed,errors};
 }
 
-async function runScheduled(env){
-  try{await runBillingCron(env)}catch(error){console.error('Provedor Plus: falha no cron de mensalidades.',error)}
-  try{const result=await reconcileMercadoPagoPayments(env);if(result?.failed)console.error('Provedor Plus: conciliação Mercado Pago concluiu com falhas.',result)}catch(error){console.error('Provedor Plus: falha na conciliação automática Mercado Pago.',error)}
-}
-
-export { runBillingCron,reconcileMercadoPagoPayments };
+export { runBillingCron };
 
 export default {
   fetch(request,env,ctx){return baseWorker.fetch(request,env,ctx)},
-  scheduled(controller,env,ctx){ctx.waitUntil(runScheduled(env))}
+  scheduled(controller,env,ctx){ctx.waitUntil(runBillingCron(env).catch(error=>console.error('Provedor Plus: falha no cron de mensalidades.',error)))}
 };

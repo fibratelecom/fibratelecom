@@ -1,4 +1,4 @@
-import billingWorker,{runBillingCron,reconcileMercadoPagoPayments} from './billing-cron.js';
+import billingWorker,{runBillingCron} from './billing-cron.js';
 import {neon} from '@neondatabase/serverless';
 import {resolveRouterForService} from './worker-native-api.js';
 import {handleMikrotikProxy} from './worker-mikrotik-native.js';
@@ -128,7 +128,7 @@ async function processExpiredTrust(env){
 export default {
   fetch(request,env,ctx){const url=new URL(request.url);if(url.pathname===TRUST_PATH)return handleTrust(request,env);return billingWorker.fetch(request,env,ctx)},
   scheduled(controller,env,ctx){
-    const task=(async()=>{await processExpiredTrust(env);if(controller?.cron==='5 6 * * *')await runBillingCron(env);await reconcileMercadoPagoPayments(env)})();
+    const task=(async()=>{await processExpiredTrust(env);if(controller?.cron==='5 6 * * *')await runBillingCron(env)})();
     ctx.waitUntil(task.catch(error=>console.error('Provedor Plus: falha na rotina agendada.',error)));
   }
 };

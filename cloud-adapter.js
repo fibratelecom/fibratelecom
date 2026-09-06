@@ -94,12 +94,19 @@
   function normalizeText(value){return String(value||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')}
   function visibleNode(node){return Boolean(node&&!node.hidden&&(node.offsetParent!==null||node.getClientRects?.().length))}
   function mercadoPagoSettingsRoot(){
-    const roots=[...document.querySelectorAll('form,section,article,.card,.panel,.modal-body,.integration-card,.settings-card')];
-    const candidates=roots.filter(root=>{if(!visibleNode(root))return false;const t=normalizeText(root.textContent);return t.includes('mercado pago')&&(t.includes('access token')||t.includes('public key'))&&root.querySelector('input')});
+    const candidates=[];
+    for(const input of document.querySelectorAll('input')){
+      if(!visibleNode(input))continue;
+      let node=input.parentElement;
+      for(let depth=0;node&&depth<12;depth++,node=node.parentElement){
+        if(!visibleNode(node))continue;
+        const t=normalizeText(node.textContent);
+        if(t.includes('efi bank'))break;
+        if(t.includes('mercado pago')&&t.includes('public key')&&t.includes('access token')){candidates.push(node);break}
+      }
+    }
     candidates.sort((a,b)=>String(a.textContent||'').length-String(b.textContent||'').length);
-    if(candidates[0])return candidates[0];
-    const input=[...document.querySelectorAll('input')].find(el=>{if(!visibleNode(el))return false;const t=normalizeText(`${el.name||''} ${el.id||''} ${el.placeholder||''} ${el.getAttribute('aria-label')||''} ${el.closest('label')?.textContent||''}`);return t.includes('access token')||t.includes('public key')});
-    return input?.closest('form,section,article,.card,.panel,.modal-body,.integration-card,.settings-card')||null;
+    return candidates[0]||null;
   }
   function webhookCard(){return document.getElementById('pp-mp-webhook-settings')}
   function setWebhookMessage(message,error=false){const node=webhookCard()?.querySelector('[data-pp-mp-webhook-message]');if(node){node.textContent=String(message||'');node.style.color=error?'#b42318':'#19725e'}}

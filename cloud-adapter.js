@@ -37,6 +37,17 @@
     if(!response.ok||!body.ok)throw Error(body.error||`Falha ao salvar a integração bancária (HTTP ${response.status}).`);
     return body.data;
   }
+  async function cloudDefaultProvider(){
+    const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),8000);
+    try{
+      const response=await fetch('/api/cloud-state',{method:'POST',cache:'no-store',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'state.get',data:{}}),signal:ctl.signal});
+      let body={};try{body=await response.json()}catch{}
+      if(!response.ok||!body.ok)return {known:false,value:''};
+      const provider=String(body?.data?.state?.banks?.defaultProvider||'');
+      return {known:true,value:['efi','mercadoPago'].includes(provider)?provider:''};
+    }catch{return {known:false,value:''}}
+    finally{clearTimeout(timer)}
+  }
   function safeBankView(local={},remote={}){
     const le=local?.efi||{},re=remote?.efi||{},lm=local?.mercadoPago||{},rm=remote?.mercadoPago||{};
     return {
@@ -161,7 +172,13 @@
     if(base.banks?.get){
       api.banks.get=async()=>{
         let local={};try{local=await base.banks.get()||{}}catch{}
-        try{const remote=await bankSettingsCall('get-safe');scrubLocalBankSecrets();return safeBankView(local,remote)}catch{return safeBankView(local,{})}
+        const [defaultResult,remoteResult]=await Promise.allSettled([cloudDefaultProvider(),bankSettingsCall('get-safe')]);
+        const defaultState=defaultResult.status==='fulfilled'?defaultResult.value:{known:false,value:''};
+        const remote=remoteResult.status==='fulfilled'&&remoteResult.value&&typeof remoteResult.value==='object'?remoteResult.value:{};
+        if(remoteResult.status==='fulfilled')scrubLocalBankSecrets();
+        const view=safeBankView(local,remote);
+        if(defaultState.known)view.defaultProvider=defaultState.value;
+        return view;
       };
     }
     if(base.banks?.saveEfi){

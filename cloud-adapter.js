@@ -16,6 +16,59 @@
   async function secretDelete(id){try{return await dataCall('routers.secret.delete',{id:Number(id)})}catch{return {deleted:false,id:Number(id)||0}}}
   async function trafficRecord(clientId,live){return dataCall('traffic.record',{clientId:Number(clientId),month:localMonthKey(),live:clone(live)})}
 
+  const STATE_KEY='provedor_plus_web_1_0_17';
+  function stateRead(){try{return JSON.parse(localStorage.getItem(STATE_KEY)||'{}')||{}}catch{return{}}}
+  function stateMpPatch(patch={}){
+    const s=stateRead();
+    s.banks={...(s.banks||{})};
+    s.banks.mercadoPago={...(s.banks.mercadoPago||{}),...patch};
+    localStorage.setItem(STATE_KEY,JSON.stringify(s));
+    return clone(s.banks.mercadoPago);
+  }
+  const idbRequest=req=>new Promise((resolve,reject)=>{req.onsuccess=()=>resolve(req.result??null);req.onerror=()=>reject(req.error||Error('Falha no armazenamento seguro local.'))});
+  async function openLegacySecureDb(){
+    if(typeof indexedDB==='undefined')return null;
+    if(typeof indexedDB.databases==='function'){
+      try{const list=await indexedDB.databases();if(!list.some(item=>item?.name==='provedor_plus_secure_1017'))return null}catch{}
+    }
+    return new Promise((resolve,reject)=>{const req=indexedDB.open('provedor_plus_secure_1017');req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);req.onupgradeneeded=()=>{try{req.transaction?.abort()}catch{};resolve(null)}});
+  }
+  async function legacyMpAccessToken(){
+    let db;
+    try{
+      db=await openLegacySecureDb();
+      if(!db||!db.objectStoreNames.contains('kv')||!db.objectStoreNames.contains('keys'))return '';
+      const record=await idbRequest(db.transaction('kv','readonly').objectStore('kv').get('mercadoPago'));
+      const key=await idbRequest(db.transaction('keys','readonly').objectStore('keys').get('aes'));
+      if(!record?.iv||!record?.data||!key)return '';
+      const b64=value=>{const raw=atob(String(value||'')),out=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)out[i]=raw.charCodeAt(i);return out};
+      const plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:b64(record.iv)},key,b64(record.data));
+      const value=JSON.parse(new TextDecoder().decode(plain));
+      return String(value?.accessToken||'').trim();
+    }catch{return ''}
+    finally{try{db?.close()}catch{}}
+  }
+  async function clearLegacyMpSecret(){
+    let db;
+    try{
+      db=await openLegacySecureDb();
+      if(!db||!db.objectStoreNames.contains('kv'))return;
+      await idbRequest(db.transaction('kv','readwrite').objectStore('kv').delete('mercadoPago'));
+    }catch{}
+    finally{try{db?.close()}catch{}}
+  }
+  async function mpSecretStatus(){return dataCall('banks.mercadoPago.secret.status')}
+  async function ensureMpSecret(){
+    let status=await mpSecretStatus();
+    if(status?.configured){await clearLegacyMpSecret();return status}
+    const legacy=await legacyMpAccessToken();
+    if(legacy){
+      status=await dataCall('banks.mercadoPago.secret.save',{accessToken:legacy});
+      await clearLegacyMpSecret();
+    }
+    return status||{configured:false};
+  }
+
   async function cloudCall(action,{router=null,data=null}={}){
     const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),20000);
     try{
@@ -39,7 +92,7 @@
 
   window.ProvedorPlusInstallCloudAdapter=async()=>{
     const api=window.provedor;if(!api||api.__cloudAdapterInstalled)return;
-    const base={routers:{...api.routers},mikrotik:{...api.mikrotik},clients:{...api.clients},vpn:{...api.vpn}};
+    const base={routers:{...api.routers},mikrotik:{...api.mikrotik},clients:{...api.clients},banks:{...api.banks},vpn:{...api.vpn}};
     async function routerRecord(id){const list=await base.routers.list(),r=(list||[]).find(x=>Number(x.id)===Number(id));if(!r)throw Error('MikroTik cadastrado não encontrado.');return r}
     async function routerAuth(id,password=''){
       const entered=String(password||'').trim();
@@ -94,6 +147,61 @@
       return saved;
     };
     api.clients.trustRelease=async(id,hours=48)=>{const before=await base.clients.status(id);if(before?.trust?.usedThisMonth)throw Error('A liberação em confiança já foi utilizada neste mês para este cliente.');const c=before?.client||await clientRecord(id),r=await routerAuth(c.router_id);await cloudCall('client.unblock',{router:r,data:clone(c)});try{return await base.clients.trustRelease(id,hours)}catch(error){try{await cloudCall('client.block',{router:r,data:clone(c)})}catch{}throw error}};
+
+    if(base.banks?.get&&base.banks?.saveMercadoPago&&base.banks?.testMercadoPago){
+      api.banks.get=async()=>{
+        const banks=await base.banks.get();
+        try{
+          const status=await ensureMpSecret();
+          const mercadoPago={...(banks?.mercadoPago||{}),accessTokenConfigured:Boolean(status?.configured)};
+          stateMpPatch({accessTokenConfigured:mercadoPago.accessTokenConfigured});
+          return {...banks,mercadoPago};
+        }catch(error){
+          console.error('Provedor Plus: não foi possível consultar a credencial segura do Mercado Pago.',error);
+          return banks;
+        }
+      };
+      api.banks.saveMercadoPago=async data=>{
+        const entered=String(data?.accessToken||'').trim();
+        let status;
+        if(entered)status=await dataCall('banks.mercadoPago.secret.save',{accessToken:entered});
+        else status=await ensureMpSecret();
+        if(Boolean(data?.enabled)&&!status?.configured)throw Error('Mercado Pago: informe o Access Token de produção.');
+        const current=(await base.banks.get())?.mercadoPago||{},publicKey=String(data?.publicKey??current.publicKey??'').trim();
+        if(Boolean(data?.enabled)&&!publicKey)throw Error('Mercado Pago: informe a Public Key de produção.');
+        await clearLegacyMpSecret();
+        const saved=await base.banks.saveMercadoPago({...data,accessToken:''});
+        const merged=stateMpPatch({
+          enabled:Boolean(data?.enabled),
+          environment:data?.environment==='production'?'production':'sandbox',
+          publicKey,
+          accessTokenConfigured:Boolean(status?.configured)
+        });
+        return {...saved,...merged};
+      };
+      api.banks.testMercadoPago=async()=>{
+        const status=await ensureMpSecret();
+        if(!status?.configured)throw Error('Mercado Pago: informe e salve o Access Token de produção.');
+        try{
+          const result=await base.banks.testMercadoPago();
+          stateMpPatch({enabled:true,accessTokenConfigured:true,lastTestStatus:'success',lastTestAt:result?.checkedAt||now(),lastTestMessage:result?.message||'Conectado.'});
+          return result;
+        }catch(error){
+          stateMpPatch({enabled:false,accessTokenConfigured:true,lastTestStatus:'error',lastTestAt:now(),lastTestMessage:error instanceof Error?error.message:String(error)});
+          throw error;
+        }
+      };
+      for(const name of ['deleteMercadoPago','removeMercadoPago','clearMercadoPago']){
+        if(typeof base.banks[name]!=='function')continue;
+        api.banks[name]=async(...args)=>{
+          await dataCall('banks.mercadoPago.secret.delete').catch(()=>{});
+          await clearLegacyMpSecret();
+          const result=await base.banks[name](...args);
+          stateMpPatch({enabled:false,accessTokenConfigured:false,lastTestStatus:'',lastTestAt:'',lastTestMessage:''});
+          return result;
+        };
+      }
+    }
 
     api.vpn.status=async()=>({installed:true,web:true,mode:'cloud-rest',message:'A conexão web usa REST HTTPS pelo MikroTik Cloud.'});
     api.vpn.activate=async()=>({queued:false,mode:'cloud-rest',message:'O acesso é feito diretamente pela integração REST HTTPS em nuvem.'});

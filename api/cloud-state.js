@@ -8,7 +8,7 @@ async function db(req,path,options={}){
   const token=String(req.headers['x-vercel-oidc-token']||'');
   if(!token)throw Object.assign(new Error('Autenticação da nuvem indisponível.'),{statusCode:503});
   const headers={Accept:'application/json',Authorization:`Bearer ${token}`,...(options.headers||{})};
-  const response=await fetch(`${DATA_API}${path}`,{...options,headers});
+  const response=await fetch(`${DATA_API}${path}`,{...options,headers,cache:'no-store'});
   let raw='';try{raw=await response.text()}catch{}
   let body=null;if(raw){try{body=JSON.parse(raw)}catch{body=raw}}
   if(!response.ok){const message=body?.message||body?.error||`Falha no banco da nuvem (HTTP ${response.status}).`;throw Object.assign(new Error(message),{statusCode:response.status})}
@@ -34,16 +34,30 @@ async function getState(req){
   return row?{state:row.value||{},updated_at:row.updated_at||null}:{state:null,updated_at:null};
 }
 
-async function saveState(req,state){
+function conflict(current){
+  return Object.assign(new Error('O estado mudou simultaneamente em outro acesso.'),{statusCode:409,current});
+}
+
+async function saveState(req,state,expectedUpdatedAt=''){
   if(!state||typeof state!=='object'||Array.isArray(state))throw Object.assign(new Error('Estado do gerenciador inválido.'),{statusCode:400});
-  const clean=sanitize(state);
+  const clean=sanitize(state),expected=text(expectedUpdatedAt),current=await getState(req);
+  if(current.state!==null&&expected&&current.updated_at&&expected!==current.updated_at)throw conflict(current);
+
   const payload={key:STATE_KEY,value:clean,updated_at:new Date().toISOString()};
-  const patched=await db(req,`/pp_settings?key=eq.${encodeURIComponent(STATE_KEY)}`,{method:'PATCH',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(payload)});
-  let row=Array.isArray(patched)?patched[0]:null;
-  if(!row){
-    const inserted=await db(req,'/pp_settings',{method:'POST',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(payload)});
-    row=Array.isArray(inserted)?inserted[0]:inserted;
+  if(current.state!==null){
+    const filter=expected?`&updated_at=eq.${encodeURIComponent(expected)}`:'';
+    const patched=await db(req,`/pp_settings?key=eq.${encodeURIComponent(STATE_KEY)}${filter}`,{
+      method:'PATCH',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(payload)
+    });
+    const row=Array.isArray(patched)?patched[0]:null;
+    if(row)return {state:row.value||clean,updated_at:row.updated_at||payload.updated_at};
+    throw conflict(await getState(req));
   }
+
+  const inserted=await db(req,'/pp_settings',{
+    method:'POST',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(payload)
+  });
+  const row=Array.isArray(inserted)?inserted[0]:inserted;
   return {state:row?.value||clean,updated_at:row?.updated_at||payload.updated_at};
 }
 
@@ -55,11 +69,14 @@ module.exports=async function handler(req,res){
     const action=text(req.body?.action),data=req.body?.data||{};
     let result;
     if(action==='state.get')result=await getState(req);
-    else if(action==='state.save')result=await saveState(req,data.state);
+    else if(action==='state.save')result=await saveState(req,data.state,data.expected_updated_at||data.expectedUpdatedAt);
     else if(action==='health'){const current=await getState(req);result={online:true,hasState:Boolean(current.state),updated_at:current.updated_at}}
     else throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});
     return res.status(200).json({ok:true,data:result});
   }catch(error){
-    return res.status(Number(error?.statusCode)||500).json({ok:false,error:error instanceof Error?error.message:String(error)});
+    const status=Number(error?.statusCode)||500;
+    const payload={ok:false,error:error instanceof Error?error.message:String(error)};
+    if(status===409&&error?.current)payload.data=error.current;
+    return res.status(status).json(payload);
   }
 };

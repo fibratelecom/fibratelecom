@@ -50,7 +50,7 @@ function safeBankClientSettings(value){
       lastTestStatus:text(efi.lastTestStatus),lastTestMessage:text(efi.lastTestMessage),lastTestAt:text(efi.lastTestAt),webhookConfiguredAt:text(efi.webhookConfiguredAt)
     },
     mercadoPago:{
-      enabled:Boolean(mp.enabled),environment:text(mp.environment)||'sandbox',publicKey:text(mp.publicKey),accessTokenConfigured:bankFlag(mp,'accessTokenConfigured','accessToken'),
+      enabled:Boolean(mp.enabled),environment:text(mp.environment)||'sandbox',publicKey:text(mp.publicKey),accessTokenConfigured:bankFlag(mp,'accessTokenConfigured','accessToken'),webhookSecretConfigured:bankFlag(mp,'webhookSecretConfigured','webhookSecret'),
       lastTestStatus:text(mp.lastTestStatus),lastTestMessage:text(mp.lastTestMessage),lastTestAt:text(mp.lastTestAt)
     }
   };
@@ -160,6 +160,7 @@ async function finishPortalLoginRate(request,response,rate){
 
 async function stateMutationRequest(request,path){
   if(request.method!=='POST')return false;
+  if(path==='/api/customer-portal'&&new URL(request.url).searchParams.get('mp_webhook')==='1')return true;
   let body={};try{body=await request.clone().json()}catch{return false}
   const action=text(body?.action);
   if(path==='/api/cloud-state')return action==='state.save';

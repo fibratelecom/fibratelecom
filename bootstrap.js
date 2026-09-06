@@ -257,7 +257,7 @@ if(prepareOutcome.kind==='error'){
   if(!stableShell||!stableNav||!stableContent)throw new Error('A estrutura base do painel não ficou disponível para a montagem da interface atual.');
   document.documentElement.classList.remove('pp-atomic-ui-mounting');
   uiGateStyle.remove();
-  await loadScript('/dashboard-transition-guard.js?v=20260901-bankdelete1');
+  await loadScript('/dashboard-transition-guard.js?v=20260906-mpwebhook1');
   await loadScriptStable('/dashboard-enhancements.js?v=20260905-mikrotikfast1',{dropCharacterData:true,observerTargetSelector:'.app-shell',ignoreWithin:['.pp-dashboard-root-layer','.pp-pppoe-modal-layer','.pp-billing-auto-layer','.client-status-modal','.pp-ticket-layer','.pp-staff-layer','.pp-new-plans-layer']});
   const coreUiDeadline=Date.now()+12000;
   const adminNeedsIntegration=String(auth?.user?.role||'').toLowerCase()==='admin';

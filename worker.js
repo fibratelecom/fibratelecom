@@ -1,4 +1,4 @@
-// pp-build: 20260901-cashback-pix-extrato-final
+// pp-build: 20260906-mp-webhook1
 import { neon } from '@neondatabase/serverless';
 import { handleNativeAuth,handleNativeCloudState,handleNativeCloudData,resolveRouterForService,recordTrafficForService } from './worker-native-api.js';
 import { handleBankProxy } from './worker-bank-native.js';
@@ -108,7 +108,7 @@ async function decryptBankSettings(env,record){
 function emptyBankSettings(){
   return {
     efi:{enabled:false,environment:'sandbox',clientId:'',clientSecret:'',certificatePassword:'',certificateBase64:'',certificateName:'',pixKey:'',pixAutoReceiverAgency:'',pixAutoReceiverAccount:'',webhookUrl:'',lastTestStatus:'',lastTestMessage:'',lastTestAt:'',webhookConfiguredAt:''},
-    mercadoPago:{enabled:false,environment:'sandbox',publicKey:'',accessToken:'',lastTestStatus:'',lastTestMessage:'',lastTestAt:''}
+    mercadoPago:{enabled:false,environment:'sandbox',publicKey:'',accessToken:'',webhookSecret:'',lastTestStatus:'',lastTestMessage:'',lastTestAt:''}
   };
 }
 
@@ -185,6 +185,7 @@ function mergeMercadoPagoBank(current,data={}){
     environment:data.environment==='production'?'production':data.environment==='sandbox'?'sandbox':text(previous.environment)||'sandbox',
     publicKey:data.publicKey===undefined?text(previous.publicKey):text(data.publicKey),
     accessToken:data.accessToken===undefined?text(previous.accessToken):text(data.accessToken),
+    webhookSecret:text(previous.webhookSecret),
     lastTestStatus:resetTest?'':text(previous.lastTestStatus),lastTestMessage:resetTest?'':text(previous.lastTestMessage),lastTestAt:resetTest?'':text(previous.lastTestAt)
   };
 }
@@ -193,7 +194,7 @@ function safeBankSettings(value){
   const efi=value?.efi||{},mp=value?.mercadoPago||{};
   return {
     efi:{enabled:Boolean(efi.enabled),environment:text(efi.environment)||'sandbox',clientIdConfigured:Boolean(text(efi.clientId)),clientSecretConfigured:Boolean(text(efi.clientSecret)),certificatePasswordConfigured:Boolean(String(efi.certificatePassword||'')),certificateConfigured:Boolean(String(efi.certificateBase64||'')),certificateName:text(efi.certificateName),pixKey:text(efi.pixKey),pixAutoReceiverAgency:text(efi.pixAutoReceiverAgency),pixAutoReceiverAccount:text(efi.pixAutoReceiverAccount),webhookUrl:text(efi.webhookUrl),lastTestStatus:text(efi.lastTestStatus),lastTestMessage:text(efi.lastTestMessage),lastTestAt:text(efi.lastTestAt),webhookConfiguredAt:text(efi.webhookConfiguredAt)},
-    mercadoPago:{enabled:Boolean(mp.enabled),environment:text(mp.environment)||'sandbox',publicKey:text(mp.publicKey),accessTokenConfigured:Boolean(text(mp.accessToken)),lastTestStatus:text(mp.lastTestStatus),lastTestMessage:text(mp.lastTestMessage),lastTestAt:text(mp.lastTestAt)}
+    mercadoPago:{enabled:Boolean(mp.enabled),environment:text(mp.environment)||'sandbox',publicKey:text(mp.publicKey),accessTokenConfigured:Boolean(text(mp.accessToken)),webhookSecretConfigured:Boolean(text(mp.webhookSecret)),lastTestStatus:text(mp.lastTestStatus),lastTestMessage:text(mp.lastTestMessage),lastTestAt:text(mp.lastTestAt)}
   };
 }
 
@@ -209,6 +210,14 @@ async function handleBankSettings(request,env){
       const current=await readBankSettings(env),next={...current,efi:mergeEfiBank(current,data)};result=await writeBankSettings(env,next);
     }else if(action==='save-mercado-pago'){
       const current=await readBankSettings(env),next={...current,mercadoPago:mergeMercadoPagoBank(current,data)};result=await writeBankSettings(env,next);
+    }else if(action==='save-mercado-pago-webhook'){
+      const webhookSecret=text(data?.webhookSecret);
+      if(!webhookSecret)throw Object.assign(new Error('Mercado Pago: informe a chave secreta do Webhook.'),{statusCode:400});
+      const current=await readBankSettings(env),next={...current,mercadoPago:{...current.mercadoPago,webhookSecret}};
+      result=safeBankSettings(await writeBankSettings(env,next)).mercadoPago;
+    }else if(action==='delete-mercado-pago-webhook'){
+      const current=await readBankSettings(env),next={...current,mercadoPago:{...current.mercadoPago,webhookSecret:''}};
+      result=safeBankSettings(await writeBankSettings(env,next)).mercadoPago;
     }else if(action==='delete-efi'){
       const current=await readBankSettings(env),next={...current,efi:emptyBankSettings().efi};result=await writeBankSettings(env,next);
     }else if(action==='delete-mercado-pago'){
@@ -748,7 +757,7 @@ function bankInvoice(invoice,client,state){
 function bankSecretsFromVault(vault){
   return {
     efi:{environment:text(vault?.efi?.environment)||'sandbox',clientId:text(vault?.efi?.clientId),clientSecret:text(vault?.efi?.clientSecret),certificatePassword:String(vault?.efi?.certificatePassword||''),certificateBase64:String(vault?.efi?.certificateBase64||''),pixKey:text(vault?.efi?.pixKey),pixAutoReceiverAgency:text(vault?.efi?.pixAutoReceiverAgency),pixAutoReceiverAccount:text(vault?.efi?.pixAutoReceiverAccount),webhookUrl:text(vault?.efi?.webhookUrl)},
-    mercadoPago:{environment:text(vault?.mercadoPago?.environment)||'sandbox',publicKey:text(vault?.mercadoPago?.publicKey),accessToken:text(vault?.mercadoPago?.accessToken)}
+    mercadoPago:{environment:text(vault?.mercadoPago?.environment)||'sandbox',publicKey:text(vault?.mercadoPago?.publicKey),accessToken:text(vault?.mercadoPago?.accessToken),webhookSecret:text(vault?.mercadoPago?.webhookSecret)}
   };
 }
 
@@ -913,7 +922,7 @@ function clearPortalPixBankFields(invoice){Object.assign(invoice,{bank_provider:
 async function mercadoPagoRequest(vault,path,{method='GET',body=null,idempotencyKey=''}={}){
   const token=text(vault?.mercadoPago?.accessToken);if(!token)throw Object.assign(new Error('Mercado Pago não está configurado para este pagamento.'),{statusCode:409});
   const headers={Authorization:`Bearer ${token}`,Accept:'application/json'};if(body!==null)headers['Content-Type']='application/json';if(idempotencyKey)headers['X-Idempotency-Key']=idempotencyKey;
-  const response=await fetch(`https://api.mercadopago.com${path}`,{method,headers,body:body===null?undefined:JSON.stringify(body)});let result={};try{result=await response.json()}catch{};if(!response.ok)throw Object.assign(new Error(text(result?.message||result?.error)||`Mercado Pago retornou HTTP ${response.status}.`),{statusCode:response.status>=400&&response.status<500?409:502});return result;
+  const response=await fetch(`https://api.mercadopago.com${path}`,{method,headers,body:body===null?undefined:JSON.stringify(body)});let result={};try{result=await response.json()}catch{};if(!response.ok)throw Object.assign(new Error(text(result?.message||result?.error)||`Mercado Pago retornou HTTP ${response.status}.`),{statusCode:response.status>=400&&response.status<500?409:502,providerStatus:response.status});return result;
 }
 function mpPaymentFields(remote,detail,environment='sandbox'){
   const tx=remote?.point_of_interaction?.transaction_data||{};return {bank_provider:'mercadoPago',bank_environment:environment,bank_charge_id:text(remote?.id),bank_order_id:'',bank_payment_id:text(remote?.id),bank_external_reference:text(remote?.external_reference),bank_status:text(remote?.status),bank_status_detail:detail,bank_ticket_url:text(tx?.ticket_url),bank_pix_code:text(tx?.qr_code),bank_last_sync_at:new Date().toISOString(),pix_payment_url:text(tx?.ticket_url),pix_copy_paste:text(tx?.qr_code),pix_qr_image:tx?.qr_code_base64?`data:image/png;base64,${text(tx.qr_code_base64)}`:''};
@@ -984,10 +993,43 @@ async function connectionTestForSession(env,data){
   return withCompletedPortalDiagnostic(await refreshPortalForSession(env,data));
 }
 
+
+function mpWebhookSignature(value){const out={};for(const part of text(value).split(',')){const index=part.indexOf('=');if(index>0)out[text(part.slice(0,index))]=text(part.slice(index+1))}return out;}
+function mpWebhookSecureEqual(a,b){a=text(a).toLowerCase();b=text(b).toLowerCase();if(a.length!==b.length)return false;let diff=0;for(let i=0;i<a.length;i++)diff|=a.charCodeAt(i)^b.charCodeAt(i);return diff===0;}
+async function validateMpWebhook(request,secret,dataId){
+  const signature=mpWebhookSignature(request.headers.get('x-signature')),ts=text(signature.ts),received=text(signature.v1),requestId=text(request.headers.get('x-request-id'));
+  if(!ts||!received||!dataId||!secret)return false;
+  let manifest=`id:${text(dataId).toLowerCase()};`;if(requestId)manifest+=`request-id:${requestId};`;manifest+=`ts:${ts};`;
+  const key=await crypto.subtle.importKey('raw',portalUtf8.encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']),raw=new Uint8Array(await crypto.subtle.sign('HMAC',key,portalUtf8.encode(manifest))),expected=[...raw].map(byte=>byte.toString(16).padStart(2,'0')).join('');
+  return mpWebhookSecureEqual(received,expected);
+}
+async function handleMercadoPagoWebhook(request,env,cors={}){
+  let body={};try{body=await request.json()}catch{}
+  const url=new URL(request.url),dataId=text(url.searchParams.get('data.id')||body?.data?.id||body?.id),eventType=text(body?.type||body?.action||url.searchParams.get('type')).toLowerCase(),vault=await readBankSettings(env),mpVault=vault?.mercadoPago||{},webhookSecret=text(mpVault.webhookSecret);
+  if(!text(mpVault.accessToken)||!webhookSecret)return json({ok:false,error:'Webhook Mercado Pago ainda não configurado no Provedor Plus.'},503,{...cors,'x-provedor-plus-edge':'cloudflare-mp-webhook'});
+  if(!dataId)return json({ok:false,error:'Notificação Mercado Pago sem identificador.'},400,{...cors,'x-provedor-plus-edge':'cloudflare-mp-webhook'});
+  if(!(await validateMpWebhook(request,webhookSecret,dataId)))return json({ok:false,error:'Assinatura do Webhook Mercado Pago inválida.'},401,{...cors,'x-provedor-plus-edge':'cloudflare-mp-webhook'});
+  if(eventType&&eventType!=='payment'&&!eventType.includes('payment'))return json({ok:true,data:{received:true,reconciled:false,ignored:eventType}},200,{...cors,'x-provedor-plus-edge':'cloudflare-mp-webhook'});
+  let payment;try{payment=await mercadoPagoRequest(vault,`/v1/payments/${encodeURIComponent(dataId)}`)}catch(error){if(Number(error?.providerStatus)===404)return json({ok:true,data:{received:true,reconciled:false,simulation:true}},200,{...cors,'x-provedor-plus-edge':'cloudflare-mp-webhook'});throw error;}
+  if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Neon não configurada.'),{statusCode:503});
+  const sql=neon(env.DATABASE_URL),state=await loadState(sql),external=text(payment?.external_reference),match=external.match(/^PP-INV-(.+?)-CLI-(\d+)$/i),invoices=Array.isArray(state?.invoices)?state.invoices:[];
+  const invoice=invoices.find(row=>text(row?.bank_payment_id)===text(dataId)||text(row?.bank_charge_id)===text(dataId))||invoices.find(row=>external&&text(row?.bank_external_reference)===external)||invoices.find(row=>match&&String(row?.id)===String(match[1]));
+  if(!invoice)return json({ok:true,data:{received:true,reconciled:false}},200,{...cors,'x-provedor-plus-edge':'cloudflare-mp-webhook'});
+  const clients=Array.isArray(state?.clients)?state.clients:[],client=clients.find(row=>Number(row?.id)===Number(invoice?.client_id));
+  if(!client)return json({ok:true,data:{received:true,reconciled:false,invoiceId:invoice.id}},200,{...cors,'x-provedor-plus-edge':'cloudflare-mp-webhook'});
+  const methodId=text(payment?.payment_method_id).toLowerCase(),detail=text(invoice.bank_status_detail)||(methodId==='pix'?'mercado_pago_pix':'mercado_pago_card'),environment=text(mpVault.environment)||'sandbox',paidAt=text(payment?.date_approved||payment?.date_last_updated);
+  Object.assign(invoice,mpPaymentFields(payment,detail,environment));
+  if(mpPaid(payment?.status)){const isCard=detail==='mercado_pago_card'||methodId!=='pix';markPortalInvoicePaid(invoice,isCard?'Cartão Mercado Pago':'Pix Mercado Pago',paidAt);if(!isCard){finalizeCashbackDiscount(state,client,invoice,paidAt);creditPixCashback(state,client,invoice,paidAt);}}
+  else if(mpRejected(payment?.status)&&detail!=='mercado_pago_card')refundCashbackDiscount(state,client,invoice,'Estorno do desconto: Pix Mercado Pago cancelado ou recusado');
+  await saveState(sql,state);
+  return json({ok:true,data:{received:true,reconciled:true,invoiceId:invoice.id,status:text(payment?.status)}},200,{...cors,'x-provedor-plus-edge':'cloudflare-mp-webhook'});
+}
+
 async function handleNativeCustomerPortal(request,env){
   const cors=portalCors(request),origin=text(request.headers.get('origin'));
   if(request.method==='OPTIONS')return new Response(null,{status:204,headers:cors});
   if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405,{...cors,'x-provedor-plus-edge':'cloudflare-native-customer-portal'});
+  if(new URL(request.url).searchParams.get('mp_webhook')==='1'){try{return await handleMercadoPagoWebhook(request,env,cors)}catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,{...cors,'x-provedor-plus-edge':'cloudflare-mp-webhook'})}}
   if(origin&&!ALLOWED_PORTAL_ORIGINS.has(origin))return json({ok:false,error:'Origem não autorizada.'},403,{...cors,'x-provedor-plus-edge':'cloudflare-native-customer-portal'});
   try{
     let body={};try{body=await request.json()}catch{}

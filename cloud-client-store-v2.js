@@ -63,6 +63,7 @@
   }
 
   async function readState(){
+    if(typeof window.ProvedorPlusCloudState?.refresh==='function')return window.ProvedorPlusCloudState.refresh();
     const remote=await cloudState('state.get');
     return remote?.state&&typeof remote.state==='object'?remote.state:{};
   }
@@ -72,7 +73,13 @@
   }
 
   async function writeState(state){
-    const saved=await cloudState('state.save',{state});
+    if(typeof window.ProvedorPlusCloudState?.replaceAndSync==='function'){
+      const next=await window.ProvedorPlusCloudState.replaceAndSync(state);
+      mirrorState(next);
+      return next;
+    }
+    const current=await cloudState('state.get');
+    const saved=await cloudState('state.save',{state,expected_updated_at:current?.updated_at||null});
     const next=saved?.state&&typeof saved.state==='object'?saved.state:state;
     mirrorState(next);
     return next;

@@ -34,11 +34,7 @@
     .pp-bill-discount-field small{color:#71827e;font-size:10px;line-height:1.35;white-space:normal}
     .pp-bill-discount-summary{display:none;color:#16785f!important;font-weight:700}
     .pp-bill-discount-field.is-enabled .pp-bill-discount-summary{display:block}
-    .pp-bank-default.pp-default-issuer{display:grid!important;grid-template-columns:minmax(210px,auto);align-items:start!important;gap:5px!important;max-width:340px}
-    .pp-default-issuer-label{font-size:10px;font-weight:850;color:#405853;line-height:1.25}
-    .pp-default-issuer-help{display:block;color:#71827e;font-size:9px;font-weight:600;line-height:1.35;white-space:normal}
-    .pp-bank-default.pp-default-issuer select{width:100%;min-width:240px}
-    @media(max-width:900px){.pp-bill-bank-field,.pp-client-bank-field,.pp-bill-discount-field{max-width:none;width:100%}.pp-bank-default.pp-default-issuer{max-width:none;width:100%}.pp-bank-default.pp-default-issuer select{min-width:0;width:100%}}
+    @media(max-width:900px){.pp-bill-bank-field,.pp-client-bank-field,.pp-bill-discount-field{max-width:none;width:100%}}
   `;
   document.head.appendChild(style);
 
@@ -62,26 +58,6 @@
     select.innerHTML=active.length?active.map(([v,label])=>`<option value="${esc(v)}">${esc(label)}</option>`).join(''):'<option value="">Nenhum banco pronto para cobrança</option>';
     select.disabled=!active.length;
     if(active.length)select.value=enabled.has(String(value||''))?String(value):active[0][0];
-  }
-  function patchDefaultIssuer(banks,active){
-    const select=document.querySelector('#pp-bank-default');if(!select)return;
-    const label=select.closest('.pp-bank-default');if(!label)return;
-    label.classList.add('pp-default-issuer');
-    let title=label.querySelector('.pp-default-issuer-label');
-    if(!title){title=document.createElement('span');title.className='pp-default-issuer-label';label.insertBefore(title,select)}
-    title.textContent='Emissor padrão dos boletos';
-    for(const node of [...label.childNodes])if(node.nodeType===Node.TEXT_NODE&&String(node.nodeValue||'').trim())node.nodeValue='';
-    let help=label.querySelector('.pp-default-issuer-help');
-    if(!help){help=document.createElement('small');help.className='pp-default-issuer-help';label.appendChild(help)}
-    help.textContent='Usado quando o cliente não tem banco próprio. A preferência definida no cadastro do cliente continua tendo prioridade.';
-    const current=String(banks?.defaultProvider||select.value||''),enabled=new Set(active.map(([value])=>value));
-    const signature=JSON.stringify({active:active.map(([value,label])=>[value,label]),current:enabled.has(current)?current:''});
-    if(select.dataset.ppIssuerSignature===signature)return;
-    select.dataset.ppIssuerSignature=signature;
-    select.innerHTML=`<option value="">Automático (banco do cliente ou único ativo)</option>${active.map(([value,label])=>`<option value="${esc(value)}">${esc(label)}</option>`).join('')}`;
-    select.disabled=!active.length;
-    select.value=enabled.has(current)?current:'';
-    select.setAttribute('aria-label','Emissor padrão dos boletos');
   }
 
   function clientEditor(){
@@ -264,7 +240,6 @@
     if(running)return;running=true;
     try{
       const banks=await banksState(),active=readyBanks(banks),bills=clientBillsModal(),finance=financeInvoiceModal(),kind=visibleBillingKind();
-      patchDefaultIssuer(banks,active);
       await patchClientEditor(clientEditor(),banks,active);
       await patchBillsModal(bills,banks,active);
       await patchBillsModal(finance,banks,active);

@@ -87,3 +87,6 @@
   .sidebar>.user-card small{margin-top:2px!important}
   .sidebar>.user-card~button,.sidebar>button[aria-label*="Notifica"],.sidebar>button[title*="Notifica"]{order:2!important;margin-top:auto!important;margin-bottom:4px!important}
 }
+
+/* Configurações: remove o bloco antigo Rede & MikroTik imediatamente antes do backup. */
+.settings form>.settings-section:has(+ .backup-box){display:none!important}

@@ -105,24 +105,27 @@
     const localState=parse(raw);
     if(!localState||typeof localState!=='object')throw new Error('O estado do Provedor Plus está inválido e não pode ser sincronizado.');
     const baseState=parse(lastSyncedRaw)||{};
-    let state=localState,lastResult=null;
-    for(let attempt=0;attempt<3;attempt++){
+    let state=localState;
+    for(let attempt=0;attempt<6;attempt++){
       const remote=await cloud('state.get'),remoteState=remote?.state&&typeof remote.state==='object'?remote.state:{};
       state=merge3(baseState,localState,remoteState);
       let result;
       try{result=await cloud('state.save',{state,baseState,baseUpdatedAt:remote?.updated_at||null})}
-      catch(error){if(Number(error?.statusCode)===409||/estado foi atualizado em outro acesso/i.test(String(error?.message||error)))continue;throw error}
-      lastResult=result;
-      const savedState=result?.state&&typeof result.state==='object'?result.state:state,savedAt=result?.updated_at||null;
-      const confirm=await cloud('state.get'),confirmedState=confirm?.state&&typeof confirm.state==='object'?confirm.state:savedState,confirmedAt=confirm?.updated_at||savedAt;
-      if(!savedAt||!confirmedAt||String(savedAt)===String(confirmedAt)){
-        const savedRaw=JSON.stringify(confirmedState);
-        if(savedRaw!==raw){nativeSet.call(window.localStorage,KEY,savedRaw);latestRaw=savedRaw}
-        lastSyncedRaw=savedRaw;lastSyncedAt=confirmedAt||savedAt||null;
-        return {...(result||{}),state:confirmedState,updated_at:lastSyncedAt};
+      catch(error){
+        const conflict=Number(error?.statusCode)===409||/estado foi atualizado em outro acesso/i.test(String(error?.message||error));
+        if(!conflict)throw error;
+        await new Promise(resolve=>setTimeout(resolve,120+attempt*90+Math.floor(Math.random()*120)));
+        continue;
       }
+      const savedState=result?.state&&typeof result.state==='object'?result.state:state,savedAt=result?.updated_at||remote?.updated_at||null;
+      const savedRaw=JSON.stringify(savedState);
+      if(savedRaw!==raw){nativeSet.call(window.localStorage,KEY,savedRaw);latestRaw=savedRaw}
+      lastSyncedRaw=savedRaw;lastSyncedAt=savedAt;
+      return {...(result||{}),state:savedState,updated_at:lastSyncedAt};
     }
-    throw new Error(lastResult?.error||'O estado mudou simultaneamente em outro acesso. A sincronização será tentada novamente.');
+    const conflict=new Error('O estado mudou simultaneamente em outro acesso. A sincronização será tentada novamente.');
+    conflict.statusCode=409;
+    throw conflict;
   }
 
   async function flush(){

@@ -123,27 +123,6 @@
   const app=await gunzipB64(appB64),appUrl=URL.createObjectURL(new Blob([app],{type:'text/javascript'}));
   try{await import(appUrl)}finally{setTimeout(()=>URL.revokeObjectURL(appUrl),1500)}
 
-  const ensureMercadoPagoIntegrationRoot=()=>{
-    const normalize=value=>String(value??'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
-    const visible=node=>Boolean(node&&!node.hidden&&(node.offsetParent!==null||node.getClientRects?.().length));
-    const candidates=[];
-    for(const input of document.querySelectorAll('input')){
-      if(!visible(input))continue;
-      let node=input.parentElement;
-      for(let depth=0;node&&depth<8;depth++,node=node.parentElement){
-        const text=normalize(node.textContent);
-        if(text.includes('mercado pago')&&text.includes('public key')&&text.includes('access token')&&text.includes('salvar e testar')&&!text.includes('efi bank')){candidates.push(node);break}
-      }
-    }
-    candidates.sort((a,b)=>String(a.textContent||'').length-String(b.textContent||'').length);
-    const integration=candidates[0];
-    if(integration&&!integration.classList.contains('integration-card'))integration.classList.add('integration-card');
-  };
-  let mpIntegrationQueued=false;
-  const queueMercadoPagoIntegrationRoot=()=>{if(mpIntegrationQueued)return;mpIntegrationQueued=true;requestAnimationFrame(()=>{mpIntegrationQueued=false;ensureMercadoPagoIntegrationRoot()})};
-  queueMercadoPagoIntegrationRoot();
-  const mpIntegrationObserver=new MutationObserver(queueMercadoPagoIntegrationRoot);mpIntegrationObserver.observe(document.documentElement,{childList:true,subtree:true});
-
   const installDefaultBankSelectorPersistence=()=>{
     const normalize=value=>String(value??'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
     const providerFromOption=option=>{

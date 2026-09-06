@@ -153,7 +153,7 @@ function normalizedStatus(order){const payment=mpTransaction(order),raw=text(pay
 function paymentResponse(order,amount,extra={}){const payment=mpTransaction(order),method=payment?.payment_method||{},status=normalizedStatus(order);return {orderId:text(order?.id),paymentId:text(order?.id),transactionId:text(payment?.id),status,rawStatus:text(payment?.status||order?.status),statusDetail:text(payment?.status_detail||order?.status_detail),amount:Number(amount)||number(payment?.amount)||number(order?.total_amount)||0,qrCode:text(method?.qr_code),qrCodeBase64:text(method?.qr_code_base64),paymentUrl:text(method?.ticket_url),provider:'mercadoPago',providerLabel:'Mercado Pago',...extra}}
 
 async function reservePix(req,clientId,invoiceId){let reservation=null;await mutateState(req,state=>{const invoice=rawInvoice(state,clientId,invoiceId);if(!invoiceOpen(invoice))throw Object.assign(new Error('Esta fatura já está paga ou não está disponível.'),{statusCode:409});const calc=discountCalculation(state,clientId,invoice),existingActive=reservationActive(invoice),discount=existingActive?Math.min(cents(invoice.cashback_discount_reserved_cents),calc.originalCents-1):calc.discountCents,amountCents=Math.max(1,calc.originalCents-discount),at=new Date().toISOString();invoice.cashback_discount_reserved_cents=discount;invoice.cashback_discount_reserved_at=at;invoice.cashback_discount_status=discount>0?'reserved':'none';invoice.cashback_original_cents=calc.originalCents;invoice.cashback_pix_amount_cents=amountCents;reservation={discountCents:discount,amountCents,originalCents:calc.originalCents,limitPercent:calc.limitPercent};return state});return reservation}
-async function attachOrder(req,clientId,invoiceId,order,result){await mutateState(req,state=>{const invoice=rawInvoice(state,clientId,invoiceId);invoice.payment_provider='mercadoPago';invoice.mercado_pago_order_id=text(order?.id);invoice.mercado_pago_payment_id=text(mpTransaction(order)?.id);invoice.mercado_pago_status=text(mpTransaction(order)?.status||order?.status);invoice.mercado_pago_status_detail=text(mpTransaction(order)?.status_detail||order?.status_detail);invoice.payment_pending=result.status!=='approved';invoice.updated_at=new Date().toISOString();return state})}
+async function attachOrder(req,clientId,invoiceId,order,result){await mutateState(req,state=>{const invoice=rawInvoice(state,clientId,invoiceId);invoice.payment_provider='mercadoPago';invoice.mercado_pago_order_id=text(order?.id);invoice.mercado_pago_payment_id=text(mpTransaction(order)?.id);invoice.mercado_pago_status=text(mpTransaction(order)?.status||order?.status);invoice.mercado_pago_status_detail=text(mpTransaction(order)?.status_detail||order?.status_detail);invoice.payment_pending=result.status==='pending';invoice.updated_at=new Date().toISOString();return state})}
 async function releaseReservation(req,clientId,invoiceId,reason='released'){await mutateState(req,state=>{const invoice=rawInvoice(state,clientId,invoiceId);if(text(invoice.cashback_discount_status)==='reserved'){invoice.cashback_discount_status=reason;invoice.cashback_discount_reserved_cents=0;invoice.cashback_discount_released_at=new Date().toISOString()}return state}).catch(()=>{})}
 function hasTx(state,clientId,invoiceId,source){return (Array.isArray(state.cashback_transactions)?state.cashback_transactions:[]).some(t=>Number(t?.client_id)===Number(clientId)&&String(t?.invoice_id)===String(invoiceId)&&text(t?.source)===source)}
 function pushTx(state,tx){state.cashback_transactions=Array.isArray(state.cashback_transactions)?state.cashback_transactions:[];state.cashback_transactions.push(tx)}
@@ -166,10 +166,54 @@ function cardPaymentData(data,client,amount){const form=data?.paymentData&&typeo
 async function paymentCard(req,data){const {client,state}=await sessionContext(req,data),invoice=rawInvoice(state,client.id,data?.invoiceId),cfg=await mercadoPagoContext(req,state);if(!(cfg.enabled&&cfg.publicKey))throw Object.assign(new Error('Mercado Pago não está habilitado para cartão.'),{statusCode:409});if(!invoiceOpen(invoice))throw Object.assign(new Error('Esta fatura já está paga ou não está disponível.'),{statusCode:409});await releaseReservation(req,client.id,invoice.id,'released_card');const amount=invoiceAmount(invoice),card=cardPaymentData(data,client,amount),body={type:'online',processing_mode:'automatic',total_amount:card.amountText,external_reference:`PP-INV-${String(invoice.id)}`,payer:card.payer,transactions:{payments:[{amount:card.amountText,payment_method:{id:card.methodId,type:'credit_card',token:card.token,installments:card.installments}}]}},key=idempotencyKey(['provedor-plus','card',invoice.id,card.amountText,card.token]),order=await mpRequest(cfg.accessToken,'/v1/orders',{method:'POST',body,idempotencyKey:key}),result=paymentResponse(order,amount);await attachOrder(req,client.id,invoice.id,order,result);if(result.status==='approved'){await markInvoicePaid(req,client.id,invoice.id,{method:'card',order,amount});result.message='Pagamento aprovado e fatura baixada no Provedor Plus.'}else if(result.status==='rejected')result.message='Pagamento não aprovado pelo Mercado Pago.';return result}
 async function paymentStatus(req,data){const {client,state}=await sessionContext(req,data),invoice=rawInvoice(state,client.id,data?.invoiceId),cfg=await mercadoPagoContext(req,state),orderId=text(data?.paymentId||data?.orderId||invoice?.mercado_pago_order_id);if(!orderId){return {status:text(invoice.status).toLowerCase()==='pago'?'approved':'pending',state:text(invoice.status),portal:portalData(client,state),provider:text(invoice.bank_provider||invoice.payment_provider)}}if(!cfg.enabled)throw Object.assign(new Error('Mercado Pago não está habilitado.'),{statusCode:409});const order=await mpRequest(cfg.accessToken,`/v1/orders/${encodeURIComponent(orderId)}`),amount=number(invoice?.payment_amount_cents)!==null?Number(invoice.payment_amount_cents)/100:(number(invoice?.cashback_pix_amount_cents)!==null?Number(invoice.cashback_pix_amount_cents)/100:invoiceAmount(invoice)),result=paymentResponse(order,amount);if(result.status==='approved'&&invoiceOpen(invoice)){const payment=mpTransaction(order),type=text(payment?.payment_method?.type).toLowerCase(),method=type==='bank_transfer'?'pix':'card';await markInvoicePaid(req,client.id,invoice.id,{method,order,amount});const latest=await stateGet(req);result.state='Pago';result.message='Pagamento confirmado. Fatura baixada no Provedor Plus.';result.portal=portalData(client,latest)}else if(result.status==='rejected'){await releaseReservation(req,client.id,invoice.id,'released_rejected');const latest=await stateGet(req);result.portal=portalData(client,latest)}else result.portal=portalData(client,state);return result}
 
+function queryValue(req,key){
+  const direct=req?.query?.[key];if(Array.isArray(direct))return text(direct[0]);if(direct!==undefined&&direct!==null)return text(direct);
+  try{return text(new URL(req?.url||'','https://provedor-plus.local').searchParams.get(key))}catch{return''}
+}
+function webhookDataId(req){
+  const direct=queryValue(req,'data.id')||text(req?.body?.data?.id||req?.body?.id);
+  return direct.toLowerCase();
+}
+function isMercadoPagoWebhook(req){return queryValue(req,'mp_webhook')==='1'}
+function parseSignature(value){
+  const out={};for(const part of text(value).split(',')){const index=part.indexOf('=');if(index>0)out[text(part.slice(0,index))]=text(part.slice(index+1))}return out;
+}
+function validateMercadoPagoWebhook(req,secret){
+  const signature=parseSignature(req?.headers?.['x-signature']),ts=text(signature.ts),received=text(signature.v1).toLowerCase(),id=webhookDataId(req),requestId=text(req?.headers?.['x-request-id']);
+  if(!ts||!received||!id)return false;
+  let manifest=`id:${id};`;if(requestId)manifest+=`request-id:${requestId};`;manifest+=`ts:${ts};`;
+  const expected=crypto.createHmac('sha256',text(secret)).update(manifest).digest('hex'),a=Buffer.from(received),b=Buffer.from(expected);
+  return a.length===b.length&&crypto.timingSafeEqual(a,b);
+}
+function findInvoiceForOrder(state,order,orderId){
+  const invoices=Array.isArray(state?.invoices)?state.invoices:[],external=text(order?.external_reference),match=external.match(/^PP-INV-(.+)$/i),invoiceId=match?.[1]||'';
+  return invoices.find(invoice=>String(invoice?.mercado_pago_order_id||'')===String(orderId))||invoices.find(invoice=>invoiceId&&String(invoice?.id)===String(invoiceId))||null;
+}
+async function handleMercadoPagoWebhook(req,res){
+  const secret=await bankSecrets.get(req,'mercadoPago'),accessToken=text(secret?.accessToken),webhookSecret=text(secret?.webhookSecret);
+  if(!accessToken||!webhookSecret)return res.status(503).json({ok:false,error:'Webhook Mercado Pago ainda não configurado no Provedor Plus.'});
+  if(!validateMercadoPagoWebhook(req,webhookSecret))return res.status(401).json({ok:false,error:'Assinatura do Webhook Mercado Pago inválida.'});
+  const orderId=webhookDataId(req);let order;
+  try{order=await mpRequest(accessToken,`/v1/orders/${encodeURIComponent(orderId)}`)}catch(error){
+    if(Number(error?.providerStatus)===404)return res.status(200).json({ok:true,data:{received:true,reconciled:false,simulation:true}});
+    throw error;
+  }
+  const state=await stateGet(req),invoice=findInvoiceForOrder(state,order,orderId);
+  if(!invoice)return res.status(200).json({ok:true,data:{received:true,reconciled:false}});
+  const result=paymentResponse(order,number(mpTransaction(order)?.amount)??number(order?.total_amount)??invoiceAmount(invoice));
+  await attachOrder(req,invoice.client_id,invoice.id,order,result);
+  if(result.status==='approved'&&invoiceOpen(invoice)){
+    const type=text(mpTransaction(order)?.payment_method?.type).toLowerCase(),method=type==='bank_transfer'?'pix':'card';
+    await markInvoicePaid(req,invoice.client_id,invoice.id,{method,order,amount:result.amount});
+  }else if(result.status==='rejected')await releaseReservation(req,invoice.client_id,invoice.id,'released_rejected');
+  return res.status(200).json({ok:true,data:{received:true,reconciled:true,status:result.status}});
+}
+
 module.exports=async function handler(req,res){
   cors(req,res);res.setHeader('Cache-Control','no-store, max-age=0');if(req.method==='OPTIONS')return res.status(204).end();if(req.method!=='POST')return res.status(405).json({ok:false,error:'Método não permitido.'});
   const origin=text(req.headers.origin);if(origin&&!ALLOWED_ORIGINS.has(origin))return res.status(403).json({ok:false,error:'Origem não autorizada.'});
   try{
+    if(isMercadoPagoWebhook(req))return await handleMercadoPagoWebhook(req,res);
     const action=text(req.body?.action),data=req.body?.data||{};let result;
     if(action==='login')result=await login(req,data);else if(action==='refresh')result=await refresh(req,data);else if(action==='connection-test')result=await connectionTest(req,data);else if(action==='negotiation-options')result=await negotiationOptions(req,data);else if(action==='negotiate')result=await negotiate(req,data);else if(action==='payment-config')result=await paymentConfig(req,data);else if(action==='payment-prepare')result=await paymentPrepare(req,data);else if(action==='payment-pix')result=await paymentPix(req,data);else if(action==='payment-card')result=await paymentCard(req,data);else if(action==='payment-status')result=await paymentStatus(req,data);else throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});
     return res.status(200).json({ok:true,data:result});

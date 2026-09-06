@@ -30,7 +30,7 @@
   if(!window.ProvedorPlusAuth?.ensure)throw new Error('A autenticação do Provedor Plus não foi carregada.');
   const auth=await window.ProvedorPlusAuth.ensure();
 
-  await loadScript('/cloud-state-store.js?v=1017-cloud17-audit1');
+  await loadScript('/cloud-state-store.js?v=1017-cloud17-audit2');
   if(!window.ProvedorPlusCloudState?.prepare)throw new Error('A sincronização com o banco da nuvem não foi carregada.');
   await window.ProvedorPlusCloudState.prepare();
   const currentState=window.ProvedorPlusCloudState.getState()||{};

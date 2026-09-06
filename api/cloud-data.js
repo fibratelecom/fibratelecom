@@ -4,8 +4,8 @@ const bankSecrets=require('../lib/bank-secret-store');
 module.exports=async function(req,res){
   try{
     const action=String(req.body?.action||'').trim();
-    if(action.startsWith('banks.mercadoPago.secret.')){
-      if(action==='banks.mercadoPago.secret.status'){
+    if(action.startsWith('banks.mercadoPago.secret.')||action.startsWith('banks.mercadoPago.webhook.')){
+      if(action==='banks.mercadoPago.secret.status'||action==='banks.mercadoPago.webhook.status'){
         await requireAuth(req);
         const data=await bankSecrets.status(req,'mercadoPago');
         return res.status(200).json({ok:true,data});
@@ -17,6 +17,14 @@ module.exports=async function(req,res){
       }
       if(action==='banks.mercadoPago.secret.delete'){
         const data=await bankSecrets.remove(req,'mercadoPago');
+        return res.status(200).json({ok:true,data});
+      }
+      if(action==='banks.mercadoPago.webhook.secret.save'){
+        const data=await bankSecrets.saveWebhook(req,'mercadoPago',req.body?.data||{});
+        return res.status(200).json({ok:true,data});
+      }
+      if(action==='banks.mercadoPago.webhook.secret.delete'){
+        const data=await bankSecrets.removeWebhook(req,'mercadoPago');
         return res.status(200).json({ok:true,data});
       }
       return res.status(400).json({ok:false,error:'Ação de credencial bancária não reconhecida.'});

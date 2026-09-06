@@ -18,7 +18,7 @@
   let activeSyncRaw=null;
 
   const parse=raw=>{try{return raw?JSON.parse(raw):null}catch{return null}};
-  const clone=value=>value==null?value:JSON.parse(JSON.stringify(value));
+  const clone=value=>value==null?value:JSON.parse(JSON.stringify(v=>v));
   const isObject=value=>Boolean(value)&&typeof value==='object'&&!Array.isArray(value);
   const same=(a,b)=>{try{return JSON.stringify(a)===JSON.stringify(b)}catch{return a===b}};
   const has=(obj,key)=>Object.prototype.hasOwnProperty.call(obj||{},key);
@@ -105,27 +105,24 @@
     const localState=parse(raw);
     if(!localState||typeof localState!=='object')throw new Error('O estado do Provedor Plus está inválido e não pode ser sincronizado.');
     const baseState=parse(lastSyncedRaw)||{};
-    let state=localState;
-    for(let attempt=0;attempt<6;attempt++){
+    let state=localState,lastResult=null;
+    for(let attempt=0;attempt<3;attempt++){
       const remote=await cloud('state.get'),remoteState=remote?.state&&typeof remote.state==='object'?remote.state:{};
       state=merge3(baseState,localState,remoteState);
       let result;
       try{result=await cloud('state.save',{state,baseState,baseUpdatedAt:remote?.updated_at||null})}
-      catch(error){
-        const conflict=Number(error?.statusCode)===409||/estado foi atualizado em outro acesso/i.test(String(error?.message||error));
-        if(!conflict)throw error;
-        await new Promise(resolve=>setTimeout(resolve,120+attempt*90+Math.floor(Math.random()*120)));
-        continue;
+      catch(error){if(Number(error?.statusCode)===409||/estado foi atualizado em outro acesso/i.test(String(error?.message||error)))continue;throw error}
+      lastResult=result;
+      const savedState=result?.state&&typeof result.state==='object'?result.state:state,savedAt=result?.updated_at||null;
+      const confirm=await cloud('state.get'),confirmedState=confirm?.state&&typeof confirm.state==='object'?confirm.state:savedState,confirmedAt=confirm?.updated_at||savedAt;
+      if(!savedAt||!confirmedAt||String(savedAt)===String(confirmedAt)){
+        const savedRaw=JSON.stringify(confirmedState);
+        if(savedRaw!==raw){nativeSet.call(window.localStorage,KEY,savedRaw);latestRaw=savedRaw}
+        lastSyncedRaw=savedRaw;lastSyncedAt=confirmedAt||savedAt||null;
+        return {...(result||{}),state:confirmedState,updated_at:lastSyncedAt};
       }
-      const savedState=result?.state&&typeof result.state==='object'?result.state:state,savedAt=result?.updated_at||remote?.updated_at||null;
-      const savedRaw=JSON.stringify(savedState);
-      if(savedRaw!==raw){nativeSet.call(window.localStorage,KEY,savedRaw);latestRaw=savedRaw}
-      lastSyncedRaw=savedRaw;lastSyncedAt=savedAt;
-      return {...(result||{}),state:savedState,updated_at:lastSyncedAt};
     }
-    const conflict=new Error('O estado mudou simultaneamente em outro acesso. A sincronização será tentada novamente.');
-    conflict.statusCode=409;
-    throw conflict;
+    throw new Error(lastResult?.error||'O estado mudou simultaneamente em outro acesso. A sincronização será tentada novamente.');
   }
 
   async function flush(){
@@ -201,7 +198,7 @@
       if(generation!==prepareGeneration)return {source:'stale-ignored',updatedAt:null};
       const raw=JSON.stringify(saved?.state||state);
       nativeSet.call(window.localStorage,KEY,raw);latestRaw=raw;lastSyncedRaw=raw;lastSyncedAt=saved?.updated_at||null;
-      return {source:'local-migrated',updatedAt:saved?.updated_at||null};
+      return {source:'local-migrated',updatedAt:null};
     }
   }
   return {source:'empty',updatedAt:null};

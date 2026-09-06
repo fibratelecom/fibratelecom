@@ -1,36 +1,46 @@
-# Provedor Plus — regras obrigatórias de manutenção
+# Provedor Plus — arquitetura limpa e regras obrigatórias
 
-Estas regras existem para impedir duplicidades, remendos paralelos e alterações sem efeito no sistema real.
+Este repositório contém o novo painel administrativo do Provedor Plus e os backends que precisam permanecer compatíveis com a Área do Cliente.
 
 ## Antes de alterar qualquer código
 
-1. Rastrear o caminho real de carregamento a partir de `index.html` e `bootstrap.js`.
-2. Confirmar qual arquivo é realmente executado no `main` antes de editar.
-3. Procurar implementações existentes da mesma função antes de criar qualquer coisa nova.
-4. Alterar somente o escopo solicitado pelo usuário e preservar tudo que já funciona.
+1. Ler este `AGENTS.md` integralmente.
+2. Rastrear o caminho real de carregamento a partir de `index.html` → `app.js` → módulos em `src/`.
+3. Procurar uma implementação existente antes de criar qualquer arquivo, função, rota ou serviço novo.
+4. Alterar somente o escopo solicitado e preservar tudo que já funciona.
+5. Nunca alterar o Neon de forma destrutiva sem autorização explícita e validação dos dados existentes.
+6. Preservar o contrato de `api/customer-portal.js`, consumido por `cliente-fibramais`.
 
 ## Proibições
 
-- Não criar arquivos paralelos com sufixos como `-v2`, `-v3`, `-fix`, `-novo`, `-final`, `-old`, `-backup` ou equivalentes sem autorização explícita do usuário.
-- Não recriar `cloud-client-store.js` nem `cloud-router-store.js`. Os arquivos ativos atuais são `cloud-client-store-v2.js` e `cloud-router-store-v2.js` até uma migração deliberada.
-- Não adicionar outro `MutationObserver`, wrapper ou patch de DOM para corrigir uma tela quando a lógica pode ser corrigida no módulo autoritativo que já existe.
-- Não duplicar persistência de banco, pagamentos, clientes, roteadores, estado ou cashback em módulos diferentes.
-- Não alterar arquivos `packed/*` nem apagar esses arquivos sem primeiro provar que existe uma fonte substituta funcional e aprovada.
-- Não apagar arquivos apenas por parecerem antigos. Confirmar ausência de referências no caminho real de execução.
+- Não criar arquivos paralelos com sufixos `-v2`, `-v3`, `-fix`, `-novo`, `-final`, `-old`, `-backup` ou equivalentes.
+- Não recriar diretórios `packed/` ou `parts/`.
+- Não usar wrappers, patches de DOM ou `MutationObserver` para corrigir a interface.
+- Não duplicar persistência, clientes, mensalidades, pagamentos, roteadores, cashback, chamados ou estado.
+- Não criar um segundo endpoint para uma função que já possui endpoint autoritativo.
+- Não alterar o repositório `fibratelecom/cliente-fibramais` a partir deste projeto.
+- Não apagar nem migrar dados do Neon durante alterações de interface.
 
-## Arquivos autoritativos atuais
+## Arquivos autoritativos
 
-- Entrada do painel: `index.html` → `bootstrap.js`.
-- Estado global: `cloud-state-store.js` + `api/cloud-state.js`.
-- Clientes em nuvem: `cloud-client-store-v2.js`.
-- Roteadores em nuvem: `cloud-router-store-v2.js`.
-- Adaptação de integrações no navegador: `cloud-adapter.js`.
-- Backend da Área do Cliente e pagamentos: `api/customer-portal.js`.
-- Segredos bancários: `lib/bank-secret-store.js`.
-- Roteamento de banco nas cobranças: `billing-bank-selector.js` e `billing-automation.js`; não criar um terceiro roteador paralelo.
+### Frontend administrativo
+- Entrada: `index.html`.
+- Inicialização: `app.js`.
+- Comunicação HTTP: `src/api.js`.
+- Regras de leitura/apresentação dos dados: `src/model.js`.
+- Interface e navegação: `src/ui.js`.
+- Estilos: `styles.css`.
 
-## Regra para novas correções
+### Backend preservado
+- Autenticação e funcionários: `api/auth.js` + `lib/cloud-auth.js`.
+- Estado do painel no Neon: `api/cloud-state.js`.
+- Operações de dados: `api/cloud-data.js` + `lib/cloud-data-handler.js`.
+- Área do Cliente e pagamentos: `api/customer-portal.js`.
+- Segredos Mercado Pago: `lib/bank-secret-store.js`.
+- MikroTik: `api/mikrotik-proxy.js` + `lib/mikrotik-proxy.js`.
 
-Se uma função já existir, corrigir o arquivo autoritativo existente. Criar arquivo novo somente quando for uma função realmente nova e não houver um módulo adequado; nesse caso, explicar antes por que o novo arquivo é necessário.
+## Regra de evolução
 
-Depois de qualquer mudança, verificar que não foi criada uma segunda implementação da mesma função e confirmar o build/deploy correspondente. Para alterações que envolvam painel e cliente, confirmar separadamente `Workers Builds: painel` e `Workers Builds: cliente`.
+Cada funcionalidade deve ter uma única implementação definitiva. Se uma função já existir, corrija o arquivo autoritativo. Crie arquivo novo somente quando a responsabilidade for realmente nova e não houver módulo adequado.
+
+Depois de qualquer alteração, confirmar que não foi criada duplicidade e verificar o build/deploy correspondente. Para mudanças que afetem contratos usados pela Área do Cliente, confirmar separadamente `Workers Builds: painel` e `Workers Builds: cliente`.

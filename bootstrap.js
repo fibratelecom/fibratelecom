@@ -30,7 +30,7 @@
   if(!window.ProvedorPlusAuth?.ensure)throw new Error('A autenticação do Provedor Plus não foi carregada.');
   const auth=await window.ProvedorPlusAuth.ensure();
 
-  await loadScript('/cloud-state-store.js?v=1017-cloud17-audit2');
+  await loadScript('/cloud-state-store.js?v=1017-cloud17-audit3');
   if(!window.ProvedorPlusCloudState?.prepare)throw new Error('A sincronização com o banco da nuvem não foi carregada.');
   await window.ProvedorPlusCloudState.prepare();
   const currentState=window.ProvedorPlusCloudState.getState()||{};
@@ -51,6 +51,38 @@
   await loadScript('/cloud-adapter.js?v=1017-cloud17-mpserver1');
   if(typeof window.ProvedorPlusInstallCloudAdapter!=='function')throw new Error('A ponte HTTPS do MikroTik não foi carregada.');
   await window.ProvedorPlusInstallCloudAdapter();
+
+  const installPaymentRouting=()=>{
+    const invoices=window.provedor?.invoices;
+    if(!invoices||invoices.__ppPaymentRoutingInstalled)return;
+    const adapt=data=>{
+      const next={...(data||{})},provider=String(next.bank_provider||next.bankProvider||next.payment_provider_preference||'').trim().toLowerCase();
+      const state=window.ProvedorPlusCloudState?.getState?.()||{},banks=state?.banks||{},defaultProvider=String(banks.defaultProvider||'').trim();
+      const automatic=['monthly_auto','first_prorated'].includes(String(next.billing_origin||''));
+      if(provider==='efi'&&automatic&&defaultProvider==='mercadoPago'){
+        throw new Error('Mercado Pago é o emissor principal. Conecte o Mercado Pago antes da geração automática para não emitir pela Efí por fallback.');
+      }
+      if(provider==='mercadopago'){
+        next.payment_provider='mercadoPago';
+        next.payment_provider_preference='mercadoPago';
+        next.document_type='Fatura';
+        delete next.bank_provider;delete next.bankProvider;
+        delete next.bank_charge_id;delete next.bank_order_id;delete next.bank_payment_id;
+      }
+      return next;
+    };
+    if(typeof invoices.save==='function'){
+      const original=invoices.save.bind(invoices);
+      invoices.save=async data=>original(adapt(data));
+    }
+    if(typeof invoices.generateInstallments==='function'){
+      const original=invoices.generateInstallments.bind(invoices);
+      invoices.generateInstallments=async data=>original(adapt(data));
+    }
+    Object.defineProperty(invoices,'__ppPaymentRoutingInstalled',{value:true,enumerable:false});
+  };
+  installPaymentRouting();
+
   await loadScript('/cloud-client-status-fix.js?v=1017-cloud17-audit2');
   if(typeof window.provedor?.invoices?.sync==='function')await window.provedor.invoices.sync().catch(error=>console.error('Provedor Plus: falha na conciliação inicial de cobranças.',error));
 

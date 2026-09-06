@@ -35,7 +35,7 @@ async function saveState(sql,state){
 
 function bankB64Bytes(value){
   const binary=atob(text(value)),out=new Uint8Array(binary.length);
-  for(let i=0;i<bin.length;i++)out[i]=binary.charCodeAt(i);
+  for(let i=0;i<binary.length;i++)out[i]=binary.charCodeAt(i);
   return out;
 }
 

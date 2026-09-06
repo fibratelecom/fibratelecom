@@ -48,9 +48,25 @@
 
   await loadScript('/cloud-router-store-v2.js?v=1017-cloud17');
   await loadScript('/cloud-client-store-v2.js?v=1017-cloud17-audit2');
-  await loadScript('/cloud-adapter.js?v=1017-cloud17-mpserver3-webhook1');
+  await loadScript('/cloud-adapter.js?v=1017-cloud17-mpserver2-webhook2');
   if(typeof window.ProvedorPlusInstallCloudAdapter!=='function')throw new Error('A ponte HTTPS do MikroTik não foi carregada.');
   await window.ProvedorPlusInstallCloudAdapter();
+
+  const installBankCloudPersistence=()=>{
+    const banks=window.provedor?.banks;
+    if(!banks||banks.__ppBankCloudPersistenceInstalled)return;
+    for(const name of ['saveMercadoPago','testMercadoPago','deleteMercadoPago','removeMercadoPago','clearMercadoPago']){
+      if(typeof banks[name]!=='function')continue;
+      const original=banks[name].bind(banks);
+      banks[name]=async(...args)=>{
+        const result=await original(...args);
+        await window.ProvedorPlusCloudState?.forceSync?.();
+        return result;
+      };
+    }
+    Object.defineProperty(banks,'__ppBankCloudPersistenceInstalled',{value:true,enumerable:false});
+  };
+  installBankCloudPersistence();
 
   const installPaymentRouting=()=>{
     const invoices=window.provedor?.invoices;
@@ -106,6 +122,62 @@
   const appB64=await read(Array.from({length:33},(_,i)=>`/packed/appgz-${String(i+1).padStart(2,'0')}.txt`));
   const app=await gunzipB64(appB64),appUrl=URL.createObjectURL(new Blob([app],{type:'text/javascript'}));
   try{await import(appUrl)}finally{setTimeout(()=>URL.revokeObjectURL(appUrl),1500)}
+
+  const installDefaultBankSelectorPersistence=()=>{
+    const normalize=value=>String(value??'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
+    const providerFromOption=option=>{
+      const label=normalize(`${option?.value||''} ${option?.textContent||''}`);
+      if(label.includes('mercado pago')||label.includes('mercadopago'))return 'mercadoPago';
+      if(label.includes('efi'))return 'efi';
+      if(label.includes('automatic'))return '';
+      return String(option?.value||'').trim();
+    };
+    const optionForProvider=(select,provider)=>[...select.options].find(option=>providerFromOption(option)===String(provider||''))||null;
+    const findSelector=()=>[...document.querySelectorAll('select')].find(select=>{
+      let node=select.parentElement;
+      for(let depth=0;node&&depth<3;depth++,node=node.parentElement){
+        const label=normalize(node.textContent);
+        if(label.includes('banco padrao')&&label.length<180)return true;
+      }
+      return false;
+    })||null;
+    const persist=async provider=>{
+      const current=window.ProvedorPlusCloudState?.getState?.()||{};
+      const previous=String(current?.banks?.defaultProvider||'');
+      const next=String(provider||'');
+      if(previous===next)return;
+      const state=JSON.parse(JSON.stringify(current));
+      state.banks={...(state.banks||{}),defaultProvider:next};
+      try{await window.ProvedorPlusCloudState?.replaceAndSync?.(state)}catch(error){console.error('Provedor Plus: não foi possível salvar o banco padrão.',error)}
+    };
+    const sync=select=>{
+      if(!select)return;
+      const desired=String(window.ProvedorPlusCloudState?.getState?.()?.banks?.defaultProvider||'');
+      const option=optionForProvider(select,desired);
+      if(!option||select.value===option.value)return;
+      select.dataset.ppBankSyncing='1';
+      select.value=option.value;
+      select.dispatchEvent(new Event('change',{bubbles:true}));
+      setTimeout(()=>{delete select.dataset.ppBankSyncing;persist(desired)},0);
+    };
+    const mount=()=>{
+      const select=findSelector();if(!select)return;
+      if(select.dataset.ppBankPersistence!=='1'){
+        select.dataset.ppBankPersistence='1';
+        select.addEventListener('change',()=>{
+          if(select.dataset.ppBankSyncing==='1')return;
+          const provider=providerFromOption(select.options[select.selectedIndex]);
+          setTimeout(()=>persist(provider),0);
+        });
+      }
+      sync(select);
+    };
+    let queued=false;
+    const queue=()=>{if(queued)return;queued=true;requestAnimationFrame(()=>{queued=false;mount()})};
+    queue();
+    const observer=new MutationObserver(queue);observer.observe(document.documentElement,{childList:true,subtree:true});
+  };
+  installDefaultBankSelectorPersistence();
 
   await loadScript('/ui-runtime-fixes.js?v=1017-fix13-client-actions');
   await loadScriptStable('/dashboard-enhancements.js?v=1017-dashboard1',{dropCharacterData:true,ignoreWithin:['.pp-dashboard-v2','.pp-pppoe-modal-layer']}).catch(error=>console.error('Provedor Plus: o Dashboard gerencial não foi carregado.',error));

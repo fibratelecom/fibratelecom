@@ -92,12 +92,13 @@
   function normalizeRouter(r,password=''){let port=Number(r?.port)||443;if(port===8728||port===8729||port===80)port=443;return {id:Number(r?.id)||0,name:String(r?.name||'MikroTik'),connection_method:'rest',host:cleanHost(r?.host),port,username:String(r?.username||'').trim(),password:String(password||''),allow_self_signed:bool(r?.allow_self_signed,false)}}
 
   function normalizeText(value){return String(value||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')}
+  function visibleNode(node){return Boolean(node&&!node.hidden&&(node.offsetParent!==null||node.getClientRects?.().length))}
   function mercadoPagoSettingsRoot(){
     const roots=[...document.querySelectorAll('form,section,article,.card,.panel,.modal-body,.integration-card,.settings-card')];
-    const candidates=roots.filter(root=>{const t=normalizeText(root.textContent);return t.includes('mercado pago')&&(t.includes('access token')||t.includes('public key'))&&root.querySelector('input')});
+    const candidates=roots.filter(root=>{if(!visibleNode(root))return false;const t=normalizeText(root.textContent);return t.includes('mercado pago')&&(t.includes('access token')||t.includes('public key'))&&root.querySelector('input')});
     candidates.sort((a,b)=>String(a.textContent||'').length-String(b.textContent||'').length);
     if(candidates[0])return candidates[0];
-    const input=[...document.querySelectorAll('input')].find(el=>{const t=normalizeText(`${el.name||''} ${el.id||''} ${el.placeholder||''} ${el.getAttribute('aria-label')||''} ${el.closest('label')?.textContent||''}`);return t.includes('access token')||t.includes('public key')});
+    const input=[...document.querySelectorAll('input')].find(el=>{if(!visibleNode(el))return false;const t=normalizeText(`${el.name||''} ${el.id||''} ${el.placeholder||''} ${el.getAttribute('aria-label')||''} ${el.closest('label')?.textContent||''}`);return t.includes('access token')||t.includes('public key')});
     return input?.closest('form,section,article,.card,.panel,.modal-body,.integration-card,.settings-card')||null;
   }
   function webhookCard(){return document.getElementById('pp-mp-webhook-settings')}
@@ -111,7 +112,7 @@
     }catch(error){setWebhookMessage(error instanceof Error?error.message:String(error),true)}
   }
   function mountWebhookCard(){
-    if(webhookCard())return;
+    const existing=webhookCard();if(existing){if(!visibleNode(existing))existing.remove();else return}
     const root=mercadoPagoSettingsRoot();if(!root)return;
     const card=document.createElement('section');card.id='pp-mp-webhook-settings';card.style.cssText='margin-top:14px;padding:14px;border:1px solid #dfe8e5;border-radius:10px;background:#fbfdfc;color:#314b45;display:grid;gap:10px';
     card.innerHTML=`<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px"><div><strong style="display:block;font-size:12px">Webhook Mercado Pago — Produção</strong><small style="display:block;margin-top:3px;color:#6d7f7b;font-size:10px;line-height:1.45">Use esta URL no Mercado Pago e selecione o evento <b>Order (Mercado Pago)</b>.</small></div><span data-pp-mp-webhook-status style="padding:5px 8px;border-radius:999px;background:#fff6df;color:#8b5a16;font-size:9px;font-weight:800;white-space:nowrap">Verificando...</span></div><label style="display:grid;gap:5px"><span style="font-size:10px;font-weight:750">URL do Webhook</span><div style="display:flex;gap:6px"><input data-pp-mp-webhook-url readonly value="${MP_WEBHOOK_URL}" style="min-width:0;flex:1;height:36px;padding:0 9px;border:1px solid #cfdeda;border-radius:8px;background:#f4f7f6;color:#405853;font-size:10px"><button type="button" data-pp-mp-copy style="height:36px;padding:0 10px;border:1px solid #cfdeda;border-radius:8px;background:#fff;color:#315d54;font-size:10px;font-weight:800;cursor:pointer">Copiar</button></div></label><label style="display:grid;gap:5px"><span style="font-size:10px;font-weight:750">Chave secreta do Webhook</span><input data-pp-mp-webhook-secret type="password" autocomplete="new-password" placeholder="Cole aqui a chave secreta gerada pelo Mercado Pago" style="height:36px;padding:0 9px;border:1px solid #cfdeda;border-radius:8px;background:#fff;color:#405853;font-size:10px"></label><div style="display:flex;flex-wrap:wrap;gap:7px"><button type="button" data-pp-mp-webhook-save style="height:34px;padding:0 11px;border:0;border-radius:8px;background:#0d8b78;color:#fff;font-size:10px;font-weight:800;cursor:pointer">Salvar chave do Webhook</button><button type="button" data-pp-mp-webhook-remove style="height:34px;padding:0 11px;border:1px solid #dccfcf;border-radius:8px;background:#fff;color:#8d3e3e;font-size:10px;font-weight:750;cursor:pointer">Remover chave</button></div><small data-pp-mp-webhook-message style="min-height:13px;color:#6d7f7b;font-size:9px;line-height:1.4">A chave fica criptografada no servidor e não é exibida novamente.</small>`;
@@ -251,6 +252,6 @@
     api.vpn.remove=async()=>({removed:false,mode:'cloud-rest'});api.vpn.save=async()=>({saved:false,mode:'cloud-rest'});api.vpn.openWireGuard=async()=>({opened:false,mode:'cloud-rest'});
     Object.defineProperty(api,'__cloudAdapterInstalled',{value:true,enumerable:false});
     queueWebhookMount();
-    const observer=new MutationObserver(queueWebhookMount);observer.observe(document.documentElement,{childList:true,subtree:true});
+    const observer=new MutationObserver(queueWebhookMount);observer.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style','hidden']});
   };
 })();

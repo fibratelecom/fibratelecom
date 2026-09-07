@@ -146,8 +146,9 @@ async function clientSaveSafe(data) {
     const previous = await cloudClientById(id);
     if (previous && hasPppoeAccess(previous)) {
       const nextHasPppoe = hasPppoeAccess(data);
-      const sameUser = valueText(previous.pppoe_username) === valueText(data?.pppoe_username);
-      const changedRouterSameUser = nextHasPppoe && sameUser && Number(previous.router_id) !== Number(data?.router_id);
+      const changedRouter = nextHasPppoe && Number(previous.router_id) !== Number(data?.router_id);
+      const changedUsername = nextHasPppoe && valueText(previous.pppoe_username) !== valueText(data?.pppoe_username);
+      const changedPppoeIdentity = changedRouter || changedUsername;
       if (!nextHasPppoe) {
         const saved = await request('/api/cloud-data', 'clients.save', data);
         try {
@@ -158,7 +159,7 @@ async function clientSaveSafe(data) {
           throw new Error(`Não foi possível remover o PPPoE antigo. O cadastro de rede foi restaurado: ${error.message || error}`);
         }
       }
-      if (changedRouterSameUser) {
+      if (changedPppoeIdentity) {
         pending = { previous: stateClone(previous) };
         pppoeMigrations.set(id, pending);
         createdPending = true;

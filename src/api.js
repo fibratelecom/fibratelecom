@@ -28,6 +28,73 @@ async function raw(path, payload = {}) {
   return parseResponse(response);
 }
 
+const stateCache = { state: null, updatedAt: '' };
+const stateClone = (value) => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+const stateEqual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const stateObject = (value) => Boolean(value && typeof value === 'object' && !Array.isArray(value));
+
+function mergeArrayChanges(base = [], next = [], latest = []) {
+  if (stateEqual(base, next)) return stateClone(latest);
+  const all = [...base, ...next, ...latest];
+  const keyed = all.length > 0 && all.every((item) => stateObject(item) && item.id !== undefined && item.id !== null && String(item.id) !== '');
+  if (!keyed) return stateClone(next);
+  const key = (item) => String(item.id);
+  const baseMap = new Map(base.map((item) => [key(item), item]));
+  const nextMap = new Map(next.map((item) => [key(item), item]));
+  const resultMap = new Map(latest.map((item) => [key(item), stateClone(item)]));
+  for (const [id] of baseMap) if (!nextMap.has(id)) resultMap.delete(id);
+  for (const item of next) {
+    const id = key(item), before = baseMap.get(id);
+    if (!before || !stateEqual(before, item)) resultMap.set(id, stateClone(item));
+  }
+  const order = [];
+  for (const item of latest) if (resultMap.has(key(item))) order.push(key(item));
+  for (const item of next) if (!order.includes(key(item)) && resultMap.has(key(item))) order.push(key(item));
+  return order.map((id) => resultMap.get(id));
+}
+
+function mergeConcurrentState(base, next, latest) {
+  if (stateEqual(base, next)) return stateClone(latest);
+  if (Array.isArray(base) && Array.isArray(next) && Array.isArray(latest)) return mergeArrayChanges(base, next, latest);
+  if (stateObject(base) && stateObject(next) && stateObject(latest)) {
+    const result = stateClone(latest) || {};
+    const keys = new Set([...Object.keys(base), ...Object.keys(next)]);
+    for (const key of keys) {
+      if (!(key in next) && key in base) { delete result[key]; continue; }
+      if (!(key in base)) { result[key] = stateClone(next[key]); continue; }
+      if (stateEqual(base[key], next[key])) continue;
+      result[key] = mergeConcurrentState(base[key], next[key], latest[key]);
+    }
+    return result;
+  }
+  return stateClone(next);
+}
+
+async function loadState() {
+  const result = await request('/api/cloud-state', 'state.get');
+  stateCache.state = stateClone(result?.state || {});
+  stateCache.updatedAt = String(result?.updated_at || '');
+  return result;
+}
+
+async function saveState(state, baseUpdatedAt = '') {
+  const submitted = stateClone(state || {}), base = stateClone(stateCache.state || {});
+  try {
+    const result = await request('/api/cloud-state', 'state.save', { state: submitted, baseUpdatedAt });
+    stateCache.state = stateClone(result?.state || submitted);
+    stateCache.updatedAt = String(result?.updated_at || '');
+    return result;
+  } catch (error) {
+    if (Number(error?.status) !== 409) throw error;
+    const latest = await request('/api/cloud-state', 'state.get');
+    const merged = mergeConcurrentState(base, submitted, latest?.state || {});
+    const result = await request('/api/cloud-state', 'state.save', { state: merged, baseUpdatedAt: latest?.updated_at || '' });
+    stateCache.state = stateClone(result?.state || merged);
+    stateCache.updatedAt = String(result?.updated_at || '');
+    return result;
+  }
+}
+
 export const authApi = Object.freeze({
   status: () => request('/api/auth', 'status'),
   login: (login, password) => request('/api/auth', 'login', { login, password }),
@@ -41,8 +108,8 @@ export const authApi = Object.freeze({
 });
 
 export const stateApi = Object.freeze({
-  load: () => request('/api/cloud-state', 'state.get'),
-  save: (state, baseUpdatedAt = '') => request('/api/cloud-state', 'state.save', { state, baseUpdatedAt }),
+  load: loadState,
+  save: saveState,
   health: () => request('/api/cloud-state', 'health'),
 });
 
@@ -64,7 +131,7 @@ export const dataApi = Object.freeze({
 
 export const bankApi = Object.freeze({
   safe: () => request('/api/bank-settings', 'get-safe'),
-  vault: () => request('/api/bank-settings', 'get'),
+  vault: () => request('/api/bank-settings', 'get-safe'),
   saveEfi: (data) => request('/api/bank-settings', 'save-efi', data),
   deleteEfi: () => request('/api/bank-settings', 'delete-efi'),
   saveMercadoPago: (data) => request('/api/bank-settings', 'save-mercado-pago', data),

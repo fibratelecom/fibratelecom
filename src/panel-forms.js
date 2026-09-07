@@ -59,8 +59,10 @@ function handleClientFormField(event){
   }
 }
 
-document.addEventListener('input',handleClientFormField);
-document.addEventListener('change',handleClientFormField);
+if(typeof document!=='undefined'){
+  document.addEventListener('input',handleClientFormField);
+  document.addEventListener('change',handleClientFormField);
+}
 
 export function createForms(ctx){
   const {state,clients,routers,data,byPlan,bankSafe,employees}=ctx;

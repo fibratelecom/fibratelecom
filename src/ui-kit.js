@@ -22,7 +22,7 @@ export const moneyToCents=(value)=>Math.max(0,Math.round(Number(String(value??''
 export const checkbox=(value)=>value===true||String(value).toLowerCase()==='true';
 export const option=(value,label,selected)=>`<option value="${attr(value)}"${String(value)===String(selected)?' selected':''}>${esc(label)}</option>`;
 export function empty(title,message){return `<div class="empty"><span>○</span><strong>${esc(title)}</strong><p>${esc(message)}</p></div>`;}
-export function table(headers,rows){return `<div class="table-wrap"><table><thead><tr>${headers.map((h)=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`;}
+export function table(headers,rows){const body=Array.isArray(rows)?rows.join(''):String(rows??'');return `<div class="table-wrap"><table><thead><tr>${headers.map((h)=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div>`;}
 export function actions(items){return `<div class="row-actions">${items.filter(Boolean).join('')}</div>`;}
 export function button(label,action,id='',kind='secondary',extra=''){return `<button class="btn ${kind}" type="button" data-action="${attr(action)}"${id!==''?` data-id="${attr(id)}"`:''} ${extra}>${label}</button>`;}
 export function pageHead(eyebrow,title,textLine,action=''){return `<section class="page-head"><div><span class="section-label">${esc(eyebrow)}</span><h2>${esc(title)}</h2><p>${esc(textLine)}</p></div>${action}</section>`;}

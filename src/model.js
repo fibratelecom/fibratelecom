@@ -38,6 +38,41 @@ export function paidInvoice(invoice = {}) {
   return /pago|paga|paid|baixado|recebido|quitado/.test(normalized(invoice.status));
 }
 
+export function invoiceCashbackUsedCents(invoice = {}) {
+  if (!paidInvoice(invoice)) return 0;
+  const amount = Math.max(0, Math.round(Number(invoice?.cashback_discount_applied_cents) || 0));
+  if (!amount) return 0;
+  const discountStatus = normalized(invoice?.cashback_discount_status);
+  if (/released|refund|estorn|cancel/.test(discountStatus)) return 0;
+  return Math.min(invoiceCents(invoice), amount);
+}
+
+export function invoiceReceivedCents(invoice = {}) {
+  if (!paidInvoice(invoice)) return 0;
+  const gross = invoiceCents(invoice), cashback = invoiceCashbackUsedCents(invoice);
+  if (cashback > 0) {
+    const explicit = Number(invoice?.cashback_pix_amount_cents);
+    if (Number.isFinite(explicit)) return Math.max(0, Math.min(gross, Math.round(explicit)));
+  }
+  return Math.max(0, gross - cashback);
+}
+
+export function paymentGroup(invoice = {}) {
+  const source = normalized(`${invoice?.payment_method || ''} ${invoice?.bank_status_detail || ''} ${invoice?.bank_provider || ''}`);
+  if (/cartao|card|credito|credit/.test(source)) return 'card';
+  if (/pix/.test(source)) return 'pix';
+  if (/boleto|ticket|carnet|carne|billet/.test(source)) return 'boleto';
+  if (/cashback/.test(source)) return 'cashback';
+  return 'other';
+}
+
+export function clientCashbackBalanceCents(client = {}) {
+  const direct = Number(client?.cashback_balance_cents);
+  if (Number.isFinite(direct)) return Math.max(0, Math.round(direct));
+  const legacy = Number(client?.cashback_balance);
+  return Number.isFinite(legacy) ? Math.max(0, Math.round(legacy * 100)) : 0;
+}
+
 export function canceledInvoice(invoice = {}) {
   return /cancel|renegoci|substitu|rejeit|expirad/.test(normalized(invoice.status));
 }
@@ -142,7 +177,7 @@ export function dashboardStats({ state = {}, clients = [], protocols = [], ticke
   const active = clients.filter((item) => !/cancel|inativ/.test(normalized(item.status))).length;
   const blocked = clients.filter((item) => /bloque|suspens/.test(normalized(item.status))).length;
   const overdue = invoices.filter((item) => overdueInvoice(item, today)).length;
-  const paidRevenue = invoices.filter(paidInvoice).reduce((sum, item) => sum + invoiceCents(item), 0);
+  const paidRevenue = invoices.filter(paidInvoice).reduce((sum, item) => sum + invoiceReceivedCents(item), 0);
   const openProtocols = support.filter((item) => !ticketClosed(item)).length;
   return { active, blocked, overdue, paidRevenue, openProtocols, invoices };
 }

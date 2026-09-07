@@ -1,9 +1,12 @@
 # Provedor Plus — Cloudflare Worker de produção
-# build: 20260906-clean-panel1
+# build: 20260907-functional-audit1
 name = "painel"
 main = "notification-center-entry-worker.js"
 compatibility_date = "2026-08-30"
 workers_dev = true
+
+[build]
+command = "node --check app.js && node -e \"Promise.all([import('./src/api.js'),import('./src/ui.js')])\""
 
 [triggers]
 crons = [ "* * * * *", "*/15 * * * *", "5 6 * * *" ]

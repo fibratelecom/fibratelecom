@@ -37,6 +37,13 @@ async function fillClientAddressByCep(form,cep){
   }
 }
 
+function selectClientProfile(form,value){
+  const select=form?.elements?.mikrotik_profile,profile=text(value)||'default';
+  if(!select)return;
+  if(![...select.options].some((item)=>item.value===profile))select.add(new Option(profile,profile));
+  select.value=profile;
+}
+
 function handleClientFormField(event){
   const target=event.target,form=clientFormTarget(target);
   if(!form||!target?.name)return;
@@ -47,7 +54,20 @@ function handleClientFormField(event){
   if(target.name==='plan_id'){
     const selected=target.selectedOptions?.[0],selectedProfile=text(selected?.dataset?.profile)||'default',originalPlan=text(form.dataset.originalPlanId),originalProfile=text(form.dataset.originalMikrotikProfile);
     const profile=String(target.value)===originalPlan&&originalProfile?originalProfile:selectedProfile;
-    if(form.elements.mikrotik_profile)form.elements.mikrotik_profile.value=profile;
+    selectClientProfile(form,profile);
+    return;
+  }
+  if(target.name==='billing_mode'){
+    const selected=target.selectedOptions?.[0];
+    if(selected?.hasAttribute('data-bank')&&form.elements.billing_bank_provider)form.elements.billing_bank_provider.value=text(selected.dataset.bank);
+    return;
+  }
+  if(target.name==='billing_bank_provider'){
+    const mode=form.elements.billing_mode;
+    if(mode?.value==='boleto'){
+      const bank=text(target.value),selected=[...mode.options].find((item)=>item.value==='boleto'&&text(item.dataset.bank)===bank);
+      if(selected)mode.selectedIndex=selected.index;
+    }
     return;
   }
   if(target.name==='zip_code'){
@@ -87,9 +107,17 @@ export function createForms(ctx){
   function clientForm(item={}){
     const planOpts=`<option value="" data-profile="default">Sem plano</option>${data.plans.map((p)=>`<option value="${attr(p.id)}" data-profile="${attr(text(p.mikrotik_profile)||'default')}"${String(p.id)===String(item.plan_id)?' selected':''}>${attr(`${p.name} · ${money(p.price_cents,true)}`)}</option>`).join('')}`;
     const routerOpts=`<option value="">Sem MikroTik</option>${routers.map((r)=>option(r.id,r.name||r.host,item.router_id)).join('')}`;
-    const contract=item.contract_number||nextContract(clients),billingMode=text(item.billing_mode)||'boleto',pixStatus=text(item.pix_auto_status)||'Não configurado';
+    const contract=item.contract_number||nextContract(clients),billingMode=text(item.billing_mode)||'boleto',billingBank=text(item.billing_bank_provider),pixStatus=text(item.pix_auto_status)||'Não configurado';
     const fixedIp=text(item.ip)||(!item.id?nextClientIp(clients):''),deviceIp=text(item.device_ip)||fixedIp,mikrotikProfile=text(item.mikrotik_profile)||text(byPlan(item.plan_id)?.mikrotik_profile)||'default';
-    const billingOptions=`${option('boleto','Boleto bancário',billingMode)}${option('pix_due','Pix com vencimento — Efí',billingMode)}${option('pix_auto','Pix Automático — Efí',billingMode)}`;
+    const profileNames=[mikrotikProfile,'default',...data.plans.map((p)=>text(p?.mikrotik_profile)),...clients.map((c)=>text(c?.mikrotik_profile))].filter(Boolean).filter((value,index,list)=>list.indexOf(value)===index),profileOptions=profileNames.map((value)=>option(value,value,mikrotikProfile)).join('');
+    const billingOption=(value,label,bank,selected)=>`<option value="${attr(value)}" data-bank="${attr(bank)}"${selected?' selected':''}>${attr(label)}</option>`;
+    const billingOptions=[
+      billingOption('boleto','Boleto bancário — banco padrão','',billingMode==='boleto'&&!billingBank),
+      billingOption('boleto','Boleto — Efí Bank','efi',billingMode==='boleto'&&billingBank==='efi'),
+      billingOption('boleto','Boleto — Mercado Pago','mercadoPago',billingMode==='boleto'&&billingBank==='mercadoPago'),
+      billingOption('pix_due','Pix com vencimento — Efí','efi',billingMode==='pix_due'),
+      billingOption('pix_auto','Pix Automático — Efí','efi',billingMode==='pix_auto')
+    ].join('');
     const efiOperations=item.id?`<fieldset class="form-section span-2"><legend>Efí — recorrência e carnê</legend><div class="form-actions"><button class="btn secondary" type="button" data-action="client-pix-auto" data-id="${attr(item.id)}" ${efiReady?'':'disabled'}>Pix Automático</button><button class="btn secondary" type="button" data-action="client-carnet" data-id="${attr(item.id)}" ${efiReady?'':'disabled'}>Gerar carnê</button></div><p class="hint">Pix Automático: <strong>${attr(pixStatus)}</strong>. ${efiReady?'Efí pronta para estas operações.':'Configure e ative a Efí Bank para liberar estas operações.'}</p></fieldset>`:'';
     return `<form id="client-form" class="form-grid" data-original-plan-id="${attr(item.plan_id||'')}" data-original-mikrotik-profile="${attr(text(item.mikrotik_profile))}">
       <input type="hidden" name="id" value="${attr(item.id||'')}">
@@ -106,18 +134,18 @@ export function createForms(ctx){
       <fieldset class="form-section span-2"><legend>Plano e cobrança</legend><div class="form-grid inner-grid">
         ${selectField('Plano','plan_id',planOpts)}${field('Dia do vencimento','due_day',item.due_day||10,'number','min="1" max="31"')}
         ${selectField('Status','status',['Ativo','Em atraso','Bloqueado','Suspenso','Cancelado'].map((v)=>option(v,v,item.status||'Ativo')).join(''))}
-        ${selectField('Banco preferencial','billing_bank_provider',`<option value="">Padrão do sistema</option>${option('efi','Efí Bank',item.billing_bank_provider)}${option('mercadoPago','Mercado Pago',item.billing_bank_provider)}`)}
+        ${selectField('Banco preferencial','billing_bank_provider',`<option value="">Padrão do sistema</option>${option('efi','Efí Bank',billingBank)}${option('mercadoPago','Mercado Pago',billingBank)}`)}
         ${selectField('Cobrança automática','billing_mode',billingOptions)}
         <label class="check"><input type="checkbox" name="auto_block" ${checkbox(item.auto_block)?'checked':''}>Bloqueio automático por atraso</label>
         ${field('Dias para bloquear','block_after_days',item.block_after_days||7,'number','min="1" max="90"')}
-      </div><p class="hint">Pix com vencimento e Pix Automático usam exclusivamente a Efí. No Pix Automático, a recorrência precisa estar APROVADA antes da cobrança mensal automática.</p></fieldset>
+      </div><p class="hint">Boleto pode usar o banco padrão, Efí Bank ou Mercado Pago. Pix com vencimento e Pix Automático usam exclusivamente a Efí. Ao escolher a cobrança, o banco preferencial é ajustado automaticamente.</p></fieldset>
       ${efiOperations}
       <fieldset class="form-section span-2"><legend>Acesso PPPoE / MikroTik</legend><div class="form-grid inner-grid">
         ${selectField('MikroTik','router_id',routerOpts)}${selectField('Tipo de conexão','connection_type',['PPPoE','IPoE','Estático'].map((v)=>option(v,v,item.connection_type||'PPPoE')).join(''))}
         ${field('Usuário PPPoE','pppoe_username',item.pppoe_username||item.pppoe_user)}${field('Senha PPPoE','pppoe_password','','password','placeholder="Informe para criar ou trocar; vazio mantém a atual"')}
-        ${field('Perfil MikroTik','mikrotik_profile',mikrotikProfile,'text','readonly aria-readonly="true"')}${field('IP fixo / remoto','ip',fixedIp,'text',`${item.id?'':'required '}inputmode="decimal" autocomplete="off" spellcheck="false"`)}${field('MAC / Caller-ID','mac_address',item.mac_address)}
+        ${selectField('Perfil MikroTik','mikrotik_profile',profileOptions)}${field('IP fixo / remoto','ip',fixedIp,'text',`${item.id?'':'required '}inputmode="decimal" autocomplete="off" spellcheck="false"`)}${field('MAC / Caller-ID','mac_address',item.mac_address)}
         ${field('IP do roteador/ONU do cliente','device_ip',deviceIp,'text','readonly aria-readonly="true"')}${field('Porta do roteador/ONU','device_port',item.device_port||'','number','min="1" max="65535"')}
-      </div><p class="hint">O Perfil MikroTik segue o plano selecionado. O IP do roteador/ONU acompanha automaticamente o IP fixo/remoto. Ao salvar um cliente PPPoE configurado, o Provedor Plus sincroniza o acesso real no MikroTik.</p></fieldset>
+      </div><p class="hint">O Perfil MikroTik é selecionável entre os perfis já configurados nos planos ou usados nos clientes; ao trocar o plano, o perfil padrão do plano é sugerido. O IP do roteador/ONU acompanha automaticamente o IP fixo/remoto.</p></fieldset>
       ${textareaField('Observações','notes',item.notes)}
       <div class="form-actions span-2">${item.id?'<button class="btn danger" type="button" data-action="delete-client" data-id="'+attr(item.id)+'">Excluir cliente</button>':''}<span class="form-spacer"></span><button class="btn secondary" type="button" data-action="close-modal">Cancelar</button><button class="btn primary" type="submit">Salvar e sincronizar</button></div>
     </form>`;

@@ -116,6 +116,7 @@ export function createForms(ctx){
       billingOption('boleto','Boleto — Efí Bank','efi',billingMode==='boleto'&&billingBank==='efi'),
       billingOption('boleto','Boleto — Mercado Pago','mercadoPago',billingMode==='boleto'&&billingBank==='mercadoPago'),
       billingOption('pix_due','Pix com vencimento — Efí','efi',billingMode==='pix_due'),
+      billingOption('pix_mp','Pix — Mercado Pago','mercadoPago',billingMode==='pix_mp'),
       billingOption('pix_auto','Pix Automático — Efí','efi',billingMode==='pix_auto')
     ].join('');
     const efiOperations=item.id?`<fieldset class="form-section span-2"><legend>Efí — recorrência e carnê</legend><div class="form-actions"><button class="btn secondary" type="button" data-action="client-pix-auto" data-id="${attr(item.id)}" ${efiReady?'':'disabled'}>Pix Automático</button><button class="btn secondary" type="button" data-action="client-carnet" data-id="${attr(item.id)}" ${efiReady?'':'disabled'}>Gerar carnê</button></div><p class="hint">Pix Automático: <strong>${attr(pixStatus)}</strong>. ${efiReady?'Efí pronta para estas operações.':'Configure e ative a Efí Bank para liberar estas operações.'}</p></fieldset>`:'';
@@ -138,7 +139,7 @@ export function createForms(ctx){
         ${selectField('Cobrança automática','billing_mode',billingOptions)}
         <label class="check"><input type="checkbox" name="auto_block" ${checkbox(item.auto_block)?'checked':''}>Bloqueio automático por atraso</label>
         ${field('Dias para bloquear','block_after_days',item.block_after_days||7,'number','min="1" max="90"')}
-      </div><p class="hint">Boleto pode usar o banco padrão, Efí Bank ou Mercado Pago. Pix com vencimento e Pix Automático usam exclusivamente a Efí. Ao escolher a cobrança, o banco preferencial é ajustado automaticamente.</p></fieldset>
+      </div><p class="hint">Boleto pode usar o banco padrão, Efí Bank ou Mercado Pago. Pix com vencimento e Pix Automático usam a Efí. Pix Mercado Pago usa o fluxo Pix já existente e gera o QR quando o cliente inicia o pagamento. Ao escolher a cobrança, o banco preferencial é ajustado automaticamente.</p></fieldset>
       ${efiOperations}
       <fieldset class="form-section span-2"><legend>Acesso PPPoE / MikroTik</legend><div class="form-grid inner-grid">
         ${selectField('MikroTik','router_id',routerOpts)}${selectField('Tipo de conexão','connection_type',['PPPoE','IPoE','Estático'].map((v)=>option(v,v,item.connection_type||'PPPoE')).join(''))}

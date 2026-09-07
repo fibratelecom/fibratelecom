@@ -228,6 +228,8 @@ export const dataApi = Object.freeze({
   cashbackAdjust: (data) => request('/api/cloud-data', 'cashback.wallet.adjust', data),
   trafficRecord: (clientId, live, month = '') => request('/api/cloud-data', 'traffic.record', { clientId, live, month }),
   billingRun: () => request('/api/cloud-data', 'billing.run'),
+  supportNegotiationOptions: (clientId) => request('/api/cloud-data', 'negotiation.support.options', { clientId }),
+  supportNegotiationCreate: (data) => request('/api/cloud-data', 'negotiation.support.create', data),
 });
 
 export const bankApi = Object.freeze({

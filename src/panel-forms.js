@@ -73,7 +73,7 @@ export function createForms(ctx){
   }
 
   function carnetForm(item={}){
-    const p=byPlan(item.plan_id),amount=item.pix_auto_amount_cents||p?.price_cents||0;
+    const p=byPlan(item.plan_id),amount=p?.price_cents||0;
     return `<form id="carnet-form" class="form-grid"><input type="hidden" name="client_id" value="${attr(item.id||'')}">
       ${field('Cliente','client_name',item.name,'text','readonly')}${field('Contrato','contract_number',item.contract_number||'','text','readonly')}
       ${field('Quantidade de parcelas','installments',6,'number','required min="2" max="24"')}${field('Primeiro vencimento','first_due',futureDate(7),'date','required')}

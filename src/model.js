@@ -53,8 +53,8 @@ export function overdueInvoice(invoice = {}, today = new Date().toISOString().sl
 export function statusKind(value) {
   const normalizedValue = normalized(value);
   if (/pago|paid|online|ativo|conectado|success|conclu|resolvido|liberado|sincronizado/.test(normalizedValue)) return 'success';
-  if (/vencid|atras|offline|bloque|erro|falh|cancel|rejeit|inativ|suspens/.test(normalizedValue)) return 'danger';
-  if (/pend|aguard|process|andamento|agendad|atencao/.test(normalizedValue)) return 'warning';
+  if (/vencid|atras|offline|bloque|erro|falh|cancel|rejeit|inativ|suspens|urgente/.test(normalizedValue)) return 'danger';
+  if (/pend|aguard|process|andamento|atendimento|agendad|atencao|alta/.test(normalizedValue)) return 'warning';
   return 'neutral';
 }
 
@@ -76,6 +76,7 @@ export function collections(state = {}) {
     invoices: arr(state.invoices),
     cashback: arr(state.cashback_transactions),
     negotiations: arr(state.negotiations),
+    tickets: arr(state.tickets),
     audit: arr(state.audit || state.audit_log || state.history || state.logs),
   };
 }
@@ -100,6 +101,28 @@ export function nextContract(clients = []) {
   return code;
 }
 
+export function ticketNumber(ticket = {}) {
+  const explicit = text(ticket.ticket_number || ticket.number);
+  return explicit || `CH-${String(Number(ticket.id) || 0).padStart(6, '0')}`;
+}
+
+export function ticketClosed(ticket = {}) {
+  return /resolvido|concluido|concluído|cancelado|fechado/.test(normalized(ticket.status));
+}
+
+export function ticketSlaDue(priority = 'Normal', base = new Date()) {
+  const hours = { baixa: 24, normal: 12, alta: 4, urgente: 2 }[normalized(priority)] || 12;
+  const date = new Date(base);
+  date.setHours(date.getHours() + hours);
+  return date.toISOString();
+}
+
+export function ticketOverdue(ticket = {}) {
+  if (ticketClosed(ticket) || !ticket.sla_due_at) return false;
+  const due = new Date(ticket.sla_due_at);
+  return !Number.isNaN(due.getTime()) && due.getTime() < Date.now();
+}
+
 export function formatBytes(value) {
   let amount = Math.max(0, Number(value) || 0), unit = 0;
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -114,12 +137,12 @@ export function formatRate(value) {
   return `${new Intl.NumberFormat('pt-BR', { maximumFractionDigits: unit < 2 ? 0 : 1 }).format(amount)} ${units[unit]}`;
 }
 
-export function dashboardStats({ state = {}, clients = [], protocols = [] } = {}) {
-  const invoices = arr(state.invoices), today = new Date().toISOString().slice(0, 10);
+export function dashboardStats({ state = {}, clients = [], protocols = [], tickets = null } = {}) {
+  const invoices = arr(state.invoices), today = new Date().toISOString().slice(0, 10), support = tickets === null ? arr(protocols) : arr(tickets);
   const active = clients.filter((item) => !/cancel|inativ/.test(normalized(item.status))).length;
   const blocked = clients.filter((item) => /bloque|suspens/.test(normalized(item.status))).length;
   const overdue = invoices.filter((item) => overdueInvoice(item, today)).length;
   const paidRevenue = invoices.filter(paidInvoice).reduce((sum, item) => sum + invoiceCents(item), 0);
-  const openProtocols = arr(protocols).filter((item) => !/conclu|resolvid|fechad|cancel/.test(normalized(item.status))).length;
+  const openProtocols = support.filter((item) => !ticketClosed(item)).length;
   return { active, blocked, overdue, paidRevenue, openProtocols, invoices };
 }

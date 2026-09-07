@@ -107,6 +107,15 @@ function mergedClient(remote,state){
     installation_date:text(local.installation_date||local.activation_date),
     created_at:text(local.created_at),
     billing_bank_provider:text(local.billing_bank_provider||remote.billing_bank_provider),
+    billing_mode:text(local.billing_mode)||'boleto',
+    pix_auto_id_rec:text(local.pix_auto_id_rec),
+    pix_auto_status:text(local.pix_auto_status),
+    pix_auto_start_date:text(local.pix_auto_start_date),
+    pix_auto_end_date:text(local.pix_auto_end_date),
+    pix_auto_amount_cents:Math.max(0,Math.round(num(local.pix_auto_amount_cents))),
+    pix_auto_qr:text(local.pix_auto_qr),
+    pix_auto_created_at:text(local.pix_auto_created_at),
+    pix_auto_updated_at:text(local.pix_auto_updated_at),
     plan_id:Number(remote.plan_id||local.plan_id)||null,
     plan_name:text(plan?.name||remote.plan||local.plan)||'Plano Fibra+',
     plan_price_cents:Math.max(0,Math.round(num(plan?.price_cents)))
@@ -136,6 +145,9 @@ function bankSecrets(vault){
   };
 }
 
+function pixAutoRecord(client){return {clientId:Number(client.id),clientName:text(client.name),contractNumber:text(client.contract_number),idRec:text(client.pix_auto_id_rec),status:text(client.pix_auto_status),startDate:text(client.pix_auto_start_date),endDate:text(client.pix_auto_end_date),amountCents:Math.max(0,Math.round(num(client.pix_auto_amount_cents))),pixCopiaECola:text(client.pix_auto_qr),createdAt:text(client.pix_auto_created_at),updatedAt:text(client.pix_auto_updated_at)}}
+function requireEfiPix(client,vault,mode){const efi=vault?.efi||{};if(!efi.enabled||!text(efi.clientId)||!text(efi.clientSecret))throw new Error(`${client.name||client.id}: Efí não está pronta para cobrança Pix.`);if(!text(efi.certificateBase64))throw new Error(`${client.name||client.id}: certificado P12/PFX da Efí não está configurado.`);if(mode==='pix_due'&&!text(efi.pixKey))throw new Error(`${client.name||client.id}: chave Pix da Efí não está configurada.`);if(mode==='pix_auto'){if(text(client.pix_auto_status).toUpperCase()!=='APROVADA'||!text(client.pix_auto_id_rec))throw new Error(`${client.name||client.id}: Pix Automático ainda não está APROVADO na Efí.`);if(!digits(efi.pixAutoReceiverAgency)||!digits(efi.pixAutoReceiverAccount))throw new Error(`${client.name||client.id}: informe Agência e Conta recebedora do Pix Automático na Efí.`)}}
+
 async function bankAction(env,payload){
   const response=await handleBankProxy(new Request('https://painel.fibramais.workers.dev/api/bank-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),env);
   let body={};try{body=await response.json()}catch{}
@@ -143,9 +155,13 @@ async function bankAction(env,payload){
   return body.data||{};
 }
 
-async function issueRealBoleto(env,invoice,client,state,vault){
-  const provider=providerFor(client,state,vault,invoice.bank_provider),secrets=bankSecrets(vault),source={...invoice,bank_provider:provider,client_name:client.name,client_contract_number:client.contract_number};
-  const remote=await bankAction(env,{action:'issue',provider,invoice:source,client,efi:secrets.efi,mercadoPago:secrets.mercadoPago,pixAutoRecord:null});
+async function issueRealCharge(env,invoice,client,state,vault){
+  const first=invoice?.prorated_first_invoice===true||invoice?.billing_origin==='first_prorated',combined=invoice?.combined_billing===true||invoice?.billing_origin==='monthly_auto_combined';let mode=first||combined?'boleto':normalize(client.billing_mode||'boleto');
+  if(!['boleto','pix_due','pix_auto'].includes(mode))mode='boleto';
+  if(mode==='pix_due'){requireEfiPix(client,vault,mode);invoice.billing_type='Pix com vencimento';invoice.document_type='Pix com vencimento';invoice.bank_provider='efi'}
+  if(mode==='pix_auto'){requireEfiPix(client,vault,mode);invoice.billing_type='Pix Automático';invoice.document_type='Pix Automático';invoice.bank_provider='efi'}
+  const provider=mode==='pix_due'||mode==='pix_auto'?'efi':providerFor(client,state,vault,invoice.bank_provider),secrets=bankSecrets(vault),source={...invoice,bank_provider:provider,client_name:client.name,client_contract_number:client.contract_number};
+  const remote=await bankAction(env,{action:'issue',provider,invoice:source,client,efi:secrets.efi,mercadoPago:secrets.mercadoPago,pixAutoRecord:mode==='pix_auto'?pixAutoRecord(client):null});
   Object.assign(invoice,{bank_provider:provider},remote||{});
   return invoice;
 }
@@ -198,7 +214,7 @@ function prepareCombinedMonthly(invoice,plan,dueDate){
 
 async function issueAndSave(env,sql,state,invoice,client,vault,isExisting){
   const before=JSON.parse(JSON.stringify(invoice));
-  await issueRealBoleto(env,invoice,client,state,vault);
+  await issueRealCharge(env,invoice,client,state,vault);
   if(!isExisting){state.invoices=Array.isArray(state.invoices)?state.invoices:[];state.invoices.push(invoice)}
   try{await saveState(sql,state)}catch(error){
     try{await cancelIssued(env,invoice,client,vault)}catch{}

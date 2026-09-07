@@ -247,6 +247,31 @@ export function createForms(ctx){
     </form>`;
   }
 
+  function supportNegotiationForm(options={}){
+    const client=options.client||{},invoices=Array.isArray(options.eligibleInvoices)?options.eligibleInvoices:[],modes=Array.isArray(options.paymentModes)?options.paymentModes:[],defaults=options.defaults||{},active=Array.isArray(options.activeNegotiations)?options.activeNegotiations:[];
+    const invoiceRows=invoices.map((row)=>`<tr><td><label class="check"><input type="checkbox" name="invoice_ids" value="${attr(row.id)}" checked> ${attr(row.reference||row.id)}</label></td><td>${attr(row.dueDate||row.dueDateRaw||'—')}</td><td>${Number(row.daysOverdue)||0} dias</td><td>${attr(row.total||money(row.amountCents,true))}</td></tr>`).join('');
+    const modeOptions=modes.map((mode)=>option(mode.id,mode.label,defaults.paymentMode)).join('');
+    const installmentOptions=Array.from({length:12},(_,i)=>option(i+1,i===0?'À vista':`${i+1} parcelas`,defaults.installments||1)).join('');
+    const activeHtml=active.length?`<div class="result-errors span-2"><strong>Acordos ativos/recentes</strong><ul>${active.map((row)=>`<li>${attr(row.protocol||row.id)} · ${attr(row.status||'Ativo')} · ${money(Number(row.totalCents)||0,true)}</li>`).join('')}</ul></div>`:'';
+    return `<form id="support-negotiation-form" class="form-grid"><input type="hidden" name="client_id" value="${attr(client.id||'')}">
+      <article class="settings-card span-2"><div class="panel-title"><div><span>Atendimento financeiro</span><h3>${attr(client.name||'Cliente')}</h3></div><span class="clean-badge">Contrato ${attr(client.contract||'—')}</span></div><p class="hint">Total vencido disponível: <strong>${attr(options.originalTotal||money(options.originalCents||0,true))}</strong>. O acordo preserva as faturas antigas como renegociadas e registra protocolo e atendente.</p></article>
+      ${activeHtml}
+      <fieldset class="form-section span-2"><legend>Faturas vencidas</legend>${invoiceRows?`<div class="table-wrap"><table><thead><tr><th>Fatura</th><th>Vencimento</th><th>Atraso</th><th>Valor</th></tr></thead><tbody>${invoiceRows}</tbody></table></div>`:'<p class="hint">Não há faturas vencidas disponíveis para negociação.</p>'}</fieldset>
+      <fieldset class="form-section span-2"><legend>Condição do acordo</legend><div class="form-grid inner-grid">
+        ${selectField('Tipo de desconto','discount_type',`${option('percent','Percentual (%)',defaults.discountType||'percent')}${option('fixed','Valor fixo (R$)',defaults.discountType)}`)}
+        ${field('Desconto (%)','discount_percent',Number(defaults.discountPercent)||0,'number','min="0" max="100" step="0.01"')}
+        ${field('Desconto em R$','discount_amount','','text','inputmode="decimal" placeholder="0,00"')}
+        ${selectField('Quantidade','installments',installmentOptions)}
+        ${field('Entrada (R$)','entry',formMoney(defaults.entryCents||0),'text','inputmode="decimal"')}
+        ${field('Juros ao mês (%)','interest_percent',Number(defaults.interestPercent)||0,'number','min="0" max="20" step="0.01"')}
+        ${field('Primeiro vencimento','first_due_date',text(defaults.firstDueDate).slice(0,10),'date','required')}
+        ${selectField('Forma de pagamento','payment_mode',modeOptions,'required')}
+      </div><p class="hint">Em 1 parcela, a entrada e os juros são ignorados. Em parcelamento, a entrada é cobrada primeiro e as demais parcelas seguem o vencimento mensal do cliente.</p></fieldset>
+      ${textareaField('Observação do acordo','note','','maxlength="500" placeholder="Motivo, autorização ou observação do atendimento"')}
+      <div class="form-actions span-2"><button class="btn secondary" type="button" data-action="close-modal">Cancelar</button><button class="btn primary" type="submit" ${invoiceRows&&modeOptions?'':'disabled'}>Confirmar acordo</button></div>
+    </form>`;
+  }
+
   function manualPaymentForm(item={}){
     return `<form id="manual-payment-form" class="form-grid"><input type="hidden" name="id" value="${attr(item.id||'')}">
       ${selectField('Forma de pagamento','payment_method',['Pix','Dinheiro','Cartão','Transferência','Boleto','Outro'].map((v)=>option(v,v,'Pix')).join(''))}
@@ -273,5 +298,5 @@ export function createForms(ctx){
   function efiForm(){const e=bankSafe.efi||{},configured=Boolean(e.clientIdConfigured||e.clientSecretConfigured||e.certificateConfigured||e.pixKey);return `<form id="efi-form" class="form-grid"><label class="check span-2"><input type="checkbox" name="enabled" ${e.enabled?'checked':''}>Ativar Efí</label>${selectField('Ambiente','environment',`${option('production','Produção',e.environment)}${option('sandbox','Homologação',e.environment)}`)}${field('Client ID','clientId','','text',`placeholder="${e.clientIdConfigured?'Configurado — deixe vazio para manter':'Informe o Client ID'}"`)}${field('Client Secret','clientSecret','','password',`placeholder="${e.clientSecretConfigured?'Configurado — deixe vazio para manter':'Informe o Client Secret'}"`)}${field('Senha do certificado','certificatePassword','','password',`placeholder="${e.certificatePasswordConfigured?'Configurada — deixe vazio para manter':'Senha do P12/PFX'}"`)}<label>Certificado P12/PFX<input name="certificate" type="file" accept=".p12,.pfx,application/x-pkcs12"></label>${field('Chave PIX','pixKey',e.pixKey)}${field('Agência recebedora','pixAutoReceiverAgency',e.pixAutoReceiverAgency)}${field('Conta recebedora','pixAutoReceiverAccount',e.pixAutoReceiverAccount)}${field('Webhook URL','webhookUrl',e.webhookUrl,'url')}<div class="form-actions span-2">${configured?'<button class="btn danger" type="button" data-action="delete-efi">Remover integração</button>':''}<span class="form-spacer"></span><button class="btn secondary" type="button" data-action="close-modal">Cancelar</button><button class="btn primary" type="submit">Salvar Efí</button></div></form>`;}
   function mpForm(){const m=bankSafe.mercadoPago||{},configured=Boolean(m.accessTokenConfigured||m.publicKey||m.webhookSecretConfigured);return `<form id="mp-form" class="form-grid"><label class="check span-2"><input type="checkbox" name="enabled" ${m.enabled?'checked':''}>Ativar Mercado Pago</label>${selectField('Ambiente','environment',`${option('production','Produção',m.environment)}${option('sandbox','Teste',m.environment)}`)}${field('Public Key','publicKey',m.publicKey||'')}${field('Access Token','accessToken','','password',`placeholder="${m.accessTokenConfigured?'Configurado — deixe vazio para manter':'Informe o Access Token'}"`)}${field('Chave secreta do Webhook','webhookSecret','','password',`placeholder="${m.webhookSecretConfigured?'Configurada — deixe vazio para manter':'Informe se já possuir'}"`)}<div class="form-actions span-2">${m.webhookSecretConfigured?'<button class="btn secondary" type="button" data-action="delete-mp-webhook">Remover chave Webhook</button>':''}${configured?'<button class="btn danger" type="button" data-action="delete-mp">Remover integração</button>':''}<span class="form-spacer"></span><button class="btn secondary" type="button" data-action="close-modal">Cancelar</button><button class="btn primary" type="submit">Salvar Mercado Pago</button></div></form>`;}
 
-  return {clientForm,pixAutoForm,carnetForm,planForm,invoiceForm,manualPaymentForm,cashbackRulesForm,cashbackAdjustForm,routerForm,protocolForm,employeeForm,storyForm,efiForm,mpForm};
+  return {clientForm,pixAutoForm,carnetForm,planForm,invoiceForm,supportNegotiationForm,manualPaymentForm,cashbackRulesForm,cashbackAdjustForm,routerForm,protocolForm,employeeForm,storyForm,efiForm,mpForm};
 }

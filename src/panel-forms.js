@@ -1,6 +1,67 @@
 import { invoiceCents, money, nextContract, text } from './model.js';
 import { attr, checkbox, field, formMoney, option, PERMISSIONS, selectField, textareaField } from './ui-kit.js';
 
+let clientCepTimer=0;
+
+function clientFormTarget(target){
+  const form=target?.closest?.('#client-form');
+  return form instanceof HTMLFormElement?form:null;
+}
+
+function clientFormCepStatus(form,message=''){
+  const status=form?.querySelector?.('[data-client-cep-status]');
+  if(status)status.textContent=message;
+}
+
+async function fillClientAddressByCep(form,cep){
+  if(!form?.isConnected||form.dataset.cepLoading===cep)return;
+  form.dataset.cepLoading=cep;
+  clientFormCepStatus(form,'Consultando CEP…');
+  try{
+    const response=await fetch(`https://viacep.com.br/ws/${cep}/json/`,{headers:{Accept:'application/json'}});
+    if(!response.ok)throw new Error(`HTTP ${response.status}`);
+    const result=await response.json(),current=text(form.elements?.zip_code?.value).replace(/\D/g,'');
+    if(!form.isConnected||current!==cep)return;
+    if(result?.erro){clientFormCepStatus(form,'CEP não encontrado. Preencha o endereço manualmente.');return;}
+    form.elements.zip_code.value=`${cep.slice(0,5)}-${cep.slice(5)}`;
+    if(form.elements.address)form.elements.address.value=text(result?.logradouro);
+    if(form.elements.neighborhood)form.elements.neighborhood.value=text(result?.bairro);
+    if(form.elements.city)form.elements.city.value=text(result?.localidade);
+    if(form.elements.state)form.elements.state.value=text(result?.uf).toUpperCase();
+    form.dataset.cepLoaded=cep;
+    clientFormCepStatus(form,'Endereço preenchido automaticamente pelo CEP.');
+  }catch{
+    if(form?.isConnected)clientFormCepStatus(form,'Não foi possível consultar o CEP agora. Preencha o endereço manualmente.');
+  }finally{
+    if(form?.dataset?.cepLoading===cep)delete form.dataset.cepLoading;
+  }
+}
+
+function handleClientFormField(event){
+  const target=event.target,form=clientFormTarget(target);
+  if(!form||!target?.name)return;
+  if(target.name==='ip'){
+    if(form.elements.device_ip)form.elements.device_ip.value=text(target.value);
+    return;
+  }
+  if(target.name==='plan_id'){
+    const selected=target.selectedOptions?.[0],selectedProfile=text(selected?.dataset?.profile)||'default',originalPlan=text(form.dataset.originalPlanId),originalProfile=text(form.dataset.originalMikrotikProfile);
+    const profile=String(target.value)===originalPlan&&originalProfile?originalProfile:selectedProfile;
+    if(form.elements.mikrotik_profile)form.elements.mikrotik_profile.value=profile;
+    return;
+  }
+  if(target.name==='zip_code'){
+    const cep=text(target.value).replace(/\D/g,'').slice(0,8);
+    clearTimeout(clientCepTimer);
+    if(cep.length!==8){delete form.dataset.cepLoaded;clientFormCepStatus(form,'');return;}
+    if(form.dataset.cepLoaded===cep)return;
+    clientCepTimer=setTimeout(()=>fillClientAddressByCep(form,cep),250);
+  }
+}
+
+document.addEventListener('input',handleClientFormField);
+document.addEventListener('change',handleClientFormField);
+
 export function createForms(ctx){
   const {state,clients,routers,data,byPlan,bankSafe,employees}=ctx;
   const activeStaff=(employees||[]).filter((x)=>x.active!==false);
@@ -22,13 +83,13 @@ export function createForms(ctx){
   }
 
   function clientForm(item={}){
-    const planOpts=`<option value="">Sem plano</option>${data.plans.map((p)=>option(p.id,`${p.name} · ${money(p.price_cents,true)}`,item.plan_id)).join('')}`;
+    const planOpts=`<option value="" data-profile="default">Sem plano</option>${data.plans.map((p)=>`<option value="${attr(p.id)}" data-profile="${attr(text(p.mikrotik_profile)||'default')}"${String(p.id)===String(item.plan_id)?' selected':''}>${attr(`${p.name} · ${money(p.price_cents,true)}`)}</option>`).join('')}`;
     const routerOpts=`<option value="">Sem MikroTik</option>${routers.map((r)=>option(r.id,r.name||r.host,item.router_id)).join('')}`;
     const contract=item.contract_number||nextContract(clients),billingMode=text(item.billing_mode)||'boleto',pixStatus=text(item.pix_auto_status)||'Não configurado';
     const fixedIp=text(item.ip)||(!item.id?nextClientIp(clients):''),deviceIp=text(item.device_ip)||fixedIp,mikrotikProfile=text(item.mikrotik_profile)||text(byPlan(item.plan_id)?.mikrotik_profile)||'default';
     const billingOptions=`${option('boleto','Boleto bancário',billingMode)}${option('pix_due','Pix com vencimento — Efí',billingMode)}${option('pix_auto','Pix Automático — Efí',billingMode)}`;
     const efiOperations=item.id?`<fieldset class="form-section span-2"><legend>Efí — recorrência e carnê</legend><div class="form-actions"><button class="btn secondary" type="button" data-action="client-pix-auto" data-id="${attr(item.id)}" ${efiReady?'':'disabled'}>Pix Automático</button><button class="btn secondary" type="button" data-action="client-carnet" data-id="${attr(item.id)}" ${efiReady?'':'disabled'}>Gerar carnê</button></div><p class="hint">Pix Automático: <strong>${attr(pixStatus)}</strong>. ${efiReady?'Efí pronta para estas operações.':'Configure e ative a Efí Bank para liberar estas operações.'}</p></fieldset>`:'';
-    return `<form id="client-form" class="form-grid">
+    return `<form id="client-form" class="form-grid" data-original-plan-id="${attr(item.plan_id||'')}" data-original-mikrotik-profile="${attr(text(item.mikrotik_profile))}">
       <input type="hidden" name="id" value="${attr(item.id||'')}">
       <fieldset class="form-section span-2"><legend>Identificação e contrato</legend><div class="form-grid inner-grid">
         ${field('Nome completo / Razão social','name',item.name,'text','required')}
@@ -39,7 +100,7 @@ export function createForms(ctx){
       </div><p class="hint">O número do contrato é gerado automaticamente pelo Provedor Plus e não pode ser alterado no cadastro.</p></fieldset>
       <fieldset class="form-section span-2"><legend>Endereço</legend><div class="form-grid inner-grid">
         ${field('CEP','zip_code',item.zip_code||item.cep,'text','inputmode="numeric" maxlength="9" autocomplete="postal-code"')}${field('Endereço','address',item.address||item.street)}${field('Número','address_number',item.address_number)}${field('Bairro','neighborhood',item.neighborhood)}${field('Complemento','complement',item.complement)}${field('Cidade','city',item.city)}${field('UF','state',item.state,'text','maxlength="2"')}
-      </div></fieldset>
+      </div><p class="hint" data-client-cep-status></p></fieldset>
       <fieldset class="form-section span-2"><legend>Plano e cobrança</legend><div class="form-grid inner-grid">
         ${selectField('Plano','plan_id',planOpts)}${field('Dia do vencimento','due_day',item.due_day||10,'number','min="1" max="31"')}
         ${selectField('Status','status',['Ativo','Em atraso','Bloqueado','Suspenso','Cancelado'].map((v)=>option(v,v,item.status||'Ativo')).join(''))}

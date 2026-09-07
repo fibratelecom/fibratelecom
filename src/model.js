@@ -63,6 +63,8 @@ export function paymentGroup(invoice = {}) {
   if (/pix/.test(source)) return 'pix';
   if (/boleto|ticket|carnet|carne|billet/.test(source)) return 'boleto';
   if (/cashback/.test(source)) return 'cashback';
+  if (text(invoice?.bank_pix_code) || text(invoice?.pix_copy_paste)) return 'pix';
+  if (text(invoice?.bank_barcode) || text(invoice?.bank_digitable_line) || text(invoice?.bank_ticket_url) || text(invoice?.bank_pdf_url)) return 'boleto';
   return 'other';
 }
 

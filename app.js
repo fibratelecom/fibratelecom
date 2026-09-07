@@ -1,4 +1,4 @@
-const BUILD = '20260907-submit-native2';
+const BUILD = '20260907-submit-native3';
 const root = document.querySelector('#app');
 let lastValidationToastAt = 0;
 
@@ -40,31 +40,30 @@ root?.addEventListener('invalid', (event) => {
   showRuntimeError(new Error(`${fieldName ? `${fieldName}: ` : ''}${nativeMessage || 'preencha este campo corretamente antes de salvar.'}`));
 }, true);
 
-// Encaminha o clique usando o submit nativo do navegador. A regra de negócio
-// continua sendo executada exclusivamente pelo único handler submit do src/ui.js.
+// Observa os botões sem interferir no submit nativo. A execução da regra de negócio
+// continua exclusivamente no único handler submit do src/ui.js.
 root?.addEventListener('click', (event) => {
   const button = event.target.closest?.('button[type="submit"]');
-  const form = button?.form;
   if (!button) return;
+  const form = button.form;
   if (!form) {
-    event.preventDefault();
     showRuntimeError(new Error('Este botão não está vinculado ao formulário. Recarregue a página.'));
     return;
   }
-  event.preventDefault();
   const original = button.textContent;
   button.textContent = 'Processando…';
-  showRuntimeMessage('Ação recebida. Processando…', 'success');
-  try {
-    form.requestSubmit(button);
-  } catch (error) {
-    button.textContent = original;
-    showRuntimeError(error);
-    return;
-  }
+  showRuntimeMessage(`Clique recebido · ${form.id || 'formulário'}`, 'success');
   setTimeout(() => {
     if (button.isConnected && button.textContent === 'Processando…') button.textContent = original;
   }, 12000);
+}, true);
+
+// Este observador roda antes do controlador e comprova que a validação nativa liberou
+// a submissão. Não cancela nem altera o evento.
+root?.addEventListener('submit', (event) => {
+  const form = event.target instanceof HTMLFormElement ? event.target : null;
+  if (!form) return;
+  showRuntimeMessage(`Enviando · ${form.id || 'formulário'}`, 'success');
 }, true);
 
 async function refreshPanelModules() {

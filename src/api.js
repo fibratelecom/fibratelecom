@@ -34,6 +34,7 @@ export const authApi = Object.freeze({
   setup: (name, login, password) => request('/api/auth', 'setup', { name, login, password }),
   logout: () => request('/api/auth', 'logout'),
   employees: () => request('/api/auth', 'employees.list'),
+  employeesAvailable: () => request('/api/auth', 'employees.available'),
   employeeSave: (data) => request('/api/auth', 'employees.save', data),
   employeeToggle: (id, active) => request('/api/auth', 'employees.toggle', { id, active }),
   employeeDelete: (id) => request('/api/auth', 'employees.delete', { id }),

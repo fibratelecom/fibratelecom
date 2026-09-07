@@ -58,6 +58,7 @@ export const dataApi = Object.freeze({
   cashbackWallet: (clientId) => request('/api/cloud-data', 'cashback.wallet.get', { clientId }),
   cashbackAdjust: (data) => request('/api/cloud-data', 'cashback.wallet.adjust', data),
   trafficRecord: (clientId, live, month = '') => request('/api/cloud-data', 'traffic.record', { clientId, live, month }),
+  billingRun: () => request('/api/cloud-data', 'billing.run'),
 });
 
 export const bankApi = Object.freeze({

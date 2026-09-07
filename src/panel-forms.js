@@ -4,11 +4,16 @@ import { attr, checkbox, field, formMoney, option, PERMISSIONS, selectField, tex
 export function createForms(ctx){
   const {state,clients,routers,data,byPlan,bankSafe,employees}=ctx;
   const activeStaff=(employees||[]).filter((x)=>x.active!==false);
+  const efiReady=Boolean(bankSafe?.efi?.enabled&&bankSafe?.efi?.clientIdConfigured&&bankSafe?.efi?.clientSecretConfigured);
+  const today=()=>new Date().toISOString().slice(0,10);
+  const futureDate=(days=7)=>{const d=new Date();d.setDate(d.getDate()+days);return d.toISOString().slice(0,10)};
 
   function clientForm(item={}){
     const planOpts=`<option value="">Sem plano</option>${data.plans.map((p)=>option(p.id,`${p.name} · ${money(p.price_cents,true)}`,item.plan_id)).join('')}`;
     const routerOpts=`<option value="">Sem MikroTik</option>${routers.map((r)=>option(r.id,r.name||r.host,item.router_id)).join('')}`;
-    const contract=item.contract_number||nextContract(clients);
+    const contract=item.contract_number||nextContract(clients),billingMode=text(item.billing_mode)||'boleto',pixStatus=text(item.pix_auto_status)||'Não configurado';
+    const billingOptions=`${option('boleto','Boleto bancário',billingMode)}${option('pix_due','Pix com vencimento — Efí',billingMode)}${option('pix_auto','Pix Automático — Efí',billingMode)}`;
+    const efiOperations=item.id?`<fieldset class="form-section span-2"><legend>Efí — recorrência e carnê</legend><div class="form-actions"><button class="btn secondary" type="button" data-action="client-pix-auto" data-id="${attr(item.id)}" ${efiReady?'':'disabled'}>Pix Automático</button><button class="btn secondary" type="button" data-action="client-carnet" data-id="${attr(item.id)}" ${efiReady?'':'disabled'}>Gerar carnê</button></div><p class="hint">Pix Automático: <strong>${attr(pixStatus)}</strong>. ${efiReady?'Efí pronta para estas operações.':'Configure e ative a Efí Bank para liberar estas operações.'}</p></fieldset>`:'';
     return `<form id="client-form" class="form-grid">
       <input type="hidden" name="id" value="${attr(item.id||'')}">
       <fieldset class="form-section span-2"><legend>Identificação e contrato</legend><div class="form-grid inner-grid">
@@ -25,9 +30,11 @@ export function createForms(ctx){
         ${selectField('Plano','plan_id',planOpts)}${field('Dia do vencimento','due_day',item.due_day||10,'number','min="1" max="31"')}
         ${selectField('Status','status',['Ativo','Em atraso','Bloqueado','Suspenso','Cancelado'].map((v)=>option(v,v,item.status||'Ativo')).join(''))}
         ${selectField('Banco preferencial','billing_bank_provider',`<option value="">Padrão do sistema</option>${option('efi','Efí Bank',item.billing_bank_provider)}${option('mercadoPago','Mercado Pago',item.billing_bank_provider)}`)}
+        ${selectField('Cobrança automática','billing_mode',billingOptions)}
         <label class="check"><input type="checkbox" name="auto_block" ${checkbox(item.auto_block)?'checked':''}>Bloqueio automático por atraso</label>
         ${field('Dias para bloquear','block_after_days',item.block_after_days||7,'number','min="1" max="90"')}
-      </div></fieldset>
+      </div><p class="hint">Pix com vencimento e Pix Automático usam exclusivamente a Efí. No Pix Automático, a recorrência precisa estar APROVADA antes da cobrança mensal automática.</p></fieldset>
+      ${efiOperations}
       <fieldset class="form-section span-2"><legend>Acesso PPPoE / MikroTik</legend><div class="form-grid inner-grid">
         ${selectField('MikroTik','router_id',routerOpts)}${selectField('Tipo de conexão','connection_type',['PPPoE','IPoE','Estático'].map((v)=>option(v,v,item.connection_type||'PPPoE')).join(''))}
         ${field('Usuário PPPoE','pppoe_username',item.pppoe_username||item.pppoe_user)}${field('Senha PPPoE','pppoe_password','','password','placeholder="Informe para criar ou trocar; vazio mantém a atual"')}
@@ -36,6 +43,29 @@ export function createForms(ctx){
       </div><p class="hint">Ao salvar um cliente PPPoE com MikroTik e usuário configurados, o Provedor Plus sincroniza o acesso real no MikroTik. Se o acesso já existir, ele é atualizado.</p></fieldset>
       ${textareaField('Observações','notes',item.notes)}
       <div class="form-actions span-2">${item.id?'<button class="btn danger" type="button" data-action="delete-client" data-id="'+attr(item.id)+'">Excluir cliente</button>':''}<span class="form-spacer"></span><button class="btn secondary" type="button" data-action="close-modal">Cancelar</button><button class="btn primary" type="submit">Salvar e sincronizar</button></div>
+    </form>`;
+  }
+
+  function pixAutoForm(item={}){
+    const p=byPlan(item.plan_id),amount=item.pix_auto_amount_cents||p?.price_cents||0,status=text(item.pix_auto_status)||'Não configurado';
+    return `<form id="pix-auto-form" class="form-grid"><input type="hidden" name="client_id" value="${attr(item.id||'')}">
+      ${field('Cliente','client_name',item.name,'text','readonly')}${field('Status atual','current_status',status,'text','readonly')}
+      ${field('Início da recorrência','start_date',text(item.pix_auto_start_date).slice(0,10)||today(),'date','required')}${field('Fim da recorrência','end_date',text(item.pix_auto_end_date).slice(0,10),'date')}
+      ${field('Valor mensal (R$)','amount',formMoney(amount),'text','required inputmode="decimal"')}${field('ID da recorrência Efí','id_rec',item.pix_auto_id_rec||'','text','readonly')}
+      ${item.pix_auto_qr?textareaField('PIX copia e cola da autorização','authorization_pix',item.pix_auto_qr,'readonly'):''}
+      <p class="hint span-2">A Efí cria uma autorização mensal. Depois que o cliente aprovar o Pix, use “Consultar aprovação”. A cobrança automática só usa a recorrência quando o status retornar APROVADA.</p>
+      <div class="form-actions span-2">${item.pix_auto_id_rec?`<button class="btn secondary" type="button" data-action="refresh-pix-auto" data-id="${attr(item.id)}">Consultar aprovação</button>`:''}<span class="form-spacer"></span><button class="btn secondary" type="button" data-action="close-modal">Cancelar</button><button class="btn primary" type="submit">${item.pix_auto_id_rec?'Criar nova autorização':'Criar autorização'}</button></div>
+    </form>`;
+  }
+
+  function carnetForm(item={}){
+    const p=byPlan(item.plan_id),amount=p?.price_cents||0;
+    return `<form id="carnet-form" class="form-grid"><input type="hidden" name="client_id" value="${attr(item.id||'')}">
+      ${field('Cliente','client_name',item.name,'text','readonly')}${field('Contrato','contract_number',item.contract_number||'','text','readonly')}
+      ${field('Quantidade de parcelas','installments',6,'number','required min="2" max="24"')}${field('Primeiro vencimento','first_due',futureDate(7),'date','required')}
+      ${field('Valor de cada parcela (R$)','amount',formMoney(amount),'text','required inputmode="decimal"')}${field('Descrição','description',`Mensalidades · ${item.name||''}`,'text','required')}
+      <p class="hint span-2">O carnê é emitido pela Efí e cada parcela fica registrada nas Mensalidades com o mesmo grupo. Parcelas já existentes no mesmo vencimento impedem a emissão para evitar duplicidade.</p>
+      <div class="form-actions span-2"><button class="btn secondary" type="button" data-action="close-modal">Cancelar</button><button class="btn primary" type="submit">Gerar carnê Efí</button></div>
     </form>`;
   }
 
@@ -57,7 +87,7 @@ export function createForms(ctx){
     return `<form id="invoice-form" class="form-grid"><input type="hidden" name="id" value="${attr(item.id||'')}">
       ${selectField('Cliente','client_id',clientOpts,'required')}${field('Vencimento','due_date',text(item.due_date).slice(0,10),'date','required')}
       ${field('Valor','amount',formMoney(invoiceCents(item)),'text','required inputmode="decimal"')}${field('Referência','reference',item.reference||item.competency||'','text','placeholder="2026-09"')}
-      ${selectField('Tipo','billing_type',['Mensalidade','Primeira mensalidade proporcional','Pix com vencimento','Boleto','Ajuste','Renegociação'].map((v)=>option(v,v,item.billing_type||'Mensalidade')).join(''))}
+      ${selectField('Tipo','billing_type',['Mensalidade','Primeira mensalidade proporcional','Pix com vencimento','Pix Automático','Boleto','Ajuste','Renegociação'].map((v)=>option(v,v,item.billing_type||'Mensalidade')).join(''))}
       ${selectField('Banco emissor','bank_provider',`<option value="">Padrão do sistema</option>${option('efi','Efí Bank',item.bank_provider)}${option('mercadoPago','Mercado Pago',item.bank_provider)}`)}
       ${selectField('Status','status',['Pendente','Agendada','Vencida','Pago','Cancelado'].map((v)=>option(v,v,item.status||'Pendente')).join(''))}
       <label class="check"><input type="checkbox" name="discount_until_due" ${checkbox(item.discount_until_due)?'checked':''}>Desconto se pagar até o vencimento</label>
@@ -95,5 +125,5 @@ export function createForms(ctx){
   function efiForm(){const e=bankSafe.efi||{},configured=Boolean(e.clientIdConfigured||e.clientSecretConfigured||e.certificateConfigured||e.pixKey);return `<form id="efi-form" class="form-grid"><label class="check span-2"><input type="checkbox" name="enabled" ${e.enabled?'checked':''}>Ativar Efí</label>${selectField('Ambiente','environment',`${option('production','Produção',e.environment)}${option('sandbox','Homologação',e.environment)}`)}${field('Client ID','clientId','','text',`placeholder="${e.clientIdConfigured?'Configurado — deixe vazio para manter':'Informe o Client ID'}"`)}${field('Client Secret','clientSecret','','password',`placeholder="${e.clientSecretConfigured?'Configurado — deixe vazio para manter':'Informe o Client Secret'}"`)}${field('Senha do certificado','certificatePassword','','password',`placeholder="${e.certificatePasswordConfigured?'Configurada — deixe vazio para manter':'Senha do P12/PFX'}"`)}<label>Certificado P12/PFX<input name="certificate" type="file" accept=".p12,.pfx,application/x-pkcs12"></label>${field('Chave PIX','pixKey',e.pixKey)}${field('Agência recebedora','pixAutoReceiverAgency',e.pixAutoReceiverAgency)}${field('Conta recebedora','pixAutoReceiverAccount',e.pixAutoReceiverAccount)}${field('Webhook URL','webhookUrl',e.webhookUrl,'url')}<div class="form-actions span-2">${configured?'<button class="btn danger" type="button" data-action="delete-efi">Remover integração</button>':''}<span class="form-spacer"></span><button class="btn secondary" type="button" data-action="close-modal">Cancelar</button><button class="btn primary" type="submit">Salvar Efí</button></div></form>`;}
   function mpForm(){const m=bankSafe.mercadoPago||{},configured=Boolean(m.accessTokenConfigured||m.publicKey||m.webhookSecretConfigured);return `<form id="mp-form" class="form-grid"><label class="check span-2"><input type="checkbox" name="enabled" ${m.enabled?'checked':''}>Ativar Mercado Pago</label>${selectField('Ambiente','environment',`${option('production','Produção',m.environment)}${option('sandbox','Teste',m.environment)}`)}${field('Public Key','publicKey',m.publicKey||'')}${field('Access Token','accessToken','','password',`placeholder="${m.accessTokenConfigured?'Configurado — deixe vazio para manter':'Informe o Access Token'}"`)}${field('Chave secreta do Webhook','webhookSecret','','password',`placeholder="${m.webhookSecretConfigured?'Configurada — deixe vazio para manter':'Informe se já possuir'}"`)}<div class="form-actions span-2">${configured?'<button class="btn danger" type="button" data-action="delete-mp">Remover integração</button>':''}<span class="form-spacer"></span><button class="btn secondary" type="button" data-action="close-modal">Cancelar</button><button class="btn primary" type="submit">Salvar Mercado Pago</button></div></form>`;}
 
-  return {clientForm,planForm,invoiceForm,manualPaymentForm,cashbackRulesForm,cashbackAdjustForm,routerForm,protocolForm,employeeForm,storyForm,efiForm,mpForm};
+  return {clientForm,pixAutoForm,carnetForm,planForm,invoiceForm,manualPaymentForm,cashbackRulesForm,cashbackAdjustForm,routerForm,protocolForm,employeeForm,storyForm,efiForm,mpForm};
 }

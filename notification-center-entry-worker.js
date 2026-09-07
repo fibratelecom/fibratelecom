@@ -164,7 +164,7 @@ async function stateMutationRequest(request,path){
   let body={};try{body=await request.clone().json()}catch{return false}
   const action=text(body?.action);
   if(path==='/api/cloud-state')return action==='state.save';
-  if(path==='/api/cloud-data')return action==='cashback.wallet.adjust';
+  if(path==='/api/cloud-data')return action==='cashback.wallet.adjust'||action==='negotiation.support.create';
   if(path==='/api/bank-settings')return action==='save-default';
   if(path==='/api/customer-trust-release')return action==='release';
   if(path==='/api/customer-due-date')return action==='change';
@@ -256,7 +256,7 @@ async function requireAdmin(request,env,ctx){
 async function portalKey(env){const secret=text(env.PORTAL_SESSION_SECRET)||text(env.DATABASE_URL);if(!secret)throw Object.assign(new Error('Sessão segura do portal não configurada.'),{statusCode:503});return crypto.subtle.importKey('raw',enc.encode(secret),{name:'HMAC',hash:'SHA-256'},false,['verify'])}
 async function verifySession(token,env){
   const parts=text(token).split('.');if(parts.length!==2)throw Object.assign(new Error('Sessão do cliente inválida. Entre novamente.'),{statusCode:401});
-  try{const key=await portalKey(env),ok=await crypto.subtle.verify('HMAC',key,base64UrlBytes(parts[1]),enc.encode(parts[0]));if(!ok)throw new Error('assinatura');const payload=JSON.parse(new TextDecoder().decode(base64UrlBytes(parts[0]))),clientId=Number(payload?.clientId)||0,exp=Number(payload?.exp)||0;if(!clientId||exp<=Date.now())throw new Error('expirada');return {clientId}}catch{throw Object.assign(new Error('Sessão do cliente expirada ou inválida. Entre novamente.'),{statusCode:401})}
+  try{const key=await portalKey(env),ok=await crypto.subtle.verify('HMAC',key,base64UrlBytes(parts[1]),enc.encode(parts[0]));if(!ok)throw new Error('assinatura');const payload=JSON.parse(new TextDecoder().decode(base64UrlBytes(parts[0]))),clientId=Number(payload?.clientId)||0,exp=Number(payload?.exp)||0;if(!clientId||exp<=Date.now())throw new Error('expirada');return {clientId}}catch{throw Object.assign(new Error('Sessão do cliente expirada ou inválida. Entre novamente.'),{statusCode:401})}}
 }
 
 async function pushCryptoKey(env){const secret=text(env.BANK_SECRET_KEY)||text(env.PORTAL_SESSION_SECRET)||text(env.DATABASE_URL);if(!secret)throw new Error('Chave de proteção das notificações não configurada.');const raw=await crypto.subtle.digest('SHA-256',enc.encode(`provedor-plus-push-v1|${secret}`));return crypto.subtle.importKey('raw',raw,{name:'AES-GCM'},false,['decrypt'])}
@@ -273,7 +273,7 @@ async function sendOne(sql,row,vapid,payload){
 async function sendRows(sql,rows,vapid,payload){let sent=0,failed=0;for(let start=0;start<rows.length;start+=10){const results=await Promise.all(rows.slice(start,start+10).map(row=>sendOne(sql,row,vapid,payload)));for(const result of results)result.ok?sent++:failed++}return {sent,failed,total:rows.length}}
 
 function localClient(state,clientId){return (Array.isArray(state?.clients)?state.clients:[]).find(row=>Number(row?.id)===Number(clientId))||{}}
-function planName(state,client,local){const direct=text(client?.plan||local?.plan);if(direct)return direct;const id=Number(client?.plan_id||local?.plan_id)||0,plan=(Array.isArray(state?.plans)?state.plans:[]).find(row=>Number(row?.id)===id);return text(plan?.name)||'não disponível'}
+function planName(state,client,local){const direct=text(client?.plan||local?.plan);if(direct)return direct;const id=Number(client?.plan_id||local?.plan_id)||0,plan=(Array.isArray(state?.plans)?state.plans:[]).find(row=>id&&Number(row?.id)===id);return text(plan?.name)||'não disponível'}
 function nextInvoice(state,clientId){return (Array.isArray(state?.invoices)?state.invoices:[]).filter(row=>Number(row?.client_id)===Number(clientId)&&invoiceOpen(row)&&row?.bank_issue_deferred!==true).sort((a,b)=>text(a?.due_date||a?.dueDate).localeCompare(text(b?.due_date||b?.dueDate)))[0]||null}
 function cashbackBalance(local){const cents=Number(local?.cashback_balance_cents);if(Number.isFinite(cents))return Math.max(0,Math.round(cents));const amount=Number(local?.cashback_balance);return Number.isFinite(amount)?Math.max(0,Math.round(amount*100)):0}
 function variableContext(state,client){

@@ -1,5 +1,5 @@
 # Provedor Plus — Cloudflare Worker de produção
-# build: 20260907-invoice-save2
+# build: 20260907-auditoria-salvamento1
 name = "painel"
 main = "notification-center-entry-worker.js"
 compatibility_date = "2026-08-30"

@@ -30,6 +30,18 @@ async function saveState(sql,state){
   return updatedAt;
 }
 
+async function requireBillingPanelUser(request,env){
+  const headers=new Headers(request.headers);headers.set('Content-Type','application/json');
+  const internal=new Request(new URL('/api/auth',request.url),{method:'POST',headers,body:JSON.stringify({action:'status',data:{}})}),response=await baseWorker.fetch(internal,env,{});let body={};
+  try{body=await response.json()}catch{}
+  if(!response.ok||!body?.ok||body?.data?.authenticated!==true)throw Object.assign(new Error('Sessão expirada ou não autenticada.'),{statusCode:401});
+  const user=body.data.user||{},role=text(user.role).toLowerCase(),permissions=Array.isArray(user.permissions)?user.permissions.map(text):[];
+  if(role!=='admin'&&!permissions.includes('billing'))throw Object.assign(new Error('Seu usuário não possui permissão para gerar mensalidades.'),{statusCode:403});
+  return user;
+}
+
+function billingJson(data,status=200){return new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store, max-age=0','x-provedor-plus-edge':'cloudflare-billing'}})}
+
 function bankB64Bytes(value){
   const binary=atob(text(value)),out=new Uint8Array(binary.length);
   for(let i=0;i<binary.length;i++)out[i]=binary.charCodeAt(i);
@@ -196,13 +208,13 @@ async function issueAndSave(env,sql,state,invoice,client,vault,isExisting){
   }
 }
 
-async function runBillingCron(env){
+async function runBillingCron(env,{force=false}={}){
   if(!env.DATABASE_URL)throw new Error('DATABASE_URL não configurada para a geração automática.');
   const sql=neon(env.DATABASE_URL),state=await loadState(sql);state.settings={...(state.settings||{})};
   const enabled=state.settings.billing_auto_enabled!==false&&String(state.settings.billing_auto_enabled)!=='false';
-  if(!enabled)return {enabled:false,generated:0,issued:0,failed:0};
+  if(!enabled&&!force)return {enabled:false,generated:0,issued:0,skipped:0,failed:0,errors:[]};
   const todayParts=brazilParts(),today=keyFromParts(todayParts.year,todayParts.month,todayParts.day),daysBefore=Math.max(1,Math.min(30,Math.floor(num(state.settings.billing_auto_days_before)||7)));
-  if(text(state.settings.billing_cloudflare_last_run)===today)return {alreadyRan:true,date:today};
+  if(!force&&text(state.settings.billing_cloudflare_last_run)===today)return {alreadyRan:true,date:today,generated:0,issued:0,skipped:0,failed:0,errors:[]};
   const vault=await readBankSettings(env,sql),rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code FROM pp_clients ORDER BY id ASC`;
   let generated=0,issued=0,skipped=0,failed=0;const errors=[];
   for(const remote of Array.isArray(rows)?rows:[]){
@@ -228,18 +240,28 @@ async function runBillingCron(env){
       issued++;if(!existing)generated++;
     }catch(error){failed++;errors.push(`${client.name||client.id}: ${error instanceof Error?error.message:String(error)}`)}
   }
-  state.settings.billing_auto_enabled=true;
+  state.settings.billing_auto_enabled=enabled;
   state.settings.billing_auto_days_before=daysBefore;
-  state.settings.billing_auto_last_run=today;
-  state.settings.billing_cloudflare_last_run=today;
-  state.settings.billing_cloudflare_last_result={generated,issued,skipped,failed,at:new Date().toISOString(),errors:errors.slice(0,50)};
+  const result={generated,issued,skipped,failed,at:new Date().toISOString(),errors:errors.slice(0,50)};
+  if(force){state.settings.billing_manual_last_run=today;state.settings.billing_manual_last_result=result}
+  else{state.settings.billing_auto_last_run=today;state.settings.billing_cloudflare_last_run=today;state.settings.billing_cloudflare_last_result=result}
   await saveState(sql,state);
-  return {date:today,generated,issued,skipped,failed,errors};
+  return {date:today,manual:force,enabled,generated,issued,skipped,failed,errors};
 }
 
 export { runBillingCron };
 
 export default {
-  fetch(request,env,ctx){return baseWorker.fetch(request,env,ctx)},
+  async fetch(request,env,ctx){
+    const url=new URL(request.url);
+    if(request.method==='POST'&&url.pathname==='/api/cloud-data'){
+      let body={};try{body=await request.clone().json()}catch{}
+      if(text(body?.action)==='billing.run'){
+        try{await requireBillingPanelUser(request,env);return billingJson({ok:true,data:await runBillingCron(env,{force:true})})}
+        catch(error){return billingJson({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500)}
+      }
+    }
+    return baseWorker.fetch(request,env,ctx);
+  },
   scheduled(controller,env,ctx){ctx.waitUntil(runBillingCron(env).catch(error=>console.error('Provedor Plus: falha no cron de mensalidades.',error)))}
 };

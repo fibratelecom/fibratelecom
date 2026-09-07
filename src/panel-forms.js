@@ -7,11 +7,25 @@ export function createForms(ctx){
   const efiReady=Boolean(bankSafe?.efi?.enabled&&bankSafe?.efi?.clientIdConfigured&&bankSafe?.efi?.clientSecretConfigured);
   const today=()=>new Date().toISOString().slice(0,10);
   const futureDate=(days=7)=>{const d=new Date();d.setDate(d.getDate()+days);return d.toISOString().slice(0,10)};
+  function nextClientIp(items=[]){
+    const groups=new Map();
+    for(const client of items||[]){
+      const parts=text(client?.ip).split('.'),nums=parts.map(Number);
+      if(parts.length!==4||nums.some((n,i)=>!Number.isInteger(n)||n<0||n>255||(i===3&&(n===0||n===255))))continue;
+      const prefix=nums.slice(0,3).join('.'),hosts=groups.get(prefix)||[];hosts.push(nums[3]);groups.set(prefix,hosts);
+    }
+    if(!groups.size)return '';
+    const [prefix,hosts]=[...groups.entries()].sort((a,b)=>b[1].length-a[1].length||Math.max(...b[1])-Math.max(...a[1]))[0],used=new Set(hosts),max=Math.max(...hosts);
+    if(max<254&&!used.has(max+1))return `${prefix}.${max+1}`;
+    for(let host=2;host<=254;host+=1)if(!used.has(host))return `${prefix}.${host}`;
+    return '';
+  }
 
   function clientForm(item={}){
     const planOpts=`<option value="">Sem plano</option>${data.plans.map((p)=>option(p.id,`${p.name} · ${money(p.price_cents,true)}`,item.plan_id)).join('')}`;
     const routerOpts=`<option value="">Sem MikroTik</option>${routers.map((r)=>option(r.id,r.name||r.host,item.router_id)).join('')}`;
     const contract=item.contract_number||nextContract(clients),billingMode=text(item.billing_mode)||'boleto',pixStatus=text(item.pix_auto_status)||'Não configurado';
+    const fixedIp=text(item.ip)||(!item.id?nextClientIp(clients):''),deviceIp=text(item.device_ip)||fixedIp,mikrotikProfile=text(item.mikrotik_profile)||text(byPlan(item.plan_id)?.mikrotik_profile)||'default';
     const billingOptions=`${option('boleto','Boleto bancário',billingMode)}${option('pix_due','Pix com vencimento — Efí',billingMode)}${option('pix_auto','Pix Automático — Efí',billingMode)}`;
     const efiOperations=item.id?`<fieldset class="form-section span-2"><legend>Efí — recorrência e carnê</legend><div class="form-actions"><button class="btn secondary" type="button" data-action="client-pix-auto" data-id="${attr(item.id)}" ${efiReady?'':'disabled'}>Pix Automático</button><button class="btn secondary" type="button" data-action="client-carnet" data-id="${attr(item.id)}" ${efiReady?'':'disabled'}>Gerar carnê</button></div><p class="hint">Pix Automático: <strong>${attr(pixStatus)}</strong>. ${efiReady?'Efí pronta para estas operações.':'Configure e ative a Efí Bank para liberar estas operações.'}</p></fieldset>`:'';
     return `<form id="client-form" class="form-grid">
@@ -19,12 +33,12 @@ export function createForms(ctx){
       <fieldset class="form-section span-2"><legend>Identificação e contrato</legend><div class="form-grid inner-grid">
         ${field('Nome completo / Razão social','name',item.name,'text','required')}
         ${field('CPF/CNPJ','document',item.document,'text','inputmode="numeric"')}
-        ${field('Contrato','contract_number',contract,'text','required')}
+        ${field('Contrato','contract_number',contract,'text','required readonly aria-readonly="true"')}
         ${field('Data de instalação','installation_date',text(item.installation_date||item.activation_date).slice(0,10),'date')}
         ${field('E-mail','email',item.email,'email')}${field('Telefone / WhatsApp','phone',item.phone)}
-      </div></fieldset>
+      </div><p class="hint">O número do contrato é gerado automaticamente pelo Provedor Plus e não pode ser alterado no cadastro.</p></fieldset>
       <fieldset class="form-section span-2"><legend>Endereço</legend><div class="form-grid inner-grid">
-        ${field('CEP','zip_code',item.zip_code||item.cep)}${field('Endereço','address',item.address||item.street)}${field('Número','address_number',item.address_number)}${field('Bairro','neighborhood',item.neighborhood)}${field('Complemento','complement',item.complement)}${field('Cidade','city',item.city)}${field('UF','state',item.state,'text','maxlength="2"')}
+        ${field('CEP','zip_code',item.zip_code||item.cep,'text','inputmode="numeric" maxlength="9" autocomplete="postal-code"')}${field('Endereço','address',item.address||item.street)}${field('Número','address_number',item.address_number)}${field('Bairro','neighborhood',item.neighborhood)}${field('Complemento','complement',item.complement)}${field('Cidade','city',item.city)}${field('UF','state',item.state,'text','maxlength="2"')}
       </div></fieldset>
       <fieldset class="form-section span-2"><legend>Plano e cobrança</legend><div class="form-grid inner-grid">
         ${selectField('Plano','plan_id',planOpts)}${field('Dia do vencimento','due_day',item.due_day||10,'number','min="1" max="31"')}
@@ -38,9 +52,9 @@ export function createForms(ctx){
       <fieldset class="form-section span-2"><legend>Acesso PPPoE / MikroTik</legend><div class="form-grid inner-grid">
         ${selectField('MikroTik','router_id',routerOpts)}${selectField('Tipo de conexão','connection_type',['PPPoE','IPoE','Estático'].map((v)=>option(v,v,item.connection_type||'PPPoE')).join(''))}
         ${field('Usuário PPPoE','pppoe_username',item.pppoe_username||item.pppoe_user)}${field('Senha PPPoE','pppoe_password','','password','placeholder="Informe para criar ou trocar; vazio mantém a atual"')}
-        ${field('Perfil MikroTik','mikrotik_profile',item.mikrotik_profile||byPlan(item.plan_id)?.mikrotik_profile||'default')}${field('IP fixo / remoto','ip',item.ip)}${field('MAC / Caller-ID','mac_address',item.mac_address)}
-        ${field('IP do roteador/ONU do cliente','device_ip',item.device_ip)}${field('Porta do roteador/ONU','device_port',item.device_port||'','number','min="1" max="65535"')}
-      </div><p class="hint">Ao salvar um cliente PPPoE com MikroTik e usuário configurados, o Provedor Plus sincroniza o acesso real no MikroTik. Se o acesso já existir, ele é atualizado.</p></fieldset>
+        ${field('Perfil MikroTik','mikrotik_profile',mikrotikProfile,'text','readonly aria-readonly="true"')}${field('IP fixo / remoto','ip',fixedIp,'text',`${item.id?'':'required '}inputmode="decimal" autocomplete="off" spellcheck="false"`)}${field('MAC / Caller-ID','mac_address',item.mac_address)}
+        ${field('IP do roteador/ONU do cliente','device_ip',deviceIp,'text','readonly aria-readonly="true"')}${field('Porta do roteador/ONU','device_port',item.device_port||'','number','min="1" max="65535"')}
+      </div><p class="hint">O Perfil MikroTik segue o plano selecionado. O IP do roteador/ONU acompanha automaticamente o IP fixo/remoto. Ao salvar um cliente PPPoE configurado, o Provedor Plus sincroniza o acesso real no MikroTik.</p></fieldset>
       ${textareaField('Observações','notes',item.notes)}
       <div class="form-actions span-2">${item.id?'<button class="btn danger" type="button" data-action="delete-client" data-id="'+attr(item.id)+'">Excluir cliente</button>':''}<span class="form-spacer"></span><button class="btn secondary" type="button" data-action="close-modal">Cancelar</button><button class="btn primary" type="submit">Salvar e sincronizar</button></div>
     </form>`;
@@ -59,7 +73,7 @@ export function createForms(ctx){
   }
 
   function carnetForm(item={}){
-    const p=byPlan(item.plan_id),amount=p?.price_cents||0;
+    const p=byPlan(item.plan_id),amount=item.pix_auto_amount_cents||p?.price_cents||0;
     return `<form id="carnet-form" class="form-grid"><input type="hidden" name="client_id" value="${attr(item.id||'')}">
       ${field('Cliente','client_name',item.name,'text','readonly')}${field('Contrato','contract_number',item.contract_number||'','text','readonly')}
       ${field('Quantidade de parcelas','installments',6,'number','required min="2" max="24"')}${field('Primeiro vencimento','first_due',futureDate(7),'date','required')}

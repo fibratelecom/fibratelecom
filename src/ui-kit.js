@@ -18,7 +18,23 @@ export const esc=(value)=>String(value??'').replace(/[&<>"']/g,(c)=>({'&':'&amp;
 export const attr=esc;
 export const status=(value)=>`<span class="status ${statusKind(value)}"><i></i>${esc(text(value)||'—')}</span>`;
 export const formMoney=(cents)=>(Math.max(0,Number(cents)||0)/100).toFixed(2).replace('.',',');
-export const moneyToCents=(value)=>Math.max(0,Math.round(Number(String(value??'').replace(/\./g,'').replace(',','.'))*100)||0);
+export function moneyToCents(value){
+  let raw=String(value??'').trim().replace(/\s/g,'').replace(/^R\$/i,'').replace(/[^\d,.-]/g,'');
+  if(!raw||raw.startsWith('-'))return 0;
+  raw=raw.replace(/-/g,'');
+  const comma=raw.lastIndexOf(','),dot=raw.lastIndexOf('.');
+  let normalized=raw;
+  if(comma>=0&&dot>=0){
+    const decimal=comma>dot?',':'.',thousand=decimal===','?'.':',';
+    normalized=raw.split(thousand).join('').replace(decimal,'.');
+  }else if(comma>=0||dot>=0){
+    const separator=comma>=0?',':'.',index=raw.lastIndexOf(separator),decimalDigits=raw.length-index-1;
+    if(decimalDigits>=1&&decimalDigits<=2)normalized=raw.slice(0,index).split(separator).join('')+'.'+raw.slice(index+1);
+    else normalized=raw.split(separator).join('');
+  }
+  const amount=Number(normalized);
+  return Number.isFinite(amount)&&amount>0?Math.round(amount*100):0;
+}
 export const checkbox=(value)=>value===true||String(value).toLowerCase()==='true';
 export const option=(value,label,selected)=>`<option value="${attr(value)}"${String(value)===String(selected)?' selected':''}>${esc(label)}</option>`;
 export function empty(title,message){return `<div class="empty"><span>○</span><strong>${esc(title)}</strong><p>${esc(message)}</p></div>`;}

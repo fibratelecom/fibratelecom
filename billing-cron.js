@@ -63,7 +63,7 @@ function daysInMonth(year,month){return new Date(Date.UTC(year,month,0,12)).getU
 function dueKey(year,month,dueDay){const day=Math.max(1,Math.min(daysInMonth(year,month),Math.floor(num(dueDay)||10)));return keyFromParts(year,month,day)}
 function addMonthsDue(value,months,dueDay){const date=dateFromKey(value);if(!date)return '';const target=new Date(Date.UTC(date.getUTCFullYear(),date.getUTCMonth()+Number(months||0),1,12));return dueKey(target.getUTCFullYear(),target.getUTCMonth()+1,dueDay)}
 function daysBetween(fromKey,toKey){const a=dateFromKey(fromKey),b=dateFromKey(toKey);return a&&b?Math.round((b-a)/DAY):9999}
-function activeClient(client){return !/bloqueado|cancelado|inativo|suspenso/i.test(text(client?.status))}
+function activeClient(client){return !/cancelado|inativo|suspenso/i.test(text(client?.status))}
 function planFor(client,state){return (Array.isArray(state?.plans)?state.plans:[]).find(plan=>Number(plan?.id)===Number(client?.plan_id))||null}
 function invoiceActive(row){return !['cancelado','canceled'].includes(normalize(row?.status))}
 function invoiceForDue(state,clientId,dueDate){return (Array.isArray(state?.invoices)?state.invoices:[]).find(row=>Number(row?.client_id)===Number(clientId)&&text(row?.due_date).slice(0,10)===dueDate&&invoiceActive(row))||null}

@@ -1,7 +1,9 @@
+import { dataApi, mikrotikApi } from './api.js';
 import { invoiceCents, money, nextContract, text } from './model.js';
 import { attr, checkbox, field, formMoney, option, PERMISSIONS, selectField, textareaField } from './ui-kit.js';
 
 let clientCepTimer=0;
+let clientProfileRequest=0;
 
 function clientFormTarget(target){
   const form=target?.closest?.('#client-form');
@@ -10,6 +12,11 @@ function clientFormTarget(target){
 
 function clientFormCepStatus(form,message=''){
   const status=form?.querySelector?.('[data-client-cep-status]');
+  if(status)status.textContent=message;
+}
+
+function clientFormProfileStatus(form,message=''){
+  const status=form?.querySelector?.('[data-client-profile-status]');
   if(status)status.textContent=message;
 }
 
@@ -37,11 +44,40 @@ async function fillClientAddressByCep(form,cep){
   }
 }
 
+async function loadClientMikrotikProfiles(form,routerId,preferred=''){
+  const select=form?.elements?.mikrotik_profile,id=Number(routerId)||0;
+  if(!select)return;
+  if(!id){
+    select.replaceChildren(new Option('Selecione o MikroTik primeiro',''));
+    clientFormProfileStatus(form,'Selecione o MikroTik para carregar os profiles reais do RouterOS.');
+    return;
+  }
+  const requestId=++clientProfileRequest,previous=text(select.value),desired=text(preferred)||previous;
+  select.setAttribute('aria-busy','true');
+  clientFormProfileStatus(form,'Carregando profiles diretamente do MikroTik…');
+  try{
+    const routers=await dataApi.routers(),router=(Array.isArray(routers)?routers:[]).find((item)=>Number(item?.id)===id);
+    if(!router)throw new Error('MikroTik selecionado não foi encontrado.');
+    const secret=await dataApi.routerSecret(id);
+    if(!secret?.password)throw new Error(`Senha segura do MikroTik ${router.name||id} não cadastrada.`);
+    const result=await mikrotikApi.run('router.profiles',{...router,password:secret.password}),names=[...new Set((Array.isArray(result?.profiles)?result.profiles:[]).map((item)=>text(item?.name)).filter(Boolean))];
+    if(requestId!==clientProfileRequest||!form.isConnected||Number(form.elements?.router_id?.value)!==id)return;
+    if(!names.length)throw new Error('Nenhum profile PPP foi retornado pelo MikroTik.');
+    const selected=names.includes(desired)?desired:names.includes(previous)?previous:names.includes('default')?'default':names[0];
+    select.replaceChildren(...names.map((name)=>new Option(name,name,false,name===selected)));
+    select.value=selected;
+    clientFormProfileStatus(form,`${names.length} profile${names.length===1?'':'s'} carregado${names.length===1?'':'s'} diretamente do MikroTik.`);
+  }catch(error){
+    if(requestId===clientProfileRequest&&form?.isConnected)clientFormProfileStatus(form,error instanceof Error?error.message:String(error));
+  }finally{
+    if(requestId===clientProfileRequest&&select?.isConnected)select.removeAttribute('aria-busy');
+  }
+}
+
 function selectClientProfile(form,value){
   const select=form?.elements?.mikrotik_profile,profile=text(value)||'default';
   if(!select)return;
-  if(![...select.options].some((item)=>item.value===profile))select.add(new Option(profile,profile));
-  select.value=profile;
+  if([...select.options].some((item)=>item.value===profile))select.value=profile;
 }
 
 function handleClientFormField(event){
@@ -49,6 +85,11 @@ function handleClientFormField(event){
   if(!form||!target?.name)return;
   if(target.name==='ip'){
     if(form.elements.device_ip)form.elements.device_ip.value=text(target.value);
+    return;
+  }
+  if(target.name==='router_id'){
+    const planProfile=text(form.elements?.plan_id?.selectedOptions?.[0]?.dataset?.profile)||'default';
+    loadClientMikrotikProfiles(form,target.value,planProfile);
     return;
   }
   if(target.name==='plan_id'){
@@ -120,6 +161,7 @@ export function createForms(ctx){
       billingOption('pix_auto','Pix Automático — Efí','efi',billingMode==='pix_auto')
     ].join('');
     const efiOperations=item.id?`<fieldset class="form-section span-2"><legend>Efí — recorrência e carnê</legend><div class="form-actions"><button class="btn secondary" type="button" data-action="client-pix-auto" data-id="${attr(item.id)}" ${efiReady?'':'disabled'}>Pix Automático</button><button class="btn secondary" type="button" data-action="client-carnet" data-id="${attr(item.id)}" ${efiReady?'':'disabled'}>Gerar carnê</button></div><p class="hint">Pix Automático: <strong>${attr(pixStatus)}</strong>. ${efiReady?'Efí pronta para estas operações.':'Configure e ative a Efí Bank para liberar estas operações.'}</p></fieldset>`:'';
+    if(typeof document!=='undefined')queueMicrotask(()=>{const form=document.querySelector('#client-form');if(form)loadClientMikrotikProfiles(form,form.elements?.router_id?.value,mikrotikProfile)});
     return `<form id="client-form" class="form-grid" data-original-plan-id="${attr(item.plan_id||'')}" data-original-mikrotik-profile="${attr(text(item.mikrotik_profile))}">
       <input type="hidden" name="id" value="${attr(item.id||'')}">
       <fieldset class="form-section span-2"><legend>Identificação e contrato</legend><div class="form-grid inner-grid">
@@ -146,7 +188,7 @@ export function createForms(ctx){
         ${field('Usuário PPPoE','pppoe_username',item.pppoe_username||item.pppoe_user)}${field('Senha PPPoE','pppoe_password','','password','placeholder="Informe para criar ou trocar; vazio mantém a atual"')}
         ${selectField('Perfil MikroTik','mikrotik_profile',profileOptions)}${field('IP fixo / remoto','ip',fixedIp,'text',`${item.id?'':'required '}inputmode="decimal" autocomplete="off" spellcheck="false"`)}${field('MAC / Caller-ID','mac_address',item.mac_address)}
         ${field('IP do roteador/ONU do cliente','device_ip',deviceIp,'text','readonly aria-readonly="true"')}${field('Porta do roteador/ONU','device_port',item.device_port||'','number','min="1" max="65535"')}
-      </div><p class="hint">O Perfil MikroTik é selecionável entre os perfis já configurados nos planos ou usados nos clientes; ao trocar o plano, o perfil padrão do plano é sugerido. O IP do roteador/ONU acompanha automaticamente o IP fixo/remoto.</p></fieldset>
+      </div><p class="hint" data-client-profile-status>Os profiles serão carregados diretamente do MikroTik selecionado.</p><p class="hint">O IP do roteador/ONU acompanha automaticamente o IP fixo/remoto.</p></fieldset>
       ${textareaField('Observações','notes',item.notes)}
       <div class="form-actions span-2">${item.id?'<button class="btn danger" type="button" data-action="delete-client" data-id="'+attr(item.id)+'">Excluir cliente</button>':''}<span class="form-spacer"></span><button class="btn secondary" type="button" data-action="close-modal">Cancelar</button><button class="btn primary" type="submit">Salvar e sincronizar</button></div>
     </form>`;

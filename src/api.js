@@ -32,6 +32,9 @@ const stateCache = { state: null, updatedAt: '' };
 const stateClone = (value) => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 const stateEqual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const stateObject = (value) => Boolean(value && typeof value === 'object' && !Array.isArray(value));
+const valueText = (value) => String(value ?? '').trim();
+const normalizeConnection = (value) => valueText(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+const pppoeMigrations = new Map();
 
 function mergeArrayChanges(base = [], next = [], latest = []) {
   if (stateEqual(base, next)) return stateClone(latest);
@@ -95,6 +98,103 @@ async function saveState(state, baseUpdatedAt = '') {
   }
 }
 
+function hasPppoeAccess(client) {
+  return normalizeConnection(client?.connection_type) === 'pppoe' && Number(client?.router_id) > 0 && Boolean(valueText(client?.pppoe_username));
+}
+
+function previousNetworkPayload(saved, previous) {
+  return {
+    ...saved,
+    router_id: Number(previous?.router_id) || null,
+    connection_type: valueText(previous?.connection_type) || 'PPPoE',
+    pppoe_username: valueText(previous?.pppoe_username),
+    mikrotik_profile: valueText(previous?.mikrotik_profile) || 'default',
+    ip: valueText(previous?.ip),
+    mac_address: valueText(previous?.mac_address),
+    mikrotik_secret_id: valueText(previous?.mikrotik_secret_id),
+    mikrotik_status: valueText(previous?.mikrotik_status) || 'Sincronizado',
+    mikrotik_last_sync: previous?.mikrotik_last_sync || null,
+  };
+}
+
+async function cloudClientById(id) {
+  const list = await request('/api/cloud-data', 'clients.list');
+  return (Array.isArray(list) ? list : []).find((item) => Number(item?.id) === Number(id)) || null;
+}
+
+async function routerWithSecret(id) {
+  const routers = await request('/api/cloud-data', 'routers.list');
+  const router = (Array.isArray(routers) ? routers : []).find((item) => Number(item?.id) === Number(id));
+  if (!router) throw new Error('MikroTik anterior não encontrado para concluir a migração PPPoE.');
+  const secret = await request('/api/cloud-data', 'routers.secret.get', { id: Number(id) });
+  if (!secret?.password) throw new Error(`Senha segura do MikroTik ${router.name || id} não encontrada.`);
+  return { ...router, password: secret.password };
+}
+
+async function removePppoeAccess(client) {
+  if (!hasPppoeAccess(client)) return { action: 'not_configured' };
+  const router = await routerWithSecret(client.router_id);
+  return raw('/api/mikrotik-proxy', { action: 'pppoe.delete', router, data: client });
+}
+
+async function clientSaveSafe(data) {
+  const id = Number(data?.id) || 0;
+  let pending = id ? pppoeMigrations.get(id) : null;
+  let createdPending = false;
+
+  if (id && !pending) {
+    const previous = await cloudClientById(id);
+    if (previous && hasPppoeAccess(previous)) {
+      const nextHasPppoe = hasPppoeAccess(data);
+      const sameUser = valueText(previous.pppoe_username) === valueText(data?.pppoe_username);
+      const changedRouterSameUser = nextHasPppoe && sameUser && Number(previous.router_id) !== Number(data?.router_id);
+      if (!nextHasPppoe) {
+        const saved = await request('/api/cloud-data', 'clients.save', data);
+        try {
+          await removePppoeAccess(previous);
+          return request('/api/cloud-data', 'clients.save', { ...saved, mikrotik_secret_id: '', mikrotik_status: 'Sem PPPoE', mikrotik_last_sync: new Date().toISOString() });
+        } catch (error) {
+          await request('/api/cloud-data', 'clients.save', previousNetworkPayload(saved, previous));
+          throw new Error(`Não foi possível remover o PPPoE antigo. O cadastro de rede foi restaurado: ${error.message || error}`);
+        }
+      }
+      if (changedRouterSameUser) {
+        pending = { previous: stateClone(previous) };
+        pppoeMigrations.set(id, pending);
+        createdPending = true;
+      }
+    }
+  }
+
+  const payload = createdPending ? { ...data, mikrotik_status: 'Migração PPPoE pendente' } : data;
+  const saved = await request('/api/cloud-data', 'clients.save', payload);
+  if (!pending || createdPending) return saved;
+
+  const failed = /^falha de sincroniza/i.test(normalizeConnection(data?.mikrotik_status));
+  const confirmed = /sincronizado|bloqueado no mikrotik/i.test(normalizeConnection(data?.mikrotik_status));
+
+  if (failed) {
+    pppoeMigrations.delete(id);
+    return request('/api/cloud-data', 'clients.save', previousNetworkPayload(saved, pending.previous));
+  }
+  if (!confirmed) return saved;
+
+  try {
+    await removePppoeAccess(pending.previous);
+    pppoeMigrations.delete(id);
+    return saved;
+  } catch (oldError) {
+    let newRollbackError = null;
+    try { await removePppoeAccess(data); } catch (error) { newRollbackError = error; }
+    const restored = await request('/api/cloud-data', 'clients.save', previousNetworkPayload(saved, pending.previous));
+    pppoeMigrations.delete(id);
+    if (newRollbackError) {
+      throw new Error(`O novo PPPoE foi criado, mas não foi possível remover o acesso antigo nem compensar o acesso novo. Cadastro restaurado para o roteador anterior. Antigo: ${oldError.message || oldError}. Novo: ${newRollbackError.message || newRollbackError}`);
+    }
+    throw new Error(`Não foi possível remover o PPPoE do MikroTik anterior. O novo acesso foi removido e o cadastro voltou ao roteador anterior: ${oldError.message || oldError}`);
+  }
+}
+
 export const authApi = Object.freeze({
   status: () => request('/api/auth', 'status'),
   login: (login, password) => request('/api/auth', 'login', { login, password }),
@@ -115,7 +215,7 @@ export const stateApi = Object.freeze({
 
 export const dataApi = Object.freeze({
   clients: () => request('/api/cloud-data', 'clients.list'),
-  clientSave: (data) => request('/api/cloud-data', 'clients.save', data),
+  clientSave: clientSaveSafe,
   clientDelete: (id) => request('/api/cloud-data', 'clients.delete', { id }),
   routers: () => request('/api/cloud-data', 'routers.list'),
   routerSave: (data) => request('/api/cloud-data', 'routers.save', data),

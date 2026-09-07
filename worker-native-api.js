@@ -168,7 +168,7 @@ export async function handleNativeCloudState(request,env){
     if(action==='state.get'){const row=await getSetting(sql,STATE_KEY);result=row?{state:sanitize(row.value||{}),updated_at:row.updated_at||null}:{state:null,updated_at:null};}
     else if(action==='state.save'){
       if(!data.state||typeof data.state!=='object'||Array.isArray(data.state))throw Object.assign(new Error('Estado do gerenciador inválido.'),{statusCode:400});
-      const previous=await getSetting(sql,STATE_KEY),expectedAt=text(data.baseUpdatedAt),actualAt=text(previous?.updated_at),expectedTime=Date.parse(expectedAt),actualTime=Date.parse(actualAt);
+      const previous=await getSetting(sql,STATE_KEY),expectedAt=text(data.baseUpdatedAt),actualAt=previous?.updated_at,expectedTime=Date.parse(expectedAt),actualTime=actualAt instanceof Date?actualAt.getTime():Date.parse(text(actualAt));
       if(expectedAt&&actualAt&&Number.isFinite(expectedTime)&&Number.isFinite(actualTime)&&expectedTime!==actualTime)throw Object.assign(new Error('O estado foi atualizado em outro acesso. Recarregando para mesclar as alterações.'),{statusCode:409});
       const merged=preservePortalState(data.state,previous?.value),clean=sanitize(merged),row=await setSetting(sql,STATE_KEY,clean);result={state:row?.value||clean,updated_at:row?.updated_at||new Date().toISOString()};
     }

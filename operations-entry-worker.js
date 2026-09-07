@@ -33,7 +33,7 @@ function paidStatus(value){const status=normalize(value);return ['pago','paga','
 function blockedStatus(value){const status=normalize(value);return status.includes('bloqueado')||status.includes('suspenso')}
 function safeSettings(value){const source=parseObject(value),next={};for(const key of Object.keys(DEFAULT_SETTINGS))next[key]=source[key]===undefined?DEFAULT_SETTINGS[key]:source[key]===true||String(source[key]).toLowerCase()==='true';return next}
 function safeTemplateUrl(value){const raw=text(value);return ['/','/#faturas','/#conexao','/#perfil','/#cashback'].includes(raw)?raw:'/'}
-function normalizeSavedTemplate(value){const id=text(value?.id).slice(0,80),name=text(value?.name).slice(0,60),title=text(value?.title).slice(0,90),body=text(value?.body).slice(0,500),url=safeTemplateUrl(value?.url),createdAt=text(value?.createdAt),updatedAt=text(value?.updatedAt);return id&&name&&title&&body?{id,name,title,body,url,createdAt,updatedAt}:null}
+function normalizeSavedTemplate(value){const id=text(value?.id).slice(0,80),name=text(value?.name).slice(0,60),title=text(value?.title).slice(0,90),body=text(value?.body).slice(0,500),url=safeTemplateUrl(value?.url),createdAt:text(value?.createdAt),updatedAt:text(value?.updatedAt);return id&&name&&title&&body?{id,name,title,body,url,createdAt,updatedAt}:null}
 function normalizeClickUrl(value='/'){const raw=text(value);return raw.startsWith('/')?`${CLIENT_APP_ORIGIN}${raw}`:`${CLIENT_APP_ORIGIN}/`}
 function notificationPayload(title,body,url,tag){return {title:text(title)||'Fibra+',body:text(body),icon:`${CLIENT_APP_ORIGIN}/icons/fibra-app-192.png?v=15`,badge:`${CLIENT_APP_ORIGIN}/icons/fibra-app-192.png?v=15`,tag:text(tag)||'fibra-plus',lang:'pt-BR',data:{url:normalizeClickUrl(url)}}}
 
@@ -86,8 +86,10 @@ async function ensureTables(sql){
     client_id BIGINT PRIMARY KEY REFERENCES pp_clients(id) ON DELETE CASCADE,
     last_status TEXT NULL,
     last_plan TEXT NULL,
+    last_due_day INTEGER NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )`;
+  await sql`ALTER TABLE pp_push_observer_state ADD COLUMN IF NOT EXISTS last_due_day INTEGER NULL`;
   await sql`CREATE TABLE IF NOT EXISTS pp_push_protocol_observer (
     protocol_id BIGINT PRIMARY KEY,
     last_status TEXT NULL,
@@ -137,20 +139,22 @@ async function sendAutomaticEvent(sql,env,event){
 
 function localClientMap(state){return new Map((Array.isArray(state?.clients)?state.clients:[]).map(item=>[Number(item?.id)||0,item]))}
 function planNameFor(row,state){const direct=text(row?.plan);if(direct)return direct;const plan=(Array.isArray(state?.plans)?state.plans:[]).find(item=>Number(item?.id)===Number(row?.plan_id));return text(plan?.name)||'seu novo plano'}
+async function recentDueProtocol(sql,clientId,newDay){try{const rows=await sql`SELECT id FROM pp_protocols WHERE client_id=${Number(clientId)} AND category='Vencimento' AND subject='Alteração de vencimento' AND status='Concluído' AND created_at>=now()-interval '10 minutes' AND COALESCE((details->>'newDay')::integer,0)=${Number(newDay)||0} ORDER BY id DESC LIMIT 1`;return Boolean(rows?.[0]?.id)}catch{return false}}
 
 async function statusAndPlanEvents(sql,state,settings){
-  const rows=await sql`SELECT c.id,c.name,c.status,c.plan,c.plan_id,c.updated_at,o.client_id AS observer_id,o.last_status,o.last_plan FROM pp_clients c LEFT JOIN pp_push_observer_state o ON o.client_id=c.id ORDER BY c.id ASC`,locals=localClientMap(state),events=[];
+  const rows=await sql`SELECT c.id,c.name,c.status,c.plan,c.plan_id,c.due_day,c.updated_at,o.client_id AS observer_id,o.last_status,o.last_plan,o.last_due_day FROM pp_clients c LEFT JOIN pp_push_observer_state o ON o.client_id=c.id ORDER BY c.id ASC`,locals=localClientMap(state),events=[];
   for(const row of rows||[]){
     if(!row.observer_id)continue;
-    const clientId=Number(row.id),currentStatus=text(row.status),oldStatus=text(row.last_status),currentPlan=`${text(row.plan)}|${row.plan_id??''}`,oldPlan=text(row.last_plan),local=locals.get(clientId)||{},trustActive=recent(local?.trust_release_at,36)&&new Date(text(local?.trust_release_until)).getTime()>Date.now(),trustReblocked=recent(local?.trust_release_reblocked_at,36);
+    const clientId=Number(row.id),currentStatus=text(row.status),oldStatus=text(row.last_status),currentPlan=`${text(row.plan)}|${row.plan_id??''}`,oldPlan=text(row.last_plan),currentDue=Number(row.due_day)||0,oldDue=Number(row.last_due_day)||0,local=locals.get(clientId)||{},trustActive=recent(local?.trust_release_at,36)&&new Date(text(local?.trust_release_until)).getTime()>Date.now(),trustReblocked=recent(local?.trust_release_reblocked_at,36);
     if(normalize(currentStatus)!==normalize(oldStatus)){
       const wasBlocked=blockedStatus(oldStatus),isBlocked=blockedStatus(currentStatus),stamp=text(row.updated_at)||Date.now();
       if(!wasBlocked&&isBlocked&&settings.statusSuspended&&!trustReblocked)events.push({key:`status-blocked:${clientId}:${stamp}`,clientId,type:'internet suspensa',title:'Conexão suspensa',body:'Sua conexão foi suspensa. Consulte suas faturas e opções de regularização na Área do Cliente.',url:'/#conexao'});
       if(wasBlocked&&!isBlocked&&settings.statusRestored&&!trustActive)events.push({key:`status-restored:${clientId}:${stamp}`,clientId,type:'internet liberada',title:'Conexão liberada',body:'Seu acesso à internet foi liberado novamente.',url:'/#conexao'});
     }
     if(currentPlan!==oldPlan&&settings.planChange){const stamp=text(row.updated_at)||Date.now(),name=planNameFor(row,state);events.push({key:`plan-change:${clientId}:${stamp}`,clientId,type:'plano alterado',title:'Plano atualizado',body:`Seu plano foi atualizado para ${name}. Consulte os detalhes na Área do Cliente.`,url:'/#perfil'})}
+    if(settings.dueChange&&oldDue>0&&currentDue>0&&currentDue!==oldDue&&!await recentDueProtocol(sql,clientId,currentDue)){const stamp=text(row.updated_at)||Date.now();events.push({key:`due-admin:${clientId}:${stamp}:${oldDue}-${currentDue}`,clientId,type:'mudança de vencimento',title:'Vencimento alterado',body:`Seu vencimento foi alterado do dia ${oldDue} para o dia ${currentDue}. Consulte seus dados na Área do Cliente.`,url:'/#perfil'})}
   }
-  await sql`INSERT INTO pp_push_observer_state (client_id,last_status,last_plan,updated_at) SELECT id,status,COALESCE(plan,'')||'|'||COALESCE(plan_id::text,''),now() FROM pp_clients ON CONFLICT (client_id) DO UPDATE SET last_status=EXCLUDED.last_status,last_plan=EXCLUDED.last_plan,updated_at=now()`;
+  await sql`INSERT INTO pp_push_observer_state (client_id,last_status,last_plan,last_due_day,updated_at) SELECT id,status,COALESCE(plan,'')||'|'||COALESCE(plan_id::text,''),due_day,now() FROM pp_clients ON CONFLICT (client_id) DO UPDATE SET last_status=EXCLUDED.last_status,last_plan=EXCLUDED.last_plan,last_due_day=EXCLUDED.last_due_day,updated_at=now()`;
   return events;
 }
 

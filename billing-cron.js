@@ -165,11 +165,11 @@ async function bankAction(env,payload){
 }
 
 async function issueRealCharge(env,invoice,client,state,vault){
-  const first=invoice?.prorated_first_invoice===true||invoice?.billing_origin==='first_prorated',combined=invoice?.combined_billing===true||invoice?.billing_origin==='monthly_auto_combined';let mode=first||combined?'boleto':normalize(client.billing_mode||'boleto');
+  const first=invoice?.prorated_first_invoice===true||invoice?.billing_origin==='first_prorated',combined=invoice?.combined_billing===true||invoice?.billing_origin==='monthly_auto_combined',override=normalize(invoice?.payment_mode_override);let mode=override||(first||combined?'boleto':normalize(client.billing_mode||'boleto'));
   if(!['boleto','pix_due','pix_auto','pix_mp'].includes(mode))mode='boleto';
   if(mode==='pix_mp'){
     requireMpPix(client,vault);
-    Object.assign(invoice,{billing_type:'Pix Mercado Pago',document_type:'Pix Mercado Pago',bank_provider:'',bank_status_detail:'mercado_pago_pix_on_demand'});
+    Object.assign(invoice,{billing_type:'Pix Mercado Pago',document_type:'Pix Mercado Pago',bank_provider:'mercadoPago',bank_status_detail:'mercado_pago_pix_on_demand'});
     return false;
   }
   if(mode==='pix_due'){requireEfiPix(client,vault,mode);invoice.billing_type='Pix com vencimento';invoice.document_type='Pix com vencimento';invoice.bank_provider='efi'}
@@ -244,7 +244,7 @@ async function runBillingCron(env,{force=false}={}){
   const sql=neon(env.DATABASE_URL),state=await loadState(sql);state.settings={...(state.settings||{})};
   const enabled=state.settings.billing_auto_enabled!==false&&String(state.settings.billing_auto_enabled)!=='false';
   if(!enabled&&!force)return {enabled:false,generated:0,issued:0,skipped:0,failed:0,errors:[]};
-  const todayParts=brazilParts(),today=keyFromParts(todayParts.year,todayParts.month,todayParts.day),daysBefore=Math.max(1,Math.min(30,Math.floor(num(state.settings.billing_auto_days_before)||7)));
+  const todayParts=brazilParts(),today=keyFromParts(todayParts.year,todayParts.month,todayParts.day),daysBefore=Math.max(1,Math.min(30,Math.floor(num(state.settings.billing_auto_days_before)||7));
   if(!force&&text(state.settings.billing_cloudflare_last_run)===today)return {alreadyRan:true,date:today,generated:0,issued:0,skipped:0,failed:0,errors:[]};
   const vault=await readBankSettings(env,sql),rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code FROM pp_clients ORDER BY id ASC`;
   let generated=0,issued=0,skipped=0,failed=0;const errors=[];
@@ -265,7 +265,7 @@ async function runBillingCron(env,{force=false}={}){
         invoice=existing||makeInvoice(state,client,dueDate,Math.max(1,Math.round(num(plan.price_cents))),{baseAmount:plan.price_cents});
       }
       const inactive=['pago','paid','baixado','renegociado','renegotiated','substituido','substituida'].some(value=>normalize(invoice.status).includes(value));
-      const mpPixWaiting=text(invoice.bank_status_detail)==='mercado_pago_pix_on_demand'&&normalize(client.billing_mode)==='pix_mp';
+      const mpPixWaiting=text(invoice.bank_status_detail)==='mercado_pago_pix_on_demand'&&(normalize(invoice.payment_mode_override)==='pix_mp'||normalize(client.billing_mode)==='pix_mp');
       if(inactive||text(invoice.bank_charge_id)||mpPixWaiting){skipped++;continue}
       if(existing&&deferredNegotiationInstallment(invoice))prepareCombinedMonthly(invoice,plan,dueDate);
       const remoteIssued=await issueAndSave(env,sql,state,invoice,client,vault,Boolean(existing));

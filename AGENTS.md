@@ -31,8 +31,12 @@ Este repositório contém o novo painel administrativo do Provedor Plus e o runt
 - Inicialização: `app.js`.
 - Comunicação HTTP: `src/api.js`.
 - Modelo de leitura/apresentação: `src/model.js`.
-- Interface e navegação: `src/ui.js`.
-- Estilos: `styles.css`.
+- Controlador da interface: `src/ui.js`.
+- Componentes e navegação: `src/ui-kit.js`.
+- Formulários operacionais: `src/panel-forms.js`.
+- Telas operacionais: `src/panel-views.js`.
+- Estilos globais: `styles.css`.
+- Estilos dos controles operacionais: `src/panel.css`.
 
 ### Produção Cloudflare
 - Configuração: `wrangler.toml`.

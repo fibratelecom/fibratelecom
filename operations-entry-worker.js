@@ -33,7 +33,7 @@ function paidStatus(value){const status=normalize(value);return ['pago','paga','
 function blockedStatus(value){const status=normalize(value);return status.includes('bloqueado')||status.includes('suspenso')}
 function safeSettings(value){const source=parseObject(value),next={};for(const key of Object.keys(DEFAULT_SETTINGS))next[key]=source[key]===undefined?DEFAULT_SETTINGS[key]:source[key]===true||String(source[key]).toLowerCase()==='true';return next}
 function safeTemplateUrl(value){const raw=text(value);return ['/','/#faturas','/#conexao','/#perfil','/#cashback'].includes(raw)?raw:'/'}
-function normalizeSavedTemplate(value){const id=text(value?.id).slice(0,80),name=text(value?.name).slice(0,60),title=text(value?.title).slice(0,90),body=text(value?.body).slice(0,500),url=safeTemplateUrl(value?.url),createdAt:text(value?.createdAt),updatedAt:text(value?.updatedAt);return id&&name&&title&&body?{id,name,title,body,url,createdAt,updatedAt}:null}
+function normalizeSavedTemplate(value){const id=text(value?.id).slice(0,80),name=text(value?.name).slice(0,60),title=text(value?.title).slice(0,90),body=text(value?.body).slice(0,500),url=safeTemplateUrl(value?.url),createdAt=text(value?.createdAt),updatedAt=text(value?.updatedAt);return id&&name&&title&&body?{id,name,title,body,url,createdAt,updatedAt}:null}
 function normalizeClickUrl(value='/'){const raw=text(value);return raw.startsWith('/')?`${CLIENT_APP_ORIGIN}${raw}`:`${CLIENT_APP_ORIGIN}/`}
 function notificationPayload(title,body,url,tag){return {title:text(title)||'Fibra+',body:text(body),icon:`${CLIENT_APP_ORIGIN}/icons/fibra-app-192.png?v=15`,badge:`${CLIENT_APP_ORIGIN}/icons/fibra-app-192.png?v=15`,tag:text(tag)||'fibra-plus',lang:'pt-BR',data:{url:normalizeClickUrl(url)}}}
 

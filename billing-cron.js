@@ -155,6 +155,7 @@ async function enrichPanelBankRequest(request,env){
 
 function pixAutoRecord(client){return {clientId:Number(client.id),clientName:text(client.name),contractNumber:text(client.contract_number),idRec:text(client.pix_auto_id_rec),status:text(client.pix_auto_status),startDate:text(client.pix_auto_start_date),endDate:text(client.pix_auto_end_date),amountCents:Math.max(0,Math.round(num(client.pix_auto_amount_cents))),pixCopiaECola:text(client.pix_auto_qr),createdAt:text(client.pix_auto_created_at),updatedAt:text(client.pix_auto_updated_at)}}
 function requireEfiPix(client,vault,mode){const efi=vault?.efi||{};if(!efi.enabled||!text(efi.clientId)||!text(efi.clientSecret))throw new Error(`${client.name||client.id}: Efí não está pronta para cobrança Pix.`);if(!text(efi.certificateBase64))throw new Error(`${client.name||client.id}: certificado P12/PFX da Efí não está configurado.`);if(mode==='pix_due'&&!text(efi.pixKey))throw new Error(`${client.name||client.id}: chave Pix da Efí não está configurada.`);if(mode==='pix_auto'){if(text(client.pix_auto_status).toUpperCase()!=='APROVADA'||!text(client.pix_auto_id_rec))throw new Error(`${client.name||client.id}: Pix Automático ainda não está APROVADO na Efí.`);if(!digits(efi.pixAutoReceiverAgency)||!digits(efi.pixAutoReceiverAccount))throw new Error(`${client.name||client.id}: informe Agência e Conta recebedora do Pix Automático na Efí.`)}}
+function requireMpPix(client,vault){const mp=vault?.mercadoPago||{};if(!mp.enabled||!text(mp.accessToken))throw new Error(`${client.name||client.id}: Mercado Pago não está pronto para cobrança Pix.`)}
 
 async function bankAction(env,payload){
   const response=await handleBankProxy(new Request('https://painel.fibramais.workers.dev/api/bank-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),env);
@@ -165,13 +166,18 @@ async function bankAction(env,payload){
 
 async function issueRealCharge(env,invoice,client,state,vault){
   const first=invoice?.prorated_first_invoice===true||invoice?.billing_origin==='first_prorated',combined=invoice?.combined_billing===true||invoice?.billing_origin==='monthly_auto_combined';let mode=first||combined?'boleto':normalize(client.billing_mode||'boleto');
-  if(!['boleto','pix_due','pix_auto'].includes(mode))mode='boleto';
+  if(!['boleto','pix_due','pix_auto','pix_mp'].includes(mode))mode='boleto';
+  if(mode==='pix_mp'){
+    requireMpPix(client,vault);
+    Object.assign(invoice,{billing_type:'Pix Mercado Pago',document_type:'Pix Mercado Pago',bank_provider:'',bank_status_detail:'mercado_pago_pix_on_demand'});
+    return false;
+  }
   if(mode==='pix_due'){requireEfiPix(client,vault,mode);invoice.billing_type='Pix com vencimento';invoice.document_type='Pix com vencimento';invoice.bank_provider='efi'}
   if(mode==='pix_auto'){requireEfiPix(client,vault,mode);invoice.billing_type='Pix Automático';invoice.document_type='Pix Automático';invoice.bank_provider='efi'}
   const provider=mode==='pix_due'||mode==='pix_auto'?'efi':providerFor(client,state,vault,invoice.bank_provider),secrets=bankSecrets(vault),source={...invoice,bank_provider:provider,client_name:client.name,client_contract_number:client.contract_number};
   const remote=await bankAction(env,{action:'issue',provider,invoice:source,client,efi:secrets.efi,mercadoPago:secrets.mercadoPago,pixAutoRecord:mode==='pix_auto'?pixAutoRecord(client):null});
   Object.assign(invoice,{bank_provider:provider},remote||{});
-  return invoice;
+  return true;
 }
 
 async function cancelIssued(env,invoice,client,vault){
@@ -222,7 +228,7 @@ function prepareCombinedMonthly(invoice,plan,dueDate){
 
 async function issueAndSave(env,sql,state,invoice,client,vault,isExisting){
   const before=JSON.parse(JSON.stringify(invoice));
-  await issueRealCharge(env,invoice,client,state,vault);
+  const remoteIssued=await issueRealCharge(env,invoice,client,state,vault);
   if(!isExisting){state.invoices=Array.isArray(state.invoices)?state.invoices:[];state.invoices.push(invoice)}
   try{await saveState(sql,state)}catch(error){
     try{await cancelIssued(env,invoice,client,vault)}catch{}
@@ -230,6 +236,7 @@ async function issueAndSave(env,sql,state,invoice,client,vault,isExisting){
     else state.invoices=state.invoices.filter(row=>String(row?.id)!==String(invoice.id));
     throw error;
   }
+  return remoteIssued;
 }
 
 async function runBillingCron(env,{force=false}={}){
@@ -258,10 +265,11 @@ async function runBillingCron(env,{force=false}={}){
         invoice=existing||makeInvoice(state,client,dueDate,Math.max(1,Math.round(num(plan.price_cents))),{baseAmount:plan.price_cents});
       }
       const inactive=['pago','paid','baixado','renegociado','renegotiated','substituido','substituida'].some(value=>normalize(invoice.status).includes(value));
-      if(inactive||text(invoice.bank_charge_id)){skipped++;continue}
+      const mpPixWaiting=text(invoice.bank_status_detail)==='mercado_pago_pix_on_demand'&&normalize(client.billing_mode)==='pix_mp';
+      if(inactive||text(invoice.bank_charge_id)||mpPixWaiting){skipped++;continue}
       if(existing&&deferredNegotiationInstallment(invoice))prepareCombinedMonthly(invoice,plan,dueDate);
-      await issueAndSave(env,sql,state,invoice,client,vault,Boolean(existing));
-      issued++;if(!existing)generated++;
+      const remoteIssued=await issueAndSave(env,sql,state,invoice,client,vault,Boolean(existing));
+      if(remoteIssued)issued++;if(!existing)generated++;
     }catch(error){failed++;errors.push(`${client.name||client.id}: ${error instanceof Error?error.message:String(error)}`)}
   }
   state.settings.billing_auto_enabled=enabled;

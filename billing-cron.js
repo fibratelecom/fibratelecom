@@ -244,7 +244,7 @@ async function runBillingCron(env,{force=false}={}){
   const sql=neon(env.DATABASE_URL),state=await loadState(sql);state.settings={...(state.settings||{})};
   const enabled=state.settings.billing_auto_enabled!==false&&String(state.settings.billing_auto_enabled)!=='false';
   if(!enabled&&!force)return {enabled:false,generated:0,issued:0,skipped:0,failed:0,errors:[]};
-  const todayParts=brazilParts(),today=keyFromParts(todayParts.year,todayParts.month,todayParts.day),daysBefore=Math.max(1,Math.min(30,Math.floor(num(state.settings.billing_auto_days_before)||7));
+  const todayParts=brazilParts(),today=keyFromParts(todayParts.year,todayParts.month,todayParts.day),daysBefore=Math.max(1,Math.min(30,Math.floor(num(state.settings.billing_auto_days_before)||7)));
   if(!force&&text(state.settings.billing_cloudflare_last_run)===today)return {alreadyRan:true,date:today,generated:0,issued:0,skipped:0,failed:0,errors:[]};
   const vault=await readBankSettings(env,sql),rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code FROM pp_clients ORDER BY id ASC`;
   let generated=0,issued=0,skipped=0,failed=0;const errors=[];

@@ -1,5 +1,6 @@
-const BUILD = '20260907-invoice-save2';
+const BUILD = '20260907-auditoria-formularios1';
 const root = document.querySelector('#app');
+let lastValidationToastAt = 0;
 
 function showRuntimeError(value) {
   const error = value instanceof Error ? value : new Error(String(value || 'Falha inesperada no painel.'));
@@ -21,16 +22,18 @@ window.addEventListener('unhandledrejection', (event) => {
   showRuntimeError(event.reason);
 });
 
-root?.addEventListener('click', (event) => {
-  const submit = event.target.closest?.('#invoice-form button[type="submit"]');
-  if (!submit) return;
-  const form = submit.form;
-  if (!form || form.checkValidity()) return;
-  event.preventDefault();
-  const invalid = form.querySelector(':invalid');
-  invalid?.focus({ preventScroll: true });
-  invalid?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  showRuntimeError(new Error('Preencha Cliente, Vencimento e Valor antes de salvar a mensalidade.'));
+root?.addEventListener('invalid', (event) => {
+  const control = event.target;
+  if (!(control instanceof HTMLElement)) return;
+  control.focus({ preventScroll: true });
+  control.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  const now = Date.now();
+  if (now - lastValidationToastAt < 700) return;
+  lastValidationToastAt = now;
+  const label = control.closest('label');
+  const fieldName = String(label?.childNodes?.[0]?.textContent || '').trim();
+  const nativeMessage = String(control.validationMessage || '').trim();
+  showRuntimeError(new Error(`${fieldName ? `${fieldName}: ` : ''}${nativeMessage || 'preencha este campo corretamente antes de salvar.'}`));
 }, true);
 
 async function refreshPanelModules() {

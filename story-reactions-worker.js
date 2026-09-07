@@ -1,0 +1,45 @@
+import {neon} from '@neondatabase/serverless';
+import {handleNativeAuth} from './worker-native-api.js';
+
+const REACTION_STORE_KEY='customer_story_reactions_v1';
+const STORIES_STORE_KEY='customer_stories_v1';
+const ADMIN_PATH='/api/story-reactions';
+const CUSTOMER_PATH='/api/customer-story-reactions';
+const CUSTOMER_ORIGINS=new Set(['https://cliente.fibramais.workers.dev','https://client.fibramais.workers.dev']);
+const REACTIONS=['❤️','😂','😮','😢','🙏','👏'];
+const utf8=new TextEncoder();
+const text=value=>String(value??'').trim();
+const normalize=value=>text(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+
+function json(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store, max-age=0',...headers}})}
+function customerCors(request){const origin=text(request.headers.get('origin')),headers={'Vary':'Origin','Access-Control-Allow-Methods':'POST,OPTIONS','Access-Control-Allow-Headers':'Content-Type','Access-Control-Max-Age':'86400'};if(CUSTOMER_ORIGINS.has(origin))headers['Access-Control-Allow-Origin']=origin;return headers}
+function parseObject(value){if(value&&typeof value==='object'&&!Array.isArray(value))return value;if(typeof value==='string')try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{}return {}}
+function cleanClientMap(value){const source=parseObject(value),out={};for(const [clientId,reaction] of Object.entries(source)){const id=String(Math.max(0,Number(clientId)||0)),emoji=text(reaction);if(id!=='0'&&REACTIONS.includes(emoji))out[id]=emoji}return out}
+function cleanReactionStore(value){const source=parseObject(value),raw=parseObject(source.reactions),reactions={};for(const [storyId,map] of Object.entries(raw)){const id=text(storyId);if(id)reactions[id]=cleanClientMap(map)}return {version:1,reactions}}
+async function sqlClient(env){if(!env.DATABASE_URL)throw Object.assign(new Error('Banco de dados não configurado.'),{statusCode:503});return neon(env.DATABASE_URL)}
+async function readSetting(sql,key){const rows=await sql`SELECT value FROM pp_settings WHERE key=${key} LIMIT 1`;return parseObject(rows?.[0]?.value)}
+async function readReactionStore(sql){return cleanReactionStore(await readSetting(sql,REACTION_STORE_KEY))}
+async function writeReactionStore(sql,store){const at=new Date().toISOString(),raw=JSON.stringify(cleanReactionStore(store));await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${REACTION_STORE_KEY},${raw}::jsonb,${at}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at`}
+function countsForMap(map){const counts=Object.fromEntries(REACTIONS.map(item=>[item,0]));for(const emoji of Object.values(cleanClientMap(map)))counts[emoji]=(counts[emoji]||0)+1;return counts}
+function metricForMap(map){const counts=countsForMap(map);return {counts,total:Object.values(counts).reduce((sum,value)=>sum+Number(value||0),0)}}
+
+async function requireAdmin(request,env){const headers=new Headers(request.headers);headers.set('Content-Type','application/json');const authRequest=new Request(request.url,{method:'POST',headers,body:JSON.stringify({action:'status'})}),response=await handleNativeAuth(authRequest,env);let body={};try{body=await response.json()}catch{}if(!response.ok||!body.ok||body?.data?.authenticated!==true)throw Object.assign(new Error('Sessão expirada ou não autenticada.'),{statusCode:401});const user=body.data.user||{};if(normalize(user?.role)!=='admin')throw Object.assign(new Error('Somente o administrador pode consultar as reações.'),{statusCode:403});return user}
+function b64urlBytes(value){let raw=text(value).replace(/-/g,'+').replace(/_/g,'/');while(raw.length%4)raw+='=';const bin=atob(raw),out=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);return out}
+async function portalKey(env){const secret=text(env.PORTAL_SESSION_SECRET)||text(env.DATABASE_URL);if(!secret)throw Object.assign(new Error('Sessão segura da Área do Cliente não configurada.'),{statusCode:503});return crypto.subtle.importKey('raw',utf8.encode(secret),{name:'HMAC',hash:'SHA-256'},false,['verify'])}
+async function verifySession(token,env){const parts=text(token).split('.');if(parts.length!==2)throw Object.assign(new Error('Sua sessão expirou. Entre novamente.'),{statusCode:401});try{const key=await portalKey(env),ok=await crypto.subtle.verify('HMAC',key,b64urlBytes(parts[1]),utf8.encode(parts[0]));if(!ok)throw new Error('assinatura');const payload=JSON.parse(new TextDecoder().decode(b64urlBytes(parts[0]))),clientId=Number(payload?.clientId)||0,exp=Number(payload?.exp)||0;if(!clientId||exp<=Date.now())throw new Error('expirada');return {clientId}}catch{throw Object.assign(new Error('Sua sessão expirou. Entre novamente.'),{statusCode:401})}}
+async function customer(sql,id){const rows=await sql`SELECT id,status,plan_id,city FROM pp_clients WHERE id=${Number(id)} LIMIT 1`;return rows?.[0]||null}
+function isBlockedStatus(value){const status=normalize(value);return ['bloqueado','suspenso','atrasado','inadimplente'].some(term=>status.includes(term))}
+function isActiveStatus(value){const status=normalize(value);return !['cancelado','inativo','bloqueado','suspenso'].some(term=>status.includes(term))}
+function visibleTo(story,client,now=Date.now()){if(story?.active===false)return false;const start=story?.startAt?new Date(story.startAt).getTime():0,end=story?.endAt?new Date(story.endAt).getTime():0;if(start&&now<start)return false;if(end&&now>end)return false;if(story?.audience==='active'&&!isActiveStatus(client?.status))return false;if(story?.audience==='blocked'&&!isBlockedStatus(client?.status))return false;if(Number(story?.planId)>0&&Number(story.planId)!==Number(client?.plan_id))return false;if(text(story?.city)&&normalize(story.city)!==normalize(client?.city))return false;return true}
+async function visibleStoryIds(sql,client){const store=await readSetting(sql,STORIES_STORE_KEY),stories=Array.isArray(store?.stories)?store.stories:[];return new Set(stories.filter(story=>visibleTo(story,client)).map(story=>text(story.id)).filter(Boolean))}
+
+async function handleAdmin(request,env){if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405);try{await requireAdmin(request,env);const sql=await sqlClient(env),store=await readReactionStore(sql),metrics={};let total=0;for(const [storyId,map] of Object.entries(store.reactions)){const metric=metricForMap(map);metrics[storyId]=metric;total+=metric.total}return json({ok:true,data:{reactions:metrics,totalReactions:total,available:REACTIONS}})}catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500)}}
+
+async function handleCustomer(request,env){const cors=customerCors(request);if(request.method==='OPTIONS')return new Response(null,{status:204,headers:cors});if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405,cors);try{const origin=text(request.headers.get('origin'));if(!CUSTOMER_ORIGINS.has(origin))throw Object.assign(new Error('Origem não autorizada.'),{statusCode:403});let body={};try{body=await request.json()}catch{}const action=text(body?.action)||'list',data=body?.data||{},session=await verifySession(data.session,env),sql=await sqlClient(env),client=await customer(sql,session.clientId);if(!client)throw Object.assign(new Error('Cliente não encontrado.'),{statusCode:404});const visibleIds=await visibleStoryIds(sql,client),store=await readReactionStore(sql),clientKey=String(client.id);
+  if(action==='list'){const selected={};for(const storyId of visibleIds){const reaction=text(store.reactions?.[storyId]?.[clientKey]);if(REACTIONS.includes(reaction))selected[storyId]=reaction}return json({ok:true,data:{selected,available:REACTIONS}},200,cors)}
+  if(action==='react'){const storyId=text(data.id),reaction=text(data.reaction);if(!visibleIds.has(storyId))throw Object.assign(new Error('Publicidade não disponível.'),{statusCode:404});if(!REACTIONS.includes(reaction))throw Object.assign(new Error('Reação inválida.'),{statusCode:400});const map=cleanClientMap(store.reactions[storyId]);if(map[clientKey]===reaction)delete map[clientKey];else map[clientKey]=reaction;store.reactions[storyId]=map;await writeReactionStore(sql,store);const selected=text(map[clientKey]),metric=metricForMap(map);return json({ok:true,data:{id:storyId,reaction:selected,counts:metric.counts,total:metric.total}},200,cors)}
+  throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});
+}catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,cors)}}
+
+export function isStoryReactionsPath(path){return path===ADMIN_PATH||path===CUSTOMER_PATH}
+export function handleStoryReactionsRequest(request,env){const path=new URL(request.url).pathname;return path===CUSTOMER_PATH?handleCustomer(request,env):handleAdmin(request,env)}

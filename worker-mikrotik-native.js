@@ -1,6 +1,6 @@
-const https=require('node:https');
-const dns=require('node:dns').promises;
-const net=require('node:net');
+import { promises as dns } from 'node:dns';
+import { isIP, isIPv4, isIPv6 } from 'node:net';
+import { Buffer } from 'node:buffer';
 
 const MAX_BODY=2*1024*1024;
 const TIMEOUT=15000;
@@ -14,14 +14,14 @@ function json(res,status,data){
 function text(v){return String(v??'').trim()}
 function rows(v){return Array.isArray(v)?v:[]}
 function isUnsafeIp(ip){
-  if(net.isIPv4(ip)){
+  if(isIPv4(ip)){
     const p=ip.split('.').map(Number),a=p[0],b=p[1];
     return a===0||a===10||a===127||a>=224||
       (a===100&&b>=64&&b<=127)||(a===169&&b===254)||(a===172&&b>=16&&b<=31)||
       (a===192&&b===168)||(a===192&&b===0)||(a===198&&(b===18||b===19))||
       (a===192&&b===0&&p[2]===2)||(a===198&&b===51&&p[2]===100)||(a===203&&b===0&&p[2]===113);
   }
-  if(net.isIPv6(ip)){
+  if(isIPv6(ip)){
     const v=ip.toLowerCase();
     return v==='::'||v==='::1'||v.startsWith('fc')||v.startsWith('fd')||/^fe[89ab]/.test(v)||v.startsWith('ff')||v.startsWith('2001:db8:');
   }
@@ -31,7 +31,7 @@ async function assertPublicHost(host){
   host=text(host).replace(/^https?:\/\//i,'').replace(/\/.*$/,'').replace(/^\[|\]$/g,'');
   if(!host||host.length>253||/\s|@/.test(host))throw Error('Informe o domínio público do MikroTik ou o IP público.');
   if(host.toLowerCase()==='localhost'||host.endsWith('.local'))throw Error('A conexão pela nuvem exige endereço público HTTPS.');
-  const literal=net.isIP(host)?[{address:host}]:await dns.lookup(host,{all:true,verbatim:true});
+  const literal=isIP(host)?[{address:host}]:await dns.lookup(host,{all:true,verbatim:true});
   if(!literal.length||literal.some(x=>isUnsafeIp(x.address)))throw Error('Esse endereço não é público. Use o DNS do MikroTik Cloud ou um domínio público apontando para o roteador.');
   return host;
 }
@@ -43,38 +43,30 @@ async function normalizeRouter(r){
   if(!username||!password)throw Error('Informe usuário e senha do MikroTik.');
   return {host,port,username,password,allowSelfSigned:Boolean(r?.allow_self_signed)};
 }
-function request(router,path,{method='GET',body}={}){
-  return new Promise((resolve,reject)=>{
-    const payload=body===undefined?null:JSON.stringify(body);
-    const auth=Buffer.from(`${router.username}:${router.password}`).toString('base64');
-    const req=https.request({
-      hostname:router.host,port:router.port,path:`/rest/${path}`,method,
-      rejectUnauthorized:!router.allowSelfSigned,
-      servername:net.isIP(router.host)?undefined:router.host,
-      headers:{Authorization:`Basic ${auth}`,Accept:'application/json',...(payload?{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)}:{})},
-      timeout:TIMEOUT,
-    },response=>{
-      const chunks=[];let size=0;
-      response.on('data',chunk=>{size+=chunk.length;if(size>MAX_BODY){req.destroy(Error('Resposta do MikroTik excedeu o limite de segurança.'));return}chunks.push(chunk)});
-      response.on('end',()=>{
-        const raw=Buffer.concat(chunks).toString('utf8');let data=null;
-        try{data=raw?JSON.parse(raw):null}catch{data=raw}
-        if(!response.statusCode||response.statusCode<200||response.statusCode>=300){
-          const detail=data&&typeof data==='object'?(data.detail||data.message):raw;
-          reject(Error(`MikroTik recusou a solicitação: ${detail||`HTTP ${response.statusCode||0}`}`));return;
-        }
-        resolve(data);
-      });
-    });
-    req.on('timeout',()=>req.destroy(Error('O MikroTik não respondeu dentro de 15 segundos.')));
-    req.on('error',err=>{
-      const msg=String(err?.message||err);
-      if(/certificate|self[- ]signed|unable to verify|CERT_/i.test(msg))return reject(Error('O certificado HTTPS do MikroTik não foi aceito. Use um certificado Let’s Encrypt do MikroTik Cloud ou marque certificado autoassinado.'));
-      if(/ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT|ENOTFOUND/i.test(msg))return reject(Error('A Vercel não conseguiu alcançar o MikroTik. Confirme MikroTik Cloud/DDNS, porta HTTPS e www-ssl.'));
-      reject(err);
-    });
-    req.end(payload||undefined);
-  });
+async function request(router,path,{method='GET',body}={}){
+  const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),TIMEOUT);
+  const host=router.host.includes(':')&&!router.host.startsWith('[')?`[${router.host}]`:router.host;
+  const url=`https://${host}:${router.port}/rest/${path}`;
+  const payload=body===undefined?undefined:JSON.stringify(body);
+  const auth=Buffer.from(`${router.username}:${router.password}`).toString('base64');
+  try{
+    const response=await fetch(url,{method,cache:'no-store',redirect:'manual',headers:{Authorization:`Basic ${auth}`,Accept:'application/json',...(payload!==undefined?{'Content-Type':'application/json'}:{})},body:payload,signal:ctl.signal});
+    if(response.status>=300&&response.status<400)throw Error(`MikroTik respondeu com redirecionamento HTTP inesperado (HTTP ${response.status}).`);
+    const raw=await response.text();
+    if(new TextEncoder().encode(raw).byteLength>MAX_BODY)throw Error('Resposta do MikroTik excedeu o limite de segurança.');
+    let data=null;try{data=raw?JSON.parse(raw):null}catch{data=raw}
+    if(!response.ok){const detail=data&&typeof data==='object'?(data.detail||data.message):raw;throw Error(`MikroTik recusou a solicitação: ${detail||`HTTP ${response.status}`}`)}
+    return data;
+  }catch(error){
+    if(error?.name==='AbortError')throw Error('O MikroTik não respondeu dentro de 15 segundos.');
+    const msg=String(error?.message||error);
+    if(/certificate|self[- ]signed|unable to verify|CERT_|TLS|SSL/i.test(msg)){
+      if(router.allowSelfSigned)throw Error('Cloudflare não permite ignorar certificado HTTPS inválido. Instale um certificado público válido no MikroTik (Let’s Encrypt/MikroTik Cloud) e mantenha o acesso em HTTPS.');
+      throw Error('O certificado HTTPS do MikroTik não foi aceito pela Cloudflare. Use um certificado público válido no MikroTik.');
+    }
+    if(/ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT|ENOTFOUND|fetch failed|network/i.test(msg))throw Error('A Cloudflare não conseguiu alcançar o MikroTik. Confirme MikroTik Cloud/DDNS, porta HTTPS, www-ssl e certificado válido.');
+    throw error;
+  }finally{clearTimeout(timer)}
 }
 async function print(router,path,proplist=[],query=[],extra={}){
   const body={...extra};if(proplist.length)body['.proplist']=proplist;if(query.length)body['.query']=query;
@@ -105,17 +97,19 @@ function normalizeActiveRow(row={}){const [downloadBytes,uploadBytes]=counterPai
 async function activeSessions(router,username=''){
   const props=['.id','name','service','caller-id','address','uptime','encoding','bytes','bytes-in','bytes-out','session-id','limit-bytes-in','limit-bytes-out'];
   const query=username?[`name=${username}`]:[];
-  let list=[];
-  try{list=await print(router,'ppp/active',props,query,{stats:''})}catch{}
-  const missingStats=list.length&&list.every(row=>!text(row?.bytes)&&!Number.isFinite(Number(row?.['bytes-in']))&&!Number.isFinite(Number(row?.['bytes-out'])));
-  if(!list.length||missingStats){
-    try{
-      const detailed=await print(router,'ppp/active',[],query,{stats:''});
-      if(detailed.length)list=detailed;
-    }catch{}
+  let list=[],lastError=null,firstCompleted=false;
+  try{list=await print(router,'ppp/active',props,query,{stats:''});firstCompleted=true}catch(error){lastError=error}
+  if(firstCompleted){
+    if(!list.length)return [];
+    const missingStats=list.every(row=>!text(row?.bytes)&&!Number.isFinite(Number(row?.['bytes-in']))&&!Number.isFinite(Number(row?.['bytes-out'])));
+    if(missingStats){
+      try{const detailed=await print(router,'ppp/active',[],query,{stats:''});if(detailed.length)list=detailed}catch(error){lastError=error}
+    }
+    return list.map(normalizeActiveRow);
   }
-  if(!list.length){try{const all=rows(await request(router,'ppp/active'));list=username?all.filter(x=>text(x?.name)===username):all}catch{}}
-  return list.map(normalizeActiveRow);
+  try{const detailed=await print(router,'ppp/active',[],query,{stats:''});return detailed.map(normalizeActiveRow)}catch(error){lastError=error}
+  try{const all=rows(await request(router,'ppp/active')),filtered=username?all.filter(x=>text(x?.name)===username):all;return filtered.map(normalizeActiveRow)}catch(error){lastError=error}
+  throw lastError||Error('Não foi possível consultar as sessões PPPoE ativas no MikroTik.');
 }
 async function pppSecrets(router){
   let list=[];
@@ -282,15 +276,27 @@ async function pppoeMonitor(router,ref){
   }catch{return null}
 }
 async function pppoeTopology(router,username,callerId=''){
-  let dynamic=null,host=null,servers=[],vlans=[],bridgeVlans=[];
-  try{const list=await print(router,'interface/pppoe-server',['.id','name','user','service','caller-id','uptime','encoding','mtu','mru','local-address','remote-address','vlan-id','vid'],[`user=${username}`]);dynamic=list[0]||null;if(!dynamic){const all=await print(router,'interface/pppoe-server',['.id','name','user','service','caller-id','uptime','encoding','mtu','mru','local-address','remote-address','vlan-id','vid']);dynamic=all.find(x=>text(x?.user)===username)||null}}catch{}
-  try{const all=rows(await request(router,'interface/pppoe-server'));const full=all.find(x=>text(x?.user)===username);if(full)dynamic={...full,...(dynamic||{})}}catch{}
-  const monitor=dynamic?await pppoeMonitor(router,text(dynamic?.['.id'])||text(dynamic?.name)):null;
+  let dynamic=null;
+  try{
+    const list=await print(router,'interface/pppoe-server',['.id','name','user','service','caller-id','uptime','encoding','mtu','mru','local-address','remote-address','vlan-id','vid'],[`user=${username}`]);
+    dynamic=list[0]||null;
+    if(!dynamic){const all=await print(router,'interface/pppoe-server',['.id','name','user','service','caller-id','uptime','encoding','mtu','mru','local-address','remote-address','vlan-id','vid']);dynamic=all.find(x=>text(x?.user)===username)||null}
+  }catch{}
+  if(!dynamic){try{const all=rows(await request(router,'interface/pppoe-server'));dynamic=all.find(x=>text(x?.user)===username)||null}catch{}}
   const mac=text(callerId||dynamic?.['caller-id']).toUpperCase();
-  if(mac){try{host=(await print(router,'interface/bridge/host',['mac-address','vid','on-interface','bridge'],[`mac-address=${mac}`]))[0]||null}catch{}if(!host){try{const all=await print(router,'interface/bridge/host',['mac-address','vid','on-interface','bridge']);host=all.find(x=>text(x?.['mac-address']).toUpperCase()===mac)||null}catch{}}}
-  try{servers=await print(router,'interface/pppoe-server/server',['.id','service-name','interface','max-mtu','max-mru','pppoe-over-vlan-range','disabled'])}catch{}
-  try{vlans=await print(router,'interface/vlan',['.id','name','interface','vlan-id'])}catch{}
-  try{bridgeVlans=await print(router,'interface/bridge/vlan',['bridge','vlan-ids','tagged','untagged','current-tagged','current-untagged'])}catch{}
+  const hostPromise=mac?(async()=>{
+    let host=null;
+    try{host=(await print(router,'interface/bridge/host',['mac-address','vid','on-interface','bridge'],[`mac-address=${mac}`]))[0]||null}catch{}
+    if(!host){try{const all=await print(router,'interface/bridge/host',['mac-address','vid','on-interface','bridge']);host=all.find(x=>text(x?.['mac-address']).toUpperCase()===mac)||null}catch{}}
+    return host;
+  })():Promise.resolve(null);
+  const [monitor,host,servers,vlans,bridgeVlans]=await Promise.all([
+    dynamic?pppoeMonitor(router,text(dynamic?.['.id'])||text(dynamic?.name)):Promise.resolve(null),
+    hostPromise,
+    print(router,'interface/pppoe-server/server',['.id','service-name','interface','max-mtu','max-mru','pppoe-over-vlan-range','disabled']).catch(()=>[]),
+    print(router,'interface/vlan',['.id','name','interface','vlan-id']).catch(()=>[]),
+    print(router,'interface/bridge/vlan',['bridge','vlan-ids','tagged','untagged','current-tagged','current-untagged']).catch(()=>[])
+  ]);
   const hostVid=numberValue(host?.vid)||0,dynamicVid=numberValue(dynamic?.['vlan-id'],dynamic?.vid,monitor?.['vlan-id'],monitor?.vid)||0,dynamicService=text(dynamic?.service||dynamic?.['service-name']);
   const monitoredInterface=text(monitor?.interface);
   let server=dynamicService?servers.find(x=>text(x?.['service-name'])===dynamicService&&(!monitoredInterface||text(x?.interface)===monitoredInterface)):null;
@@ -331,10 +337,12 @@ async function blockClient(router,data){const username=text(data?.pppoe_username
 async function unblockClient(router,data){const username=text(data?.pppoe_username);if(!username)throw Error('Este cliente não possui usuário PPPoE.');const found=await findSecret(router,username);if(!found)throw Error('Acesso PPPoE não encontrado no MikroTik.');const id=text(found['.id']),profile=text(data?.mikrotik_profile)||text(found.profile)||'default';await request(router,`ppp/secret/${encodeURIComponent(id)}`,{method:'PATCH',body:{disabled:'false',profile,comment:`Provedor Plus - ${text(data?.name)||username}`}});await verifyUnblocked(router,username);return {action:'unblocked',secretId:id,username,profile,verified:true}}
 async function remoteInfo(router){const resource=await request(router,'system/resource');let cloud={};try{const r=await request(router,'ip/cloud/print',{method:'POST',body:{'.proplist':['dns-name','ddns-enabled','status','public-address']}});cloud=Array.isArray(r)?r[0]||{}:r||{}}catch{}return {enabled:true,status:'REST HTTPS',dnsName:text(cloud['dns-name'])||router.host,apiPrepared:true,architecture:text(resource?.['architecture-name']),version:text(resource?.version),routerHost:router.host,mode:'cloud-rest',clientConfig:''}}
 
-module.exports=async function handler(req,res){
-  if(req.method!=='POST')return json(res,405,{ok:false,error:'Método não permitido.'});
+function response(status,data){return new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store, max-age=0','x-provedor-plus-edge':'cloudflare-mikrotik'}})}
+
+export async function handleMikrotikProxy(request){
+  if(request.method!=='POST')return response(405,{ok:false,error:'Método não permitido.'});
   try{
-    const body=req.body&&typeof req.body==='object'?req.body:JSON.parse(req.body||'{}');
+    let body={};try{body=await request.json()}catch{}
     const action=text(body.action);const allowed=new Set(['router.test','router.sync','router.metrics','router.profiles','router.remote','pppoe.save','pppoe.delete','client.status','client.block','client.unblock']);
     if(!allowed.has(action))throw Error('Ação MikroTik inválida.');
     const router=await normalizeRouter(body.router||{});let data;
@@ -347,6 +355,6 @@ module.exports=async function handler(req,res){
     else if(action==='client.status')data=await clientStatus(router,body.data||{});
     else if(action==='client.block')data=await blockClient(router,body.data||{});
     else if(action==='client.unblock')data=await unblockClient(router,body.data||{});
-    return json(res,200,{ok:true,data});
-  }catch(error){return json(res,400,{ok:false,error:error instanceof Error?error.message:String(error)})}
-};
+    return response(200,{ok:true,data});
+  }catch(error){return response(Number(error?.statusCode)||400,{ok:false,error:error instanceof Error?error.message:String(error)})}
+}

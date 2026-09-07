@@ -1,0 +1,1071 @@
+// pp-build: 20260906-mp-webhook1
+import { neon } from '@neondatabase/serverless';
+import { handleNativeAuth,handleNativeCloudState,handleNativeCloudData,resolveRouterForService,recordTrafficForService } from './worker-native-api.js';
+import { handleBankProxy } from './worker-bank-native.js';
+import { handleMikrotikProxy } from './worker-mikrotik-native.js';
+
+const STATE_KEY='web_state_v1017';
+const BANK_SETTINGS_KEY='bank_credentials_v1';
+const CUSTOMER_PORTAL_PATH='/api/customer-portal';
+const PROTOCOLS_PATH='/api/protocols';
+const ALLOWED_PORTAL_ORIGINS=new Set([
+  'https://cliente.fibramais.workers.dev',
+  'https://client.fibramais.workers.dev'
+]);
+
+const text=value=>String(value??'').trim();
+const digits=value=>text(value).replace(/\D/g,'');
+const number=value=>{const n=Number(value);return Number.isFinite(n)?n:null};
+function parseStateValue(value){
+  if(value&&typeof value==='object'&&!Array.isArray(value))return value;
+  if(typeof value==='string'){
+    try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{return {}}
+  }
+  return {};
+}
+const bankUtf8=new TextEncoder();
+const portalUtf8=new TextEncoder();
+function base64Url(value){
+  const bytes=value instanceof Uint8Array?value:new Uint8Array(value);
+  let binary='';
+  for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,Math.min(i+0x8000,bytes.length)));
+  return btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+function base64UrlBytes(value){
+  const raw=text(value).replace(/-/g,'+').replace(/_/g,'/'),padded=raw+'='.repeat((4-raw.length%4)%4),binary=atob(padded),out=new Uint8Array(binary.length);
+  for(let i=0;i<binary.length;i++)out[i]=binary.charCodeAt(i);
+  return out;
+}
+
+function json(data,status=200,headers={}){
+  return new Response(JSON.stringify(data),{
+    status,
+    headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store, max-age=0',...headers}
+  });
+}
+
+function portalCors(request){
+  const origin=text(request.headers.get('origin'));
+  const headers={
+    'Vary':'Origin',
+    'Access-Control-Allow-Methods':'POST,OPTIONS',
+    'Access-Control-Allow-Headers':'Content-Type',
+    'Access-Control-Max-Age':'86400'
+  };
+  if(origin&&ALLOWED_PORTAL_ORIGINS.has(origin))headers['Access-Control-Allow-Origin']=origin;
+  return headers;
+}
+
+function copyHeaders(headers){
+  const next=new Headers(headers);
+  next.delete('host');
+  next.delete('content-length');
+  next.delete('cf-connecting-ip');
+  next.delete('cf-ipcountry');
+  next.delete('cf-ray');
+  next.delete('cf-visitor');
+  return next;
+}
+
+function bankB64(bytes){
+  const view=bytes instanceof Uint8Array?bytes:new Uint8Array(bytes);
+  let binary='';
+  for(const byte of view)binary+=String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function bankBytes(value){
+  const binary=atob(text(value));
+  const out=new Uint8Array(binary.length);
+  for(let i=0;i<binary.length;i++)out[i]=binary.charCodeAt(i);
+  return out;
+}
+
+async function bankCryptoKey(env){
+  const secret=text(env.BANK_SECRET_KEY)||text(env.PORTAL_SESSION_SECRET)||text(env.DATABASE_URL);
+  if(!secret)throw Object.assign(new Error('Chave de proteção das credenciais bancárias não configurada.'),{statusCode:503});
+  const raw=await crypto.subtle.digest('SHA-256',bankUtf8.encode(`provedor-plus-bank-v1|${secret}`));
+  return crypto.subtle.importKey('raw',raw,{name:'AES-GCM'},false,['encrypt','decrypt']);
+}
+
+async function encryptBankSettings(env,value){
+  const key=await bankCryptoKey(env),iv=crypto.getRandomValues(new Uint8Array(12));
+  const cipher=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,bankUtf8.encode(JSON.stringify(value||{})));
+  return {v:1,iv:bankB64(iv),data:bankB64(new Uint8Array(cipher))};
+}
+
+async function decryptBankSettings(env,record){
+  if(!record?.iv||!record?.data)return {};
+  try{
+    const key=await bankCryptoKey(env),plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:bankBytes(record.iv)},key,bankBytes(record.data));
+    const parsed=JSON.parse(new TextDecoder().decode(plain));
+    return parsed&&typeof parsed==='object'?parsed:{};
+  }catch{
+    throw Object.assign(new Error('Não foi possível abrir as credenciais bancárias salvas.'),{statusCode:500});
+  }
+}
+
+function emptyBankSettings(){
+  return {
+    efi:{enabled:false,environment:'sandbox',clientId:'',clientSecret:'',certificatePassword:'',certificateBase64:'',certificateName:'',pixKey:'',pixAutoReceiverAgency:'',pixAutoReceiverAccount:'',webhookUrl:'',lastTestStatus:'',lastTestMessage:'',lastTestAt:'',webhookConfiguredAt:''},
+    mercadoPago:{enabled:false,environment:'sandbox',publicKey:'',accessToken:'',webhookSecret:'',lastTestStatus:'',lastTestMessage:'',lastTestAt:''}
+  };
+}
+
+async function requirePanelUser(request,env){
+  const headers=new Headers(request.headers);
+  headers.set('Content-Type','application/json');
+  const authRequest=new Request(request.url,{method:'POST',headers,body:JSON.stringify({action:'status'})});
+  const response=await handleNativeAuth(authRequest,env);
+  let body={};
+  try{body=await response.json()}catch{}
+  if(!response.ok||!body.ok||body?.data?.authenticated!==true)throw Object.assign(new Error('Sessão expirada ou não autenticada.'),{statusCode:401});
+  return body.data.user||{};
+}
+
+async function requirePanelPermission(request,env,permission){
+  const user=await requirePanelUser(request,env);
+  const role=text(user?.role).toLowerCase(),permissions=Array.isArray(user?.permissions)?user.permissions.map(text):[];
+  if(role==='admin'||permissions.includes(text(permission)))return user;
+  throw Object.assign(new Error('Seu usuário não possui permissão para esta integração.'),{statusCode:403});
+}
+
+async function requireBankAdmin(request,env){
+  const user=await requirePanelUser(request,env);
+  if(text(user?.role).toLowerCase()!=='admin')throw Object.assign(new Error('Somente o administrador pode alterar as credenciais bancárias.'),{statusCode:403});
+  return user;
+}
+
+async function readBankSettings(env){
+  if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Neon não configurada.'),{statusCode:503});
+  const sql=neon(env.DATABASE_URL),rows=await sql`SELECT value FROM pp_settings WHERE key=${BANK_SETTINGS_KEY} LIMIT 1`;
+  const encrypted=Array.isArray(rows)?rows[0]?.value:null;
+  if(!encrypted)return emptyBankSettings();
+  const stored=await decryptBankSettings(env,encrypted);
+  return {
+    ...emptyBankSettings(),
+    ...stored,
+    efi:{...emptyBankSettings().efi,...(stored?.efi||{})},
+    mercadoPago:{...emptyBankSettings().mercadoPago,...(stored?.mercadoPago||{})}
+  };
+}
+
+async function writeBankSettings(env,value){
+  if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Neon não configurada.'),{statusCode:503});
+  const sql=neon(env.DATABASE_URL),updatedAt=new Date().toISOString(),encrypted=await encryptBankSettings(env,value),raw=JSON.stringify(encrypted);
+  await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${BANK_SETTINGS_KEY},${raw}::jsonb,${updatedAt}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at`;
+  return value;
+}
+
+function mergeEfiBank(current,data={}){
+  const previous=current?.efi||emptyBankSettings().efi;
+  const certificateBase64=data.removeCertificate===true?'':data.certificateBase64===undefined?String(previous.certificateBase64||''):String(data.certificateBase64||'');
+  const resetTest=data.clientId!==undefined||data.clientSecret!==undefined||data.certificatePassword!==undefined||data.certificateBase64!==undefined||data.removeCertificate===true;
+  if(certificateBase64.length>2500000)throw Object.assign(new Error('Certificado Efí muito grande. Selecione o arquivo P12/PFX original.'),{statusCode:400});
+  return {
+    enabled:data.enabled===undefined?Boolean(previous.enabled):Boolean(data.enabled),
+    environment:data.environment==='production'?'production':data.environment==='sandbox'?'sandbox':text(previous.environment)||'sandbox',
+    clientId:data.clientId===undefined?text(previous.clientId):text(data.clientId),
+    clientSecret:data.clientSecret===undefined?text(previous.clientSecret):text(data.clientSecret),
+    certificatePassword:data.certificatePassword===undefined?String(previous.certificatePassword||''):String(data.certificatePassword||''),
+    certificateBase64,
+    certificateName:data.removeCertificate===true?'':data.certificateName===undefined?text(previous.certificateName):text(data.certificateName),
+    pixKey:data.pixKey===undefined?text(previous.pixKey):text(data.pixKey),
+    pixAutoReceiverAgency:data.pixAutoReceiverAgency===undefined?text(previous.pixAutoReceiverAgency):digits(data.pixAutoReceiverAgency),
+    pixAutoReceiverAccount:data.pixAutoReceiverAccount===undefined?text(previous.pixAutoReceiverAccount):digits(data.pixAutoReceiverAccount),
+    webhookUrl:data.webhookUrl===undefined?text(previous.webhookUrl):text(data.webhookUrl),
+    lastTestStatus:resetTest?'':text(previous.lastTestStatus),lastTestMessage:resetTest?'':text(previous.lastTestMessage),lastTestAt:resetTest?'':text(previous.lastTestAt),webhookConfiguredAt:resetTest?'':text(previous.webhookConfiguredAt)
+  };
+}
+function mergeMercadoPagoBank(current,data={}){
+  const previous=current?.mercadoPago||emptyBankSettings().mercadoPago;
+  const resetTest=data.accessToken!==undefined;
+  return {
+    enabled:data.enabled===undefined?Boolean(previous.enabled):Boolean(data.enabled),
+    environment:data.environment==='production'?'production':data.environment==='sandbox'?'sandbox':text(previous.environment)||'sandbox',
+    publicKey:data.publicKey===undefined?text(previous.publicKey):text(data.publicKey),
+    accessToken:data.accessToken===undefined?text(previous.accessToken):text(data.accessToken),
+    webhookSecret:text(previous.webhookSecret),
+    lastTestStatus:resetTest?'':text(previous.lastTestStatus),lastTestMessage:resetTest?'':text(previous.lastTestMessage),lastTestAt:resetTest?'':text(previous.lastTestAt)
+  };
+}
+
+function safeBankSettings(value){
+  const efi=value?.efi||{},mp=value?.mercadoPago||{};
+  return {
+    efi:{enabled:Boolean(efi.enabled),environment:text(efi.environment)||'sandbox',clientIdConfigured:Boolean(text(efi.clientId)),clientSecretConfigured:Boolean(text(efi.clientSecret)),certificatePasswordConfigured:Boolean(String(efi.certificatePassword||'')),certificateConfigured:Boolean(String(efi.certificateBase64||'')),certificateName:text(efi.certificateName),pixKey:text(efi.pixKey),pixAutoReceiverAgency:text(efi.pixAutoReceiverAgency),pixAutoReceiverAccount:text(efi.pixAutoReceiverAccount),webhookUrl:text(efi.webhookUrl),lastTestStatus:text(efi.lastTestStatus),lastTestMessage:text(efi.lastTestMessage),lastTestAt:text(efi.lastTestAt),webhookConfiguredAt:text(efi.webhookConfiguredAt)},
+    mercadoPago:{enabled:Boolean(mp.enabled),environment:text(mp.environment)||'sandbox',publicKey:text(mp.publicKey),accessTokenConfigured:Boolean(text(mp.accessToken)),webhookSecretConfigured:Boolean(text(mp.webhookSecret)),lastTestStatus:text(mp.lastTestStatus),lastTestMessage:text(mp.lastTestMessage),lastTestAt:text(mp.lastTestAt)}
+  };
+}
+
+async function handleBankSettings(request,env){
+  if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-bank-settings'});
+  try{
+    await requireBankAdmin(request,env);
+    let body={};try{body=await request.json()}catch{}
+    const action=text(body?.action),data=body?.data||{};let result;
+    if(action==='get')result=await readBankSettings(env);
+    else if(action==='get-safe')result=safeBankSettings(await readBankSettings(env));
+    else if(action==='save-efi'){
+      const current=await readBankSettings(env),next={...current,efi:mergeEfiBank(current,data)};result=await writeBankSettings(env,next);
+    }else if(action==='save-mercado-pago'){
+      const current=await readBankSettings(env),next={...current,mercadoPago:mergeMercadoPagoBank(current,data)};result=await writeBankSettings(env,next);
+    }else if(action==='save-mercado-pago-webhook'){
+      const webhookSecret=text(data?.webhookSecret);
+      if(!webhookSecret)throw Object.assign(new Error('Mercado Pago: informe a chave secreta do Webhook.'),{statusCode:400});
+      const current=await readBankSettings(env),next={...current,mercadoPago:{...current.mercadoPago,webhookSecret}};
+      result=safeBankSettings(await writeBankSettings(env,next)).mercadoPago;
+    }else if(action==='delete-mercado-pago-webhook'){
+      const current=await readBankSettings(env),next={...current,mercadoPago:{...current.mercadoPago,webhookSecret:''}};
+      result=safeBankSettings(await writeBankSettings(env,next)).mercadoPago;
+    }else if(action==='delete-efi'){
+      const current=await readBankSettings(env),next={...current,efi:emptyBankSettings().efi};result=await writeBankSettings(env,next);
+    }else if(action==='delete-mercado-pago'){
+      const current=await readBankSettings(env),next={...current,mercadoPago:emptyBankSettings().mercadoPago};result=await writeBankSettings(env,next);
+    }else if(action==='save-default'){
+      if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Neon não configurada.'),{statusCode:503});
+      const provider=['efi','mercadoPago'].includes(text(data.provider))?text(data.provider):'',sql=neon(env.DATABASE_URL),state=await loadState(sql);
+      state.banks={...(state.banks||{}),defaultProvider:provider};await saveState(sql,state);result={defaultProvider:provider};
+    }else if(action==='test-efi'||action==='test-mercado-pago'||action==='configure-efi-webhooks'){
+      if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Neon não configurada.'),{statusCode:503});
+      const sql=neon(env.DATABASE_URL),current=await readBankSettings(env),secrets=bankSecretsFromVault(current),isEfi=action!=='test-mercado-pago';
+      try{
+        const proxyAction=action==='test-efi'?'efi-test':action==='test-mercado-pago'?'mp-test':'efi-webhooks';
+        const tested=await bankProxyAsService(env,sql,{action:proxyAction,efi:secrets.efi,mercadoPago:secrets.mercadoPago}),now=new Date().toISOString();
+        if(isEfi)current.efi={...current.efi,lastTestStatus:'success',lastTestMessage:text(tested?.message)||'Conexão Efí confirmada.',lastTestAt:now,...(action==='configure-efi-webhooks'?{webhookConfiguredAt:now}:{})};
+        else current.mercadoPago={...current.mercadoPago,lastTestStatus:'success',lastTestMessage:text(tested?.message)||'Conexão Mercado Pago confirmada.',lastTestAt:now};
+        await writeBankSettings(env,current);result={test:tested,settings:safeBankSettings(current)};
+      }catch(error){
+        const now=new Date().toISOString(),message=error instanceof Error?error.message:String(error);
+        if(isEfi)current.efi={...current.efi,lastTestStatus:'error',lastTestMessage:message,lastTestAt:now};else current.mercadoPago={...current.mercadoPago,lastTestStatus:'error',lastTestMessage:message,lastTestAt:now};
+        try{await writeBankSettings(env,current)}catch{};throw error;
+      }
+    }else throw Object.assign(new Error('Ação bancária não permitida.'),{statusCode:400});
+    return json({ok:true,data:result},200,{'x-provedor-plus-edge':'cloudflare-bank-settings'});
+  }catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,{'x-provedor-plus-edge':'cloudflare-bank-settings'});}
+}
+
+async function ensureProtocolTable(sql){
+  await sql`CREATE TABLE IF NOT EXISTS pp_protocols (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    protocol TEXT UNIQUE,
+    client_id BIGINT NULL REFERENCES pp_clients(id) ON DELETE SET NULL,
+    category TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'provedor-plus',
+    status TEXT NOT NULL DEFAULT 'Aberto',
+    created_by_user_id BIGINT NULL REFERENCES pp_users(id) ON DELETE SET NULL,
+    created_by_name TEXT NULL,
+    details JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    closed_at TIMESTAMPTZ NULL
+  )`;
+  await sql`CREATE INDEX IF NOT EXISTS pp_protocols_client_created_idx ON pp_protocols (client_id,created_at DESC)`;
+  await sql`CREATE INDEX IF NOT EXISTS pp_protocols_category_created_idx ON pp_protocols (category,created_at DESC)`;
+}
+
+function protocolCode(id,createdAt){
+  const d=new Date(createdAt||Date.now()),stamp=`${d.getUTCFullYear()}${String(d.getUTCMonth()+1).padStart(2,'0')}${String(d.getUTCDate()).padStart(2,'0')}`;
+  return `PP-${stamp}-${String(Number(id)||0).padStart(6,'0')}`;
+}
+
+function safeProtocol(item){
+  return {
+    id:Number(item?.id)||0,
+    protocol:text(item?.protocol),
+    clientId:Number(item?.client_id)||null,
+    category:text(item?.category),
+    subject:text(item?.subject),
+    source:text(item?.source),
+    status:text(item?.status),
+    createdByName:text(item?.created_by_name),
+    createdAt:text(item?.created_at),
+    closedAt:text(item?.closed_at)
+  };
+}
+
+async function createProtocolRecord(sql,{clientId=null,category='Atendimento',subject='Atendimento',source='provedor-plus',status='Aberto',createdByUserId=null,createdByName='',details={}}={}){
+  await ensureProtocolTable(sql);
+  const client=Number(clientId)||null,userId=Number(createdByUserId)||null,cat=text(category)||'Atendimento',title=text(subject)||'Atendimento',origin=text(source)||'provedor-plus',state=text(status)||'Aberto',name=text(createdByName),raw=JSON.stringify(details&&typeof details==='object'?details:{});
+  const rows=await sql`INSERT INTO pp_protocols (client_id,category,subject,source,status,created_by_user_id,created_by_name,details) VALUES (${client},${cat},${title},${origin},${state},${userId},${name||null},${raw}::jsonb) RETURNING *`;
+  const created=Array.isArray(rows)?rows[0]:null;
+  if(!created?.id)throw Object.assign(new Error('Não foi possível gerar o protocolo do atendimento.'),{statusCode:500});
+  const code=protocolCode(created.id,created.created_at),updated=await sql`UPDATE pp_protocols SET protocol=${code} WHERE id=${Number(created.id)} RETURNING *`;
+  return safeProtocol(updated?.[0]||{...created,protocol:code});
+}
+
+async function listProtocolRecords(sql,clientId=null,limit=50){
+  await ensureProtocolTable(sql);
+  const safeLimit=Math.max(1,Math.min(200,Math.floor(Number(limit)||50))),client=Number(clientId)||0;
+  const rows=client?await sql`SELECT * FROM pp_protocols WHERE client_id=${client} ORDER BY created_at DESC LIMIT ${safeLimit}`:await sql`SELECT * FROM pp_protocols ORDER BY created_at DESC LIMIT ${safeLimit}`;
+  return (Array.isArray(rows)?rows:[]).map(safeProtocol);
+}
+
+async function closeProtocolRecord(sql,protocol,status='Concluído'){
+  await ensureProtocolTable(sql);
+  const code=text(protocol);if(!code)throw Object.assign(new Error('Protocolo inválido.'),{statusCode:400});
+  const rows=await sql`UPDATE pp_protocols SET status=${text(status)||'Concluído'},closed_at=now() WHERE protocol=${code} RETURNING *`;
+  if(!rows?.[0])throw Object.assign(new Error('Protocolo não encontrado.'),{statusCode:404});
+  return safeProtocol(rows[0]);
+}
+
+async function handleProtocols(request,env){
+  if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-protocols'});
+  try{
+    const user=await requirePanelUser(request,env);
+    if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Neon não configurada.'),{statusCode:503});
+    let body={};try{body=await request.json()}catch{}
+    const action=text(body?.action),data=body?.data||{},sql=neon(env.DATABASE_URL);let result;
+    if(action==='create')result=await createProtocolRecord(sql,{clientId:data.clientId,category:data.category,subject:data.subject,source:'provedor-plus',status:data.status||'Aberto',createdByUserId:user?.id,createdByName:user?.name,details:data.details});
+    else if(action==='list')result=await listProtocolRecords(sql,data.clientId,data.limit);
+    else if(action==='close')result=await closeProtocolRecord(sql,data.protocol,data.status||'Concluído');
+    else throw Object.assign(new Error('Ação de protocolo não permitida.'),{statusCode:400});
+    return json({ok:true,data:result},200,{'x-provedor-plus-edge':'cloudflare-protocols'});
+  }catch(error){
+    return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,{'x-provedor-plus-edge':'cloudflare-protocols'});
+  }
+}
+
+async function refreshBankClientRequest(request,env){
+  if(!env.DATABASE_URL)return request;
+  let body={};try{body=await request.clone().json()}catch{return request}
+  if(!body?.client||typeof body.client!=='object')return request;
+  const clientId=Number(body.client?.id||body.invoice?.client_id||body.invoice?.clientId)||0;
+  if(!clientId)return request;
+  const sql=neon(env.DATABASE_URL);
+  const rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,updated_at FROM pp_clients WHERE id=${clientId} LIMIT 1`;
+  const fresh=Array.isArray(rows)?rows[0]:null;
+  if(!fresh)throw Object.assign(new Error('Cliente não encontrado na nuvem. Salve o cadastro antes de emitir a cobrança.'),{statusCode:404});
+  const current=body.client||{},freshAddress=text(fresh.address),freshZip=text(fresh.zip_code);
+  body.client={
+    ...current,
+    ...fresh,
+    id:Number(fresh.id)||clientId,
+    street:freshAddress||text(current.street)||text(current.address),
+    address:freshAddress||text(current.address)||text(current.street),
+    cep:freshZip||text(current.cep)||text(current.zip_code),
+    zip_code:freshZip||text(current.zip_code)||text(current.cep)
+  };
+  return new Request(request.url,{method:'POST',headers:copyHeaders(request.headers),body:JSON.stringify(body)});
+}
+
+async function handleSpecializedNative(request,env){
+  const path=new URL(request.url).pathname;
+  if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-native-integration'});
+  try{
+    if(path==='/api/bank-proxy')await requirePanelPermission(request,env,'billing');
+    else await requirePanelPermission(request,env,'network');
+  }catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||401,{'x-provedor-plus-edge':'cloudflare-native-integration'})}
+  if(path==='/api/bank-proxy'){
+    try{return handleBankProxy(await refreshBankClientRequest(request,env),env)}
+    catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,{'x-provedor-plus-edge':'cloudflare-native-integration'})}
+  }
+  return handleMikrotikProxy(request);
+}
+
+async function portalHmacKey(env,usage=['sign','verify']){
+  const secret=text(env.PORTAL_SESSION_SECRET)||text(env.DATABASE_URL);
+  if(!secret)throw Object.assign(new Error('Sessão segura do portal não configurada.'),{statusCode:503});
+  return crypto.subtle.importKey('raw',portalUtf8.encode(secret),{name:'HMAC',hash:'SHA-256'},false,usage);
+}
+
+async function portalSession(client,env){
+  const payload={clientId:Number(client.id)||client.id,exp:Date.now()+30*60*1000};
+  const encoded=base64Url(portalUtf8.encode(JSON.stringify(payload)));
+  const key=await portalHmacKey(env,['sign']);
+  const signature=await crypto.subtle.sign('HMAC',key,portalUtf8.encode(encoded));
+  return `${encoded}.${base64Url(signature)}`;
+}
+
+async function verifyPortalSession(token,env){
+  const raw=text(token),parts=raw.split('.');
+  if(parts.length!==2||!parts[0]||!parts[1])throw Object.assign(new Error('Sessão do cliente inválida. Entre novamente.'),{statusCode:401});
+  try{
+    const key=await portalHmacKey(env,['verify']),ok=await crypto.subtle.verify('HMAC',key,base64UrlBytes(parts[1]),portalUtf8.encode(parts[0]));
+    if(!ok)throw new Error('assinatura');
+    const payload=JSON.parse(new TextDecoder().decode(base64UrlBytes(parts[0]))),clientId=Number(payload?.clientId)||0,exp=Number(payload?.exp)||0;
+    if(!clientId||exp<=Date.now())throw new Error('expirada');
+    return {clientId,exp,token:raw};
+  }catch{
+    throw Object.assign(new Error('Sessão do cliente expirada ou inválida. Entre novamente.'),{statusCode:401});
+  }
+}
+
+async function loadState(sql){
+  const rows=await sql`SELECT value FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`;
+  return parseStateValue(Array.isArray(rows)?rows[0]?.value:null);
+}
+
+async function saveState(sql,state){
+  const raw=JSON.stringify(state||{}),updatedAt=new Date().toISOString();
+  await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${STATE_KEY},${raw}::jsonb,${updatedAt}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at`;
+  return {state,updated_at:updatedAt};
+}
+
+async function portalClientById(sql,clientId){
+  const rows=await sql`
+    SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,
+           router_id,connection_type,pppoe_username,ip,mikrotik_status,mikrotik_last_sync
+    FROM pp_clients WHERE id=${Number(clientId)} LIMIT 1
+  `;
+  return Array.isArray(rows)?rows[0]||null:null;
+}
+
+function formatDate(value){
+  const raw=text(value).slice(0,10),match=raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match?`${match[3]}/${match[2]}/${match[1]}`:text(value);
+}
+function invoiceCents(row){
+  const centsKeys=['amount_cents','total_cents','value_cents','price_cents','service_amount_cents'];
+  for(const key of centsKeys){const n=number(row?.[key]);if(n!==null)return Math.max(0,Math.round(n));}
+  const valueKeys=['amount','total','value','price','service_amount'];
+  for(const key of valueKeys){const n=number(row?.[key]);if(n!==null)return Math.max(0,Math.round(n*100));}
+  return 0;
+}
+function brlCents(value){return new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format((Number(value)||0)/100);}
+function invoiceReference(row){
+  const explicit=text(row?.reference||row?.competency||row?.competence||row?.month||row?.period);
+  if(explicit)return explicit;
+  const raw=text(row?.due_date||row?.dueDate).slice(0,10),match=raw.match(/^(\d{4})-(\d{2})-/);
+  return match?`${match[2]}/${match[1]}`:'';
+}
+function cashbackRules(state){
+  const settings=state?.settings||{},mode=text(settings.cashback_mode).toLowerCase()==='fixed'?'fixed':'percent';
+  return {enabled:boolValue(settings.cashback_enabled,false),mode,rate:bounded(settings.cashback_rate,0,0,100),fixedCents:Math.max(0,Math.round(Number(settings.cashback_fixed_cents)||0))};
+}
+function cashbackBalanceCents(state,client){
+  const local=stateClient(state,client);if(local?.cashback_balance_cents!==undefined&&local?.cashback_balance_cents!==null){const direct=Number(local.cashback_balance_cents);if(Number.isFinite(direct))return Math.max(0,Math.round(direct))}const amount=Number(local?.cashback_balance);return Number.isFinite(amount)?Math.max(0,Math.round(amount*100)):0;
+}
+function updateCashbackBalance(state,client,nextCents,updatedAt=new Date().toISOString()){
+  const clients=Array.isArray(state.clients)?[...state.clients]:[],position=clients.findIndex(item=>Number(item?.id)===Number(client.id));if(position<0)return null;const local={...clients[position]},before=cashbackBalanceCents(state,client),after=Math.max(0,Math.round(Number(nextCents)||0));local.cashback_balance_cents=after;local.cashback_balance=after/100;local.cashback_updated_at=updatedAt;clients[position]=local;state.clients=clients;return {before,after};
+}
+function appendCashbackTransaction(state,transaction){state.cashback_transactions=[...(Array.isArray(state.cashback_transactions)?state.cashback_transactions:[]),transaction].slice(-5000)}
+function cashbackPendingReservation(row){const amount=Math.max(0,Math.round(Number(row?.cashback_discount_applied_cents)||0)),status=text(row?.cashback_discount_status).toLowerCase(),invoiceStatus=text(row?.status).toLowerCase();if(!amount||status==='used'||['pago','paid','baixado','cancelado','canceled','renegociado','renegotiated','substituido','substituida'].some(value=>invoiceStatus.includes(value)))return 0;return amount;}
+function cashbackReservedCents(state,client,excludeInvoice=null){const excludeId=excludeInvoice?.id===undefined||excludeInvoice?.id===null?'':String(excludeInvoice.id);return (Array.isArray(state?.invoices)?state.invoices:[]).filter(row=>Number(row?.client_id)===Number(client.id)&&(excludeId===''||String(row?.id)!==excludeId)).reduce((sum,row)=>sum+cashbackPendingReservation(row),0)}
+function cashbackAvailableCents(state,client,invoice=null){return Math.max(0,cashbackBalanceCents(state,client)-cashbackReservedCents(state,client,invoice))}
+function cashbackDiscountCents(state,client,invoice){const applied=Math.max(0,Math.round(Number(invoice?.cashback_discount_applied_cents)||0));if(applied)return applied;const status=text(invoice?.status).toLowerCase();if(['pago','paid','baixado','cancelado','canceled','renegociado','renegotiated','substituido','substituida'].some(value=>status.includes(value)))return 0;return Math.min(cashbackAvailableCents(state,client,invoice),invoiceCents(invoice))}
+function applyCashbackDiscount(state,client,invoice){
+  const existing=Math.max(0,Math.round(Number(invoice?.cashback_discount_applied_cents)||0));if(existing)return existing;const amount=Math.min(cashbackAvailableCents(state,client,invoice),invoiceCents(invoice));if(amount<=0)return 0;const createdAt=new Date().toISOString();Object.assign(invoice,{cashback_discount_applied_cents:amount,cashback_discount_transaction_id:'',cashback_discount_applied_at:createdAt,cashback_discount_reserved_at:createdAt,cashback_discount_status:'reserved',cashback_original_cents:invoiceCents(invoice),cashback_pix_amount_cents:Math.max(0,invoiceCents(invoice)-amount)});return amount;
+}
+function repairLegacyCashbackReservation(state,client,invoice){
+  const amount=Math.max(0,Math.round(Number(invoice?.cashback_discount_applied_cents)||0));if(!amount||text(invoice?.cashback_discount_status).toLowerCase()!=='applied')return false;const createdAt=new Date().toISOString(),balance=updateCashbackBalance(state,client,cashbackBalanceCents(state,client)+amount,createdAt);if(!balance)return false;const transactionId=text(invoice?.cashback_discount_transaction_id),transactions=Array.isArray(state.cashback_transactions)?state.cashback_transactions:[];state.cashback_transactions=transactions.filter(item=>!(transactionId&&text(item?.id)===transactionId&&text(item?.source)==='pix_discount'));Object.assign(invoice,{cashback_discount_transaction_id:'',cashback_discount_status:'reserved',cashback_discount_reserved_at:text(invoice?.cashback_discount_applied_at)||createdAt,cashback_discount_migrated_at:createdAt});return true;
+}
+function repairLegacyPendingCashback(state,client){let changed=false;for(const invoice of Array.isArray(state?.invoices)?state.invoices:[]){if(Number(invoice?.client_id)!==Number(client.id)||portalPaymentInactiveStatus(invoice?.status))continue;if(repairLegacyCashbackReservation(state,client,invoice))changed=true}return changed}
+function refundCashbackDiscount(state,client,invoice,reason='Pix cancelado ou recusado'){
+  const amount=Math.max(0,Math.round(Number(invoice?.cashback_discount_applied_cents)||0));if(!amount||text(invoice?.cashback_discount_status).toLowerCase()==='used')return 0;if(text(invoice?.cashback_discount_status).toLowerCase()==='applied')repairLegacyCashbackReservation(state,client,invoice);const createdAt=new Date().toISOString();Object.assign(invoice,{cashback_discount_applied_cents:0,cashback_discount_transaction_id:'',cashback_discount_status:'released',cashback_discount_refunded_at:createdAt,cashback_discount_release_reason:reason,cashback_pix_amount_cents:invoiceCents(invoice)});return amount;
+}
+function finalizeCashbackDiscount(state,client,invoice,paidAt=''){
+  const amount=Math.max(0,Math.round(Number(invoice?.cashback_discount_applied_cents)||0));if(!amount)return 0;const status=text(invoice?.cashback_discount_status).toLowerCase(),usedAt=text(paidAt)||new Date().toISOString();if(status==='used')return amount;if(status==='applied'){Object.assign(invoice,{cashback_discount_status:'used',cashback_discount_used_at:usedAt});return amount}const before=cashbackBalanceCents(state,client),balance=updateCashbackBalance(state,client,before-amount,usedAt);if(!balance)return 0;const transactionId=crypto.randomUUID();appendCashbackTransaction(state,{id:transactionId,client_id:Number(client.id),invoice_id:invoice.id,type:'debit',source:'pix_discount',amount_cents:amount,balance_before_cents:balance.before,balance_after_cents:balance.after,reason:`Desconto usado no Pix da fatura ${invoiceReference(invoice)||invoice.id}`,created_at:usedAt,payment_at:usedAt,created_by_name:'Pagamento Pix confirmado'});Object.assign(invoice,{cashback_discount_transaction_id:transactionId,cashback_discount_status:'used',cashback_discount_used_at:usedAt});return amount;
+}
+function cashbackAmountCents(state,invoice){const rules=cashbackRules(state),paidCents=Math.max(0,invoiceCents(invoice)-Math.max(0,Math.round(Number(invoice?.cashback_discount_applied_cents)||0)));if(!rules.enabled||!paidCents||invoice?.cashback_credited_at||invoice?.cashback_eligible===false||invoice?.cashback_enabled===false)return 0;return rules.mode==='fixed'?rules.fixedCents:Math.max(0,Math.round(paidCents*rules.rate/100))}
+function cashbackPortalData(state,client){
+  const balanceCents=cashbackBalanceCents(state,client),reservedCents=cashbackReservedCents(state,client),availableCents=Math.max(0,balanceCents-reservedCents),statement=(Array.isArray(state.cashback_transactions)?state.cashback_transactions:[]).filter(item=>Number(item?.client_id)===Number(client.id)).sort((a,b)=>String(b?.created_at||'').localeCompare(String(a?.created_at||''))).slice(0,200).map(item=>({id:text(item?.id),invoiceId:item?.invoice_id??null,type:item?.type==='debit'?'debit':'credit',source:text(item?.source),description:text(item?.reason)||'Movimentação de cashback',amountCents:Math.max(0,Math.round(Number(item?.amount_cents)||0)),balanceAfterCents:Math.max(0,Math.round(Number(item?.balance_after_cents)||0)),createdAt:text(item?.created_at),createdBy:text(item?.created_by_name)}));
+  return {balanceCents,balance:balanceCents/100,reservedCents,reserved:reservedCents/100,availableCents,available:availableCents/100,statement,totalCreditsCents:statement.filter(item=>item.type==='credit').reduce((sum,item)=>sum+item.amountCents,0),totalDebitsCents:statement.filter(item=>item.type==='debit').reduce((sum,item)=>sum+item.amountCents,0)};
+}
+function pixCashbackEligible(invoice){const method=text(invoice?.payment_method).toLowerCase(),detail=text(invoice?.bank_status_detail).toLowerCase();return method.includes('pix')||detail.includes('pix')||Boolean(text(invoice?.bank_pix_code||invoice?.pix_copy_paste))}
+function creditPixCashback(state,client,invoice,paidAt=''){
+  if(!pixCashbackEligible(invoice)||invoice?.cashback_eligible===false||invoice?.cashback_enabled===false)return false;
+  const rules=cashbackRules(state),amountCents=cashbackAmountCents(state,invoice);if(!rules.enabled||amountCents<=0)return false;
+  const transactions=Array.isArray(state.cashback_transactions)?state.cashback_transactions:[],already=Boolean(invoice?.cashback_credited_at)||transactions.some(item=>item?.source==='pix_paid'&&String(item?.invoice_id)===String(invoice?.id));if(already)return false;
+  const before=cashbackBalanceCents(state,client),createdAt=new Date().toISOString(),paymentAt=text(paidAt)||createdAt,transactionId=crypto.randomUUID(),rate=rules.mode==='fixed'?rules.fixedCents:rules.rate,balance=updateCashbackBalance(state,client,before+amountCents,createdAt);if(!balance)return false;
+  const transaction={id:transactionId,client_id:Number(client.id),invoice_id:invoice.id,type:'credit',source:'pix_paid',amount_cents:amountCents,balance_before_cents:balance.before,balance_after_cents:balance.after,reason:`Cashback automático do Pix da fatura ${invoiceReference(invoice)||invoice.id}`,created_at:createdAt,payment_at:paymentAt,created_by_name:'Pagamento Pix automático'};
+  appendCashbackTransaction(state,transaction);Object.assign(invoice,{cashback_credited_at:createdAt,cashback_credit_cents:amountCents,cashback_transaction_id:transactionId,cashback_mode:rules.mode,cashback_rate:rate});return true;
+}
+function mapInvoice(row,client,state){
+  const cents=invoiceCents(row),total=brlCents(cents),planName=text(client.plan_name||client.plan||state?.plans?.find?.(p=>Number(p?.id)===Number(client.plan_id))?.name)||'Serviço de internet',company=state?.settings||state?.company||{},rules=cashbackRules(state),cashbackPending=cashbackAmountCents(state,row),effectiveRate=rules.mode==='fixed'&&cents>0?Math.round(cashbackPending/cents*10000)/100:rules.rate,cashbackDiscount=cashbackDiscountCents(state,client,row),pixCents=Math.max(0,cents-cashbackDiscount),cashbackAvailable=cashbackAvailableCents(state,client,row);
+  const pdfUrl=text(row?.bank_pdf_url||row?.bank_ticket_url||row?.pdf_url||row?.invoice_pdf_url||row?.boleto_pdf_url||row?.bank_slip_pdf_url);
+  const ticketUrl=text(row?.bank_ticket_url||row?.bank_pdf_url||row?.pdf_url||row?.invoice_pdf_url||row?.boleto_pdf_url||row?.bank_slip_pdf_url);
+  const digitableLine=text(row?.bank_digitable_line||row?.digitable_line||row?.linha_digitavel);
+  return {
+    id:row?.id??null,reference:invoiceReference(row),dueDate:formatDate(row?.due_date||row?.dueDate),dueDateRaw:text(row?.due_date||row?.dueDate),
+    total,totalNumber:cents/100,amountCents:cents,status:text(row?.status)||'Pendente',serviceName:planName,serviceAmount:total,serviceAmountRaw:total,subtotal:total,quantity:'1',unitAmount:total,
+    customerName:text(client.name),customerDocument:text(client.document),customerAddress:[client.address||client.street,client.city,client.state].map(text).filter(Boolean).join(' - '),customerWhatsapp:text(client.phone||client.whatsapp),contract:text(client.contract_number),
+    companyName:text(company.company_name||company.companyName||company.name)||'Fibra+',companyCnpj:text(company.cnpj||company.company_cnpj),companyIe:text(company.ie||company.state_registration||company.inscricao_estadual),companyWhatsapp:text(company.whatsapp||company.phone)||'(92) 98486-7428',
+    pixPaymentUrl:text(row?.pix_payment_url||row?.pixPaymentUrl||row?.pix_url||row?.pixUrl),pixCopyPaste:text(row?.pix_copy_paste||row?.pixCopyPaste||row?.pix_payload||row?.pixPayload||row?.bank_pix_code),pixQrImage:text(row?.pix_qr_image||row?.pixQrImage||row?.pix_qr_url||row?.qr_code_url),cardPaymentUrl:text(row?.card_payment_url||row?.cardPaymentUrl||row?.checkout_url||row?.payment_url),
+    pdfUrl,ticketUrl,digitableLine,barcode:text(row?.bank_barcode||row?.barcode||row?.barcode_content),barcodeImage:text(row?.barcode_image||row?.barcode_url),bankCode:text(row?.bank_code||row?.bankCode),ourNumber:text(row?.our_number||row?.nosso_numero),documentNumber:text(row?.document_number||row?.number||row?.id),bankProvider:text(row?.bank_provider),bankStatus:text(row?.bank_status),
+    cashbackEnabled:rules.enabled&&row?.cashback_eligible!==false&&row?.cashback_enabled!==false,cashbackMode:rules.mode,cashbackRate:effectiveRate,cashbackFixed:rules.fixedCents/100,cashbackRuleLabel:rules.mode==='fixed'?`${brlCents(rules.fixedCents)} por Pix`:`${rules.rate}% do valor pago`,cashbackPending:cashbackPending/100,cashbackBalance:cashbackBalanceCents(state,client)/100,cashbackAvailable:cashbackAvailable/100,cashbackDiscount:cashbackDiscount/100,cashbackDiscountCents:cashbackDiscount,pixAmount:pixCents/100,pixAmountCents:pixCents
+  };
+}
+function mapPlan(plan){
+  const cents=number(plan?.price_cents),plain=number(plan?.price??plan?.amount);
+  return {id:plan?.id??null,name:text(plan?.name||plan?.title)||'Plano Fibra+',speed:text(plan?.speed||plan?.bandwidth),description:text(plan?.description),price:cents!==null?cents/100:(plain??0),highlight:plan?.highlight===true,badge:text(plan?.badge||plan?.category)||'Plano Fibra+'};
+}
+function sameClient(client,{document='',cpf='',cnpj='',contract=''}){
+  const requestedDocument=digits(document||cpf||cnpj),storedDocument=digits(client?.document),storedContract=text(client?.contract_number),contractDigits=digits(storedContract);
+  const byDocument=requestedDocument?storedDocument===requestedDocument:false;
+  const byContract=contract?(storedContract===contract||contractDigits===digits(contract)):false;
+  if(requestedDocument&&contract)return byDocument&&byContract;
+  return byDocument||byContract;
+}
+
+function portalClientData(client){
+  return {
+    id:client.id,
+    name:text(client.name),
+    firstName:text(client.name).split(/\s+/)[0]||'',
+    document:text(client.document),
+    contract:text(client.contract_number),
+    whatsapp:text(client.phone),
+    email:text(client.email),
+    address:[client.address,client.city,client.state].map(text).filter(Boolean).join(' - '),
+    status:text(client.status),
+    plan:text(client.plan)
+  };
+}
+
+function safeNegotiation(item){
+  return {
+    id:text(item?.id),
+    protocol:text(item?.protocol),
+    status:text(item?.status),
+    createdAt:text(item?.created_at),
+    originalAmountCents:Number(item?.original_amount_cents)||0,
+    discountCents:Number(item?.discount_cents)||0,
+    negotiatedAmountCents:Number(item?.negotiated_amount_cents)||0,
+    installmentTotal:Number(item?.installment_total)||0,
+    originalInvoiceIds:Array.isArray(item?.original_invoice_ids)?item.original_invoice_ids:[],
+    newInvoiceIds:Array.isArray(item?.new_invoice_ids)?item.new_invoice_ids:[]
+  };
+}
+
+function normalizePortalDate(value){
+  if(!value)return '';
+  const date=value instanceof Date?value:new Date(value);
+  return Number.isNaN(date.getTime())?text(value):date.toISOString();
+}
+function portalDateLabel(value){
+  const iso=normalizePortalDate(value);if(!iso)return '';
+  const date=new Date(iso);if(Number.isNaN(date.getTime()))return text(value);
+  try{return new Intl.DateTimeFormat('pt-BR',{dateStyle:'short',timeStyle:'medium',timeZone:'America/Maceio'}).format(date)}catch{return iso}
+}
+async function portalConnectionContext(env,data){
+  if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão nativa com o Neon não configurada na Cloudflare.'),{statusCode:503});
+  const session=await verifyPortalSession(data?.session,env),sql=neon(env.DATABASE_URL),client=await portalClientById(sql,session.clientId);
+  if(!client)throw Object.assign(new Error('Cliente da sessão não foi encontrado.'),{statusCode:404});
+  const state=await loadState(sql);if(repairLegacyPendingCashback(state,client))await saveState(sql,state);return {session,sql,client,state};
+}
+async function portalLiveConnection(env,sql,client){
+  const checkedFallback=normalizePortalDate(client?.mikrotik_last_sync),storedStatus=text(client?.mikrotik_status||client?.status),storedIp=text(client?.ip);
+  const fallback={
+    status:storedStatus||'Aguardando dados',pppoeStatus:client?.connection_type==='PPPoE'?'Aguardando confirmação':'Não se aplica',pppoeConnected:null,online:null,
+    ip:storedIp||'Aguardando dados',uptime:'',downloadBps:null,uploadBps:null,liveRatesAvailable:false,latencyMs:null,packetLoss:null,availability30Days:null,
+    quality:'Aguardando dados',checkedAt:checkedFallback,lastConnection:portalDateLabel(checkedFallback)||'Aguardando dados',lastConnectionIso:checkedFallback,lastConnectionLabel:portalDateLabel(checkedFallback),diagnosticStatus:'idle',diagnosticMessage:'Pronto para verificar sua conexão.',checking:false,isChecking:false,source:'stored',connectionError:''
+  };
+  if(client?.connection_type!=='PPPoE')return {...fallback,status:storedStatus||'Não se aplica',pppoeStatus:'Não se aplica',quality:'Não se aplica',source:'not-pppoe'};
+  if(!Number(client?.router_id)||!text(client?.pppoe_username))return {...fallback,status:'Aguardando configuração',connectionError:'Cliente sem MikroTik ou usuário PPPoE vinculado.',source:'configuration'};
+  try{
+    const router=await resolveRouterForService(env,client.router_id),response=await handleMikrotikProxy(new Request('https://painel.fibramais.workers.dev/api/mikrotik-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'client.status',router,data:client})}));
+    let body={};try{body=await response.json()}catch{}
+    if(!response.ok||!body.ok)throw new Error(text(body?.error)||`Falha no diagnóstico MikroTik (HTTP ${response.status}).`);
+    const live=body.data||{},checkedAt=normalizePortalDate(live.checkedAt)||new Date().toISOString();let traffic=null;
+    try{traffic=await recordTrafficForService(env,client.id,live)}catch{}
+    const liveDown=Number(live.downloadBps),liveUp=Number(live.uploadBps),trafficDown=Number(traffic?.downloadBps),trafficUp=Number(traffic?.uploadBps);
+    const downloadBps=Number.isFinite(liveDown)?Math.max(0,liveDown):(Number.isFinite(trafficDown)?Math.max(0,trafficDown):null),uploadBps=Number.isFinite(liveUp)?Math.max(0,liveUp):(Number.isFinite(trafficUp)?Math.max(0,trafficUp):null);
+    const latency=live.qualityAvailable&&Number.isFinite(Number(live.latencyMs))?Math.max(0,Math.round(Number(live.latencyMs))):null,loss=live.packetLoss===null||live.packetLoss===undefined||!Number.isFinite(Number(live.packetLoss))?null:Math.max(0,Math.min(100,Math.round(Number(live.packetLoss))));
+    const connection={
+      status:live.online?'Online':'Offline',pppoeStatus:live.online?'Conectado':'Desconectado',pppoeConnected:Boolean(live.online),online:Boolean(live.online),ip:text(live.ip)||storedIp||'Aguardando dados',uptime:text(live.uptime),
+      downloadBps,uploadBps,liveRatesAvailable:Boolean(live.liveRatesAvailable)||(Number(downloadBps)>0)||(Number(uploadBps)>0),latencyMs:latency,packetLoss:loss,availability30Days:null,
+      quality:text(live.quality)||(live.online?'Boa':'Sem conexão'),qualityAvailable:Boolean(live.qualityAvailable),checkedAt,lastConnection:portalDateLabel(checkedAt),lastConnectionIso:checkedAt,lastConnectionLabel:portalDateLabel(checkedAt),diagnosticStatus:'complete',diagnosticMessage:'Diagnóstico concluído.',checking:false,isChecking:false,source:'mikrotik-live',connectionError:'',
+      trafficMonth:text(traffic?.current?.month),monthDownloadBytes:Number(traffic?.current?.download_bytes)||0,monthUploadBytes:Number(traffic?.current?.upload_bytes)||0
+    };
+    try{await sql`UPDATE pp_clients SET ip=COALESCE(NULLIF(${text(live.ip)},''),ip),mikrotik_status=${live.online?'Online':'Offline'},mikrotik_last_sync=${checkedAt},updated_at=${checkedAt} WHERE id=${Number(client.id)}`;}catch{}
+    return connection;
+  }catch(error){
+    const checkedAt=new Date().toISOString(),message=error instanceof Error?error.message:String(error);
+    return {...fallback,status:'Indisponível',quality:'Indisponível',checkedAt,lastConnection:portalDateLabel(checkedFallback||checkedAt),lastConnectionIso:checkedFallback||checkedAt,lastConnectionLabel:portalDateLabel(checkedFallback||checkedAt),diagnosticStatus:'error',diagnosticMessage:message,checking:false,isChecking:false,source:'mikrotik-error',connectionError:message};
+  }
+}
+async function portalSnapshot(client,state,env,sessionToken='',connectionOverride=null,{includeProtocols=true}={}){
+  const invoices=(Array.isArray(state.invoices)?state.invoices:[])
+    .filter(row=>Number(row?.client_id)===Number(client.id))
+    .map(row=>mapInvoice(row,client,state))
+    .sort((a,b)=>String(b.dueDateRaw).localeCompare(String(a.dueDateRaw)));
+  const inactiveStatuses=new Set(['pago','paid','baixado','cancelado','canceled','renegociado','renegotiated','substituido','substituida']);
+  const pending=invoices.filter(row=>!inactiveStatuses.has(text(row.status).toLowerCase()));
+  const current=(pending.sort((a,b)=>String(a.dueDateRaw).localeCompare(String(b.dueDateRaw)))[0]||invoices[0]||null);
+  const plans=(Array.isArray(state.plans)?state.plans:[])
+    .filter(plan=>plan?.active!==false&&plan?.enabled!==false&&plan?.portal_visible!==false)
+    .map(mapPlan);
+  const connectionStatus=text(client.mikrotik_status||client.status);
+  const online=/online|conectado|ativo/i.test(connectionStatus)&&!/offline|desconectado|bloqueado/i.test(connectionStatus);
+  const negotiations=(Array.isArray(state.negotiations)?state.negotiations:[])
+    .filter(item=>Number(item?.client_id)===Number(client.id))
+    .slice(-20).reverse().map(safeNegotiation);
+  let protocols=[];
+  if(includeProtocols)try{if(env.DATABASE_URL)protocols=await listProtocolRecords(neon(env.DATABASE_URL),client.id,20)}catch{}
+  return {
+    session:sessionToken||await portalSession(client,env),
+    client:portalClientData(client),
+    cashback:cashbackPortalData(state,client),
+    invoice:current,
+    invoices,
+    plans,
+    negotiations,
+    protocols,
+    connection:{
+      status:connectionStatus||'Aguardando dados',
+      pppoeStatus:client.connection_type==='PPPoE'?(online?'Conectado':'Aguardando confirmação'):'Não se aplica',
+      pppoeConnected:client.connection_type==='PPPoE'?online:null,
+      online:client.connection_type==='PPPoE'?online:null,
+      ip:text(client.ip)||'Aguardando dados',
+      lastConnection:portalDateLabel(client.mikrotik_last_sync)||'Aguardando dados',
+      lastConnectionIso:normalizePortalDate(client.mikrotik_last_sync),
+      lastConnectionLabel:portalDateLabel(client.mikrotik_last_sync),
+      checkedAt:normalizePortalDate(client.mikrotik_last_sync),
+      uptime:'',downloadBps:null,uploadBps:null,liveRatesAvailable:false,latencyMs:null,packetLoss:null,
+      availability30Days:null,
+      quality:online?'Boa':'Aguardando dados',
+      diagnosticStatus:'idle',diagnosticMessage:'Pronto para verificar sua conexão.',checking:false,isChecking:false,
+      source:'stored',connectionError:'',
+      regionIssue:{active:false,status:'clear',title:'Nenhum problema informado na região',message:'Não há manutenção ou indisponibilidade geral informada no momento.'},
+      ...(connectionOverride&&typeof connectionOverride==='object'?connectionOverride:{})
+    },
+    diagnostic:{
+      ok:!text(connectionOverride?.connectionError),
+      status:connectionOverride?(text(connectionOverride?.connectionError)?'error':'complete'):'idle',
+      message:text(connectionOverride?.connectionError)||(connectionOverride?'Diagnóstico concluído.':'Pronto para verificar sua conexão.'),
+      checkedAt:text(connectionOverride?.checkedAt)||normalizePortalDate(client.mikrotik_last_sync)
+    }
+  };
+}
+
+function boolValue(value,fallback){
+  if(value===undefined||value===null||value==='')return fallback;
+  if(typeof value==='boolean')return value;
+  const v=text(value).toLowerCase();
+  if(['true','1','sim','yes','on'].includes(v))return true;
+  if(['false','0','nao','não','no','off'].includes(v))return false;
+  return fallback;
+}
+
+function bounded(value,fallback,min,max){
+  const n=Number(value);
+  return Number.isFinite(n)?Math.max(min,Math.min(max,n)):fallback;
+}
+
+function negotiationRules(state){
+  const settings=state?.settings||{};
+  return {
+    enabled:boolValue(settings.negotiation_auto_enabled,true),
+    minOverdueDays:Math.floor(bounded(settings.negotiation_min_overdue_days,1,0,365)),
+    cashDiscountPercent:bounded(settings.negotiation_cash_discount_percent,10,0,100),
+    installmentDiscountPercent:bounded(settings.negotiation_installment_discount_percent,0,0,100),
+    maxInstallments:Math.floor(bounded(settings.negotiation_max_installments,6,1,12)),
+    entryPercent:bounded(settings.negotiation_entry_percent,20,0,100),
+    firstDueDays:Math.floor(bounded(settings.negotiation_first_due_days,5,0,30))
+  };
+}
+
+function dateKey(date=new Date()){
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth()+1).padStart(2,'0')}-${String(date.getUTCDate()).padStart(2,'0')}`;
+}
+
+function dateFromKeyUtc(value){
+  const m=text(value).slice(0,10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m?new Date(Date.UTC(Number(m[1]),Number(m[2])-1,Number(m[3]),12)):null;
+}
+
+function addDaysKey(key,days){
+  const date=dateFromKeyUtc(key)||new Date();date.setUTCDate(date.getUTCDate()+Number(days||0));return dateKey(date);
+}
+
+function addMonthsKey(key,months){
+  const date=dateFromKeyUtc(key)||new Date(),day=date.getUTCDate();
+  date.setUTCDate(1);date.setUTCMonth(date.getUTCMonth()+Number(months||0));
+  const last=new Date(Date.UTC(date.getUTCFullYear(),date.getUTCMonth()+1,0,12)).getUTCDate();
+  date.setUTCDate(Math.min(day,last));return dateKey(date);
+}
+
+function overdueDays(dueKey){
+  const due=dateFromKeyUtc(dueKey),today=dateFromKeyUtc(dateKey());
+  if(!due||!today||due.getTime()>=today.getTime())return 0;
+  return Math.floor((today.getTime()-due.getTime())/86400000);
+}
+
+function negotiationInvoiceEligible(row,clientId,rules){
+  if(Number(row?.client_id)!==Number(clientId))return false;
+  const status=text(row?.status).toLowerCase();
+  if(['pago','paid','baixado','cancelado','canceled','renegociado','renegotiated','substituido','substituida'].some(value=>status.includes(value)))return false;
+  if(text(row?.negotiation_id))return false;
+  const due=text(row?.due_date||row?.dueDate).slice(0,10),days=overdueDays(due);
+  return Boolean(due)&&days>=rules.minOverdueDays&&days>0&&invoiceCents(row)>0;
+}
+
+function installmentSchedule(totalCents,count,entryPercent,firstDueDate){
+  const total=Math.max(1,Math.round(Number(totalCents)||0)),qty=Math.max(1,Math.round(Number(count)||1));
+  if(qty===1)return [{number:1,dueDate:firstDueDate,amountCents:total}];
+  let entry=Number(entryPercent)>0?Math.round(total*Number(entryPercent)/100):Math.floor(total/qty);
+  entry=Math.max(1,Math.min(total-(qty-1),entry));
+  const remaining=total-entry,parts=qty-1,base=Math.floor(remaining/parts),extra=remaining-base*parts,out=[{number:1,dueDate:firstDueDate,amountCents:entry}];
+  for(let i=0;i<parts;i++)out.push({number:i+2,dueDate:addMonthsKey(firstDueDate,i+1),amountCents:base+(i<extra?1:0)});
+  return out;
+}
+
+function buildNegotiationOptions(state,client,invoiceIds){
+  const rules=negotiationRules(state),all=Array.isArray(state.invoices)?state.invoices:[],eligible=all.filter(row=>negotiationInvoiceEligible(row,client.id,rules));
+  const explicit=Array.isArray(invoiceIds),wanted=new Set((invoiceIds||[]).map(value=>String(value)));
+  const selected=explicit?eligible.filter(row=>wanted.has(String(row.id))):eligible;
+  const originalCents=selected.reduce((sum,row)=>sum+invoiceCents(row),0),firstDueDate=addDaysKey(dateKey(),rules.firstDueDays),options=[];
+  if(originalCents>0){
+    const cashDiscountCents=Math.min(originalCents-1,Math.max(0,Math.round(originalCents*rules.cashDiscountPercent/100))),cashTotal=Math.max(1,originalCents-cashDiscountCents);
+    options.push({id:'cash',label:'À vista',installments:1,discountPercent:rules.cashDiscountPercent,discountCents:cashDiscountCents,totalCents:cashTotal,entryCents:cashTotal,firstDueDate,schedule:installmentSchedule(cashTotal,1,100,firstDueDate)});
+    for(let qty=2;qty<=rules.maxInstallments;qty++){
+      const discountCents=Math.min(originalCents-1,Math.max(0,Math.round(originalCents*rules.installmentDiscountPercent/100))),totalCents=Math.max(qty,originalCents-discountCents),schedule=installmentSchedule(totalCents,qty,rules.entryPercent,firstDueDate);
+      options.push({id:`p${qty}`,label:`${qty} parcelas`,installments:qty,discountPercent:rules.installmentDiscountPercent,discountCents,totalCents,entryCents:schedule[0]?.amountCents||0,firstDueDate,schedule});
+    }
+  }
+  return {
+    enabled:rules.enabled,
+    rules,
+    eligibleInvoices:eligible.map(row=>({id:row.id,reference:invoiceReference(row),dueDate:formatDate(row.due_date||row.dueDate),dueDateRaw:text(row.due_date||row.dueDate),daysOverdue:overdueDays(text(row.due_date||row.dueDate).slice(0,10)),amountCents:invoiceCents(row),total:brlCents(invoiceCents(row)),status:text(row.status)||'Pendente'})),
+    selectedInvoiceIds:selected.map(row=>row.id),
+    originalCents,
+    originalTotal:brlCents(originalCents),
+    options
+  };
+}
+
+function stateClient(state,client){return (Array.isArray(state?.clients)?state.clients:[]).find(row=>Number(row?.id)===Number(client.id))||{}}
+
+function bankClient(client,state){
+  const local=stateClient(state,client),plan=state?.plans?.find?.(item=>Number(item?.id)===Number(local.plan_id||client.plan_id));
+  return {...local,...client,plan_name:text(plan?.name||client.plan||local.plan)||'Sem plano',plan_speed:text(plan?.speed)};
+}
+
+function bankInvoice(invoice,client,state){
+  const local=stateClient(state,client),plan=state?.plans?.find?.(item=>Number(item?.id)===Number(local.plan_id||client.plan_id));
+  return {
+    ...invoice,
+    client_name:text(client.name),
+    client_phone:text(client.phone),
+    client_whatsapp:text(local.whatsapp||client.phone),
+    client_document:text(client.document),
+    client_email:text(client.email),
+    client_neighborhood:text(local.neighborhood),
+    client_cep:text(local.cep||client.zip_code),
+    client_street:text(local.street||client.address),
+    client_address_number:text(local.address_number),
+    client_complement:text(local.complement),
+    client_city:text(client.city),
+    client_state:text(client.state),
+    client_contract_number:text(client.contract_number),
+    client_status:text(client.status),
+    client_plan:text(plan?.name||client.plan)||'Sem plano'
+  };
+}
+
+function bankSecretsFromVault(vault){
+  return {
+    efi:{environment:text(vault?.efi?.environment)||'sandbox',clientId:text(vault?.efi?.clientId),clientSecret:text(vault?.efi?.clientSecret),certificatePassword:String(vault?.efi?.certificatePassword||''),certificateBase64:String(vault?.efi?.certificateBase64||''),pixKey:text(vault?.efi?.pixKey),pixAutoReceiverAgency:text(vault?.efi?.pixAutoReceiverAgency),pixAutoReceiverAccount:text(vault?.efi?.pixAutoReceiverAccount),webhookUrl:text(vault?.efi?.webhookUrl)},
+    mercadoPago:{environment:text(vault?.mercadoPago?.environment)||'sandbox',publicKey:text(vault?.mercadoPago?.publicKey),accessToken:text(vault?.mercadoPago?.accessToken),webhookSecret:text(vault?.mercadoPago?.webhookSecret)}
+  };
+}
+
+async function negotiationBankContext(env,state,client,selectedRows){
+  const vault=await readBankSettings(env),ready=[];
+  if(vault?.efi?.enabled&&text(vault.efi.clientId)&&text(vault.efi.clientSecret))ready.push('efi');
+  if(vault?.mercadoPago?.enabled&&text(vault.mercadoPago.accessToken))ready.push('mercadoPago');
+  if(!ready.length)throw Object.assign(new Error('A negociação automática está aguardando a configuração do banco no Provedor Plus.'),{statusCode:409});
+  const local=stateClient(state,client),original=[...new Set((selectedRows||[]).map(row=>text(row?.bank_provider)).filter(provider=>ready.includes(provider)))];
+  const candidates=[text(local.billing_bank_provider),text(state?.banks?.defaultProvider),original.length===1?original[0]:''];
+  let provider=candidates.find(value=>ready.includes(value))||'';
+  if(!provider&&ready.length===1)provider=ready[0];
+  if(!provider)throw Object.assign(new Error('Defina o banco emissor padrão em Integração antes de liberar a negociação automática.'),{statusCode:409});
+  return {provider,vault,secrets:bankSecretsFromVault(vault)};
+}
+
+async function sha256Hex(value){
+  const bytes=new Uint8Array(await crypto.subtle.digest('SHA-256',portalUtf8.encode(String(value||''))));
+  return [...bytes].map(byte=>byte.toString(16).padStart(2,'0')).join('');
+}
+
+function serviceToken(){const bytes=new Uint8Array(32);crypto.getRandomValues(bytes);return base64Url(bytes)}
+
+async function bankProxyAsService(env,sql,payload){
+  const response=await handleBankProxy(new Request('https://painel.fibramais.workers.dev/api/bank-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),env);
+  let body={};try{body=await response.json()}catch{}
+  if(!response.ok||!body.ok)throw Object.assign(new Error(body?.error||`Falha na integração bancária Cloudflare (HTTP ${response.status}).`),{statusCode:response.status>=400&&response.status<500?409:502});
+  return body.data||{};
+}
+
+async function negotiationOptionsForSession(env,data){
+  if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão nativa com o Neon não configurada na Cloudflare.'),{statusCode:503});
+  const session=await verifyPortalSession(data?.session,env),sql=neon(env.DATABASE_URL),client=await portalClientById(sql,session.clientId);
+  if(!client)throw Object.assign(new Error('Cliente da sessão não foi encontrado.'),{statusCode:404});
+  const state=await loadState(sql),preview=buildNegotiationOptions(state,client,Array.isArray(data?.invoiceIds)?data.invoiceIds:undefined);
+  let bankReady=false,bankMessage='';
+  if(preview.enabled&&preview.selectedInvoiceIds.length){
+    const ids=new Set(preview.selectedInvoiceIds.map(value=>String(value))),selected=(state.invoices||[]).filter(row=>ids.has(String(row.id)));
+    try{await negotiationBankContext(env,state,client,selected);bankReady=true}catch(error){bankMessage=error instanceof Error?error.message:String(error)}
+  }
+  return {...preview,bankReady,bankMessage};
+}
+
+async function negotiateForSession(env,data){
+  if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão nativa com o Neon não configurada na Cloudflare.'),{statusCode:503});
+  const session=await verifyPortalSession(data?.session,env),sql=neon(env.DATABASE_URL),client=await portalClientById(sql,session.clientId);
+  if(!client)throw Object.assign(new Error('Cliente da sessão não foi encontrado.'),{statusCode:404});
+  const state=await loadState(sql),preview=buildNegotiationOptions(state,client,Array.isArray(data?.invoiceIds)?data.invoiceIds:[]),rules=preview.rules;
+  if(!rules.enabled)throw Object.assign(new Error('A negociação automática não está disponível no momento.'),{statusCode:409});
+  if(!preview.selectedInvoiceIds.length)throw Object.assign(new Error('Selecione pelo menos uma fatura vencida disponível para negociação.'),{statusCode:400});
+  const option=preview.options.find(item=>item.id===text(data?.optionId));
+  if(!option)throw Object.assign(new Error('Escolha uma condição de acordo válida.'),{statusCode:400});
+  const selectedKeys=new Set(preview.selectedInvoiceIds.map(value=>String(value))),selected=(state.invoices||[]).filter(row=>selectedKeys.has(String(row.id)));
+  if(selected.length!==preview.selectedInvoiceIds.length)throw Object.assign(new Error('Uma das faturas mudou. Atualize as condições antes de confirmar.'),{statusCode:409});
+  const bank=await negotiationBankContext(env,state,client,selected),nextState=JSON.parse(JSON.stringify(state||{}));
+  nextState.invoices=Array.isArray(nextState.invoices)?nextState.invoices:[];nextState.negotiations=Array.isArray(nextState.negotiations)?nextState.negotiations:[];
+  const agreementId=`NEG-${Number(client.id)}-${Date.now().toString(36).toUpperCase()}`,createdAt=new Date().toISOString(),newInvoices=[];
+  for(const part of option.schedule){
+    const id=nextInvoiceId(nextState),invoice={
+      id,client_id:Number(client.id),due_date:part.dueDate,amount_cents:Number(part.amountCents)||0,status:'Pendente',document_type:'Boleto',billing_type:'Renegociação',
+      description:`Acordo ${agreementId} · Parcela ${part.number}/${option.installments}`,installment_group:agreementId,installment_number:part.number,installment_total:option.installments,
+      payment_method:'',paid_by:'',paid_at:null,created_at:createdAt,bank_provider:bank.provider,negotiation_id:agreementId,negotiation_origin:'customer_portal_auto',
+      negotiated_invoice_ids:[...preview.selectedInvoiceIds],cashback_eligible:false,cashback_enabled:false,cashback_reason:'renegociacao',reference:part.dueDate.slice(0,7),competency:part.dueDate.slice(0,7)
+    };
+    newInvoices.push(invoice);
+  }
+  const issued=[];
+  try{
+    for(const invoice of newInvoices){
+      const remote=await bankProxyAsService(env,sql,{action:'issue',provider:bank.provider,invoice:bankInvoice(invoice,client,nextState),client:bankClient(client,nextState),efi:bank.secrets.efi,mercadoPago:bank.secrets.mercadoPago,pixAutoRecord:null});
+      Object.assign(invoice,remote||{});issued.push(invoice);
+    }
+    for(const old of selected){
+      if(!text(old?.bank_provider))continue;
+      await bankProxyAsService(env,sql,{action:'cancel',invoice:bankInvoice(old,client,state),efi:bank.secrets.efi,mercadoPago:bank.secrets.mercadoPago});
+    }
+  }catch(error){
+    let rollbackFailed=false;
+    for(const invoice of issued.reverse()){
+      try{await bankProxyAsService(env,sql,{action:'cancel',invoice:bankInvoice(invoice,client,nextState),efi:bank.secrets.efi,mercadoPago:bank.secrets.mercadoPago})}catch{rollbackFailed=true}
+    }
+    const message=error instanceof Error?error.message:String(error);
+    throw Object.assign(new Error(rollbackFailed?`${message} A emissão foi interrompida e precisa ser conferida no banco antes de tentar novamente.`:message),{statusCode:Number(error?.statusCode)||502});
+  }
+  nextState.invoices.push(...newInvoices);
+  const replacementIds=newInvoices.map(row=>row.id);
+  for(const old of nextState.invoices){
+    if(!selectedKeys.has(String(old.id)))continue;
+    Object.assign(old,{status:'Renegociado',negotiation_id:agreementId,negotiated_at:createdAt,negotiated_by:'Portal do cliente',replaced_by_invoice_ids:replacementIds,cashback_eligible:false,cashback_enabled:false});
+  }
+  const agreement={id:agreementId,client_id:Number(client.id),original_invoice_ids:[...preview.selectedInvoiceIds],original_amount_cents:preview.originalCents,discount_cents:option.discountCents,negotiated_amount_cents:option.totalCents,entry_cents:option.entryCents,installment_total:option.installments,bank_provider:bank.provider,origin:'customer_portal_auto',status:'Ativo',created_at:createdAt,new_invoice_ids:replacementIds};
+  const protocol=await createProtocolRecord(sql,{clientId:client.id,category:'Negociação',subject:'Negociação automática de débitos',source:'area-cliente',status:'Concluído',createdByName:`Área do Cliente · ${text(client.name)}`,details:{agreementId,originalInvoiceIds:[...preview.selectedInvoiceIds],originalAmountCents:preview.originalCents,discountCents:option.discountCents,negotiatedAmountCents:option.totalCents,installmentTotal:option.installments,newInvoiceIds:replacementIds}});
+  agreement.protocol=protocol.protocol;
+  nextState.negotiations.push(agreement);nextState.negotiations=nextState.negotiations.slice(-1000);
+  nextState.audit=Array.isArray(nextState.audit)?nextState.audit:[];nextState.audit.unshift({id:Date.now(),action:'customer_portal_negotiation',entity:'negotiation',entity_id:agreementId,client_id:Number(client.id),protocol:protocol.protocol,created_at:createdAt});nextState.audit=nextState.audit.slice(0,1000);
+  await saveState(sql,nextState);
+  const portal=await portalSnapshot(client,nextState,env,session.token);
+  return {agreement:safeNegotiation(agreement),protocol,portal};
+}
+
+async function dbHealth(env){
+  if(!env.DATABASE_URL)return {configured:false,connected:false,protocolsReady:false};
+  try{
+    const sql=neon(env.DATABASE_URL);
+    const rows=await sql`SELECT 1 AS ok`;
+    await ensureProtocolTable(sql);
+    return {configured:true,connected:Number(rows?.[0]?.ok)===1,protocolsReady:true};
+  }catch(error){
+    return {configured:true,connected:false,protocolsReady:false,error:'Falha de conexão com o Neon'};
+  }
+}
+
+async function nativePortalLogin(env,data){
+  if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão nativa com o Neon não configurada na Cloudflare.'),{statusCode:503});
+  const document=digits(data?.document||data?.cpf||data?.cnpj),contract=text(data?.contract||data?.contrato);
+  if(!document&&!contract)throw Object.assign(new Error('Informe CPF, CNPJ ou contrato.'),{statusCode:400});
+  if(document&&![11,14].includes(document.length))throw Object.assign(new Error('CPF ou CNPJ inválido.'),{statusCode:400});
+  if(contract&&digits(contract).length<6)throw Object.assign(new Error('Contrato inválido.'),{statusCode:400});
+  const sql=neon(env.DATABASE_URL),contractDigits=digits(contract),hasDocument=Boolean(document),hasContract=Boolean(contract);
+  const clients=await sql`
+    SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,
+           router_id,connection_type,pppoe_username,ip,mikrotik_status,mikrotik_last_sync
+    FROM pp_clients
+    WHERE (${hasDocument}=false OR regexp_replace(COALESCE(document,''),'[^0-9]','','g')=${document})
+      AND (${hasContract}=false OR contract_number=${contract} OR regexp_replace(COALESCE(contract_number,''),'[^0-9]','','g')=${contractDigits})
+    LIMIT 1
+  `;
+  const client=Array.isArray(clients)?clients[0]||null:null;
+  if(!client)throw Object.assign(new Error('Cliente não encontrado. Confira o CPF, CNPJ ou contrato informado.'),{statusCode:404});
+  const state=await loadState(sql);if(repairLegacyPendingCashback(state,client))await saveState(sql,state);
+  return portalSnapshot(client,state,env,'',null,{includeProtocols:false});
+}
+
+function portalPaymentInactiveStatus(value){
+  const status=text(value).toLowerCase();
+  return ['pago','paid','baixado','cancelado','canceled','renegociado','renegotiated','substituido','substituida'].some(item=>status.includes(item));
+}
+function portalPaymentInvoice(state,client,invoiceId,{allowInactive=false}={}){
+  const row=(Array.isArray(state?.invoices)?state.invoices:[]).find(item=>String(item?.id)===String(invoiceId)&&Number(item?.client_id)===Number(client.id));
+  if(!row)throw Object.assign(new Error('Fatura não encontrada para este cliente.'),{statusCode:404});
+  if(!allowInactive&&portalPaymentInactiveStatus(row.status))throw Object.assign(new Error('Esta fatura não está disponível para pagamento.'),{statusCode:409});
+  if(invoiceCents(row)<=0)throw Object.assign(new Error('A fatura não possui valor válido para pagamento.'),{statusCode:409});
+  return row;
+}
+function portalBankAvailability(state,client,vault){
+  const local=stateClient(state,client),efi=vault?.efi||{},mp=vault?.mercadoPago||{},ready={efi:Boolean(efi.enabled&&text(efi.clientId)&&text(efi.clientSecret)),efiPix:Boolean(efi.enabled&&text(efi.clientId)&&text(efi.clientSecret)&&String(efi.certificateBase64||'')&&text(efi.pixKey)),mercadoPago:Boolean(mp.enabled&&text(mp.accessToken)),mercadoPagoCard:Boolean(mp.enabled&&text(mp.accessToken)&&text(mp.publicKey))};
+  const preferred=[text(local.billing_bank_provider),text(state?.banks?.defaultProvider)].find(value=>value==='efi'||value==='mercadoPago')||'';let pixProvider='';
+  if(preferred==='efi'&&ready.efiPix)pixProvider='efi';else if(preferred==='mercadoPago'&&ready.mercadoPago)pixProvider='mercadoPago';else if(ready.efiPix)pixProvider='efi';else if(ready.mercadoPago)pixProvider='mercadoPago';
+  return {ready,preferred,pixProvider,cardProvider:ready.mercadoPagoCard?'mercadoPago':'',secrets:bankSecretsFromVault(vault)};
+}
+async function portalPaymentContext(env,data){
+  if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão nativa com o Neon não configurada na Cloudflare.'),{statusCode:503});
+  const session=await verifyPortalSession(data?.session,env),sql=neon(env.DATABASE_URL),client=await portalClientById(sql,session.clientId);if(!client)throw Object.assign(new Error('Cliente da sessão não foi encontrado.'),{statusCode:404});
+  const state=await loadState(sql);if(repairLegacyPendingCashback(state,client))await saveState(sql,state);const vault=await readBankSettings(env),banks=portalBankAvailability(state,client,vault);return {session,sql,client,state,vault,banks};
+}
+async function paymentConfigForSession(env,data){const ctx=await portalPaymentContext(env,data),mp=ctx.vault?.mercadoPago||{};return {pixEnabled:Boolean(ctx.banks.pixProvider),pixProvider:ctx.banks.pixProvider,pixProviderLabel:ctx.banks.pixProvider==='efi'?'Efí Bank':ctx.banks.pixProvider==='mercadoPago'?'Mercado Pago':'',cardEnabled:Boolean(ctx.banks.cardProvider),cardProvider:'mercadoPago',cardProviderLabel:'Mercado Pago',mercadoPagoPublicKey:ctx.banks.cardProvider?text(mp.publicKey):'',defaultProvider:ctx.banks.preferred,efiConfigured:ctx.banks.ready.efiPix,mercadoPagoConfigured:ctx.banks.ready.mercadoPago};}
+async function paymentPrepareForSession(env,data){const ctx=await portalPaymentContext(env,data),invoice=portalPaymentInvoice(ctx.state,ctx.client,data?.invoiceId),originalCents=invoiceCents(invoice),card=text(data?.method).toLowerCase()==='card',discountCents=card?0:cashbackDiscountCents(ctx.state,ctx.client,invoice),amountCents=Math.max(0,originalCents-discountCents);return {invoiceId:invoice.id,reference:invoiceReference(invoice),dueDate:formatDate(invoice.due_date||invoice.dueDate),originalAmount:originalCents/100,cashbackDiscount:discountCents/100,cashbackBalance:cashbackBalanceCents(ctx.state,ctx.client)/100,cashbackAvailable:cashbackAvailableCents(ctx.state,ctx.client,invoice)/100,amount:amountCents/100,amountCents,payer:{name:text(ctx.client.name),email:text(ctx.client.email),identification:{type:digits(ctx.client.document).length===14?'CNPJ':'CPF',number:digits(ctx.client.document)}}};}
+function mpPaid(value){const s=text(value).toLowerCase();return ['approved','paid','pago','concluido','concluído'].some(item=>s.includes(item));}
+function mpRejected(value){const s=text(value).toLowerCase();return ['rejected','cancelled','canceled','recusado','cancelado','refunded','charged_back'].some(item=>s.includes(item));}
+function markPortalInvoicePaid(invoice,method,paidAt=''){invoice.status='Pago';invoice.payment_method=method;invoice.paid_by='Área do Cliente';invoice.paid_at=text(paidAt)||new Date().toISOString();invoice.bank_last_sync_at=new Date().toISOString();}
+function clearPortalPixBankFields(invoice){Object.assign(invoice,{bank_provider:'',bank_environment:'',bank_charge_id:'',bank_order_id:'',bank_payment_id:'',bank_external_reference:'',bank_status:'',bank_status_detail:'',bank_barcode:'',bank_digitable_line:'',bank_ticket_url:'',bank_pdf_url:'',bank_pix_code:'',bank_last_sync_at:new Date().toISOString(),pix_payment_url:'',pix_copy_paste:'',pix_qr_image:''});}
+async function mercadoPagoRequest(vault,path,{method='GET',body=null,idempotencyKey=''}={}){
+  const token=text(vault?.mercadoPago?.accessToken);if(!token)throw Object.assign(new Error('Mercado Pago não está configurado para este pagamento.'),{statusCode:409});
+  const headers={Authorization:`Bearer ${token}`,Accept:'application/json'};if(body!==null)headers['Content-Type']='application/json';if(idempotencyKey)headers['X-Idempotency-Key']=idempotencyKey;
+  const response=await fetch(`https://api.mercadopago.com${path}`,{method,headers,body:body===null?undefined:JSON.stringify(body)});let result={};try{result=await response.json()}catch{};if(!response.ok)throw Object.assign(new Error(text(result?.message||result?.error)||`Mercado Pago retornou HTTP ${response.status}.`),{statusCode:response.status>=400&&response.status<500?409:502,providerStatus:response.status});return result;
+}
+function mpPaymentFields(remote,detail,environment='sandbox'){
+  const tx=remote?.point_of_interaction?.transaction_data||{};return {bank_provider:'mercadoPago',bank_environment:environment,bank_charge_id:text(remote?.id),bank_order_id:'',bank_payment_id:text(remote?.id),bank_external_reference:text(remote?.external_reference),bank_status:text(remote?.status),bank_status_detail:detail,bank_ticket_url:text(tx?.ticket_url),bank_pix_code:text(tx?.qr_code),bank_last_sync_at:new Date().toISOString(),pix_payment_url:text(tx?.ticket_url),pix_copy_paste:text(tx?.qr_code),pix_qr_image:tx?.qr_code_base64?`data:image/png;base64,${text(tx.qr_code_base64)}`:''};
+}
+function requireMpEmail(client){const email=text(client?.email);if(!email)throw Object.assign(new Error('Cadastre o e-mail do cliente antes de usar Mercado Pago.'),{statusCode:409});return email;}
+async function paymentPixForSession(env,data){
+  const ctx=await portalPaymentContext(env,data),invoice=portalPaymentInvoice(ctx.state,ctx.client,data?.invoiceId),originalCents=invoiceCents(invoice);let provider=ctx.banks.pixProvider,discountCents=cashbackDiscountCents(ctx.state,ctx.client,invoice),amountCents=Math.max(0,originalCents-discountCents);
+  if(amountCents<=0&&discountCents>0){discountCents=applyCashbackDiscount(ctx.state,ctx.client,invoice);markPortalInvoicePaid(invoice,'Cashback',new Date().toISOString());finalizeCashbackDiscount(ctx.state,ctx.client,invoice,invoice.paid_at);Object.assign(invoice,{bank_provider:'cashback',bank_status:'paid',bank_status_detail:'cashback_full',payment_origin:'area-cliente',cashback_pix_amount_cents:0});await saveState(ctx.sql,ctx.state);const portal=await portalSnapshot(ctx.client,ctx.state,env,ctx.session.token);return {provider:'cashback',providerLabel:'Cashback',paymentId:`cashback-${invoice.id}`,status:'approved',state:'Pago',message:'Fatura quitada integralmente com o saldo de cashback.',qrCode:'',qrCodeBase64:'',paymentUrl:'',originalAmount:originalCents/100,cashbackDiscount:discountCents/100,amount:0,portal};}
+  if(!provider)throw Object.assign(new Error('Nenhum banco está pronto para gerar Pix. Configure Efí ou Mercado Pago em API Bancos.'),{statusCode:409});
+  if(provider==='efi'){
+    const existingDetail=text(invoice.bank_status_detail),existingBolix=text(invoice.bank_provider)==='efi'&&existingDetail==='efi_bolix_pix'&&Boolean(text(invoice.bank_charge_id));
+    if(existingBolix){
+      const synced=await bankProxyAsService(env,ctx.sql,{action:'sync',invoice:bankInvoice(invoice,ctx.client,ctx.state),efi:ctx.banks.secrets.efi,mercadoPago:ctx.banks.secrets.mercadoPago});Object.assign(invoice,synced||{});
+      let currentStatus=text(invoice.bank_status||invoice.status).toLowerCase(),alreadyPaid=Boolean(text(invoice.paid_at))||Boolean(text(synced?.paidAt))||['paid','pago','settled','concluida','concluída','concluido','concluído'].some(value=>currentStatus.includes(value));
+      if(alreadyPaid){const paidAt=text(synced?.paidAt||invoice.paid_at);markPortalInvoicePaid(invoice,'Pix Efí',paidAt);finalizeCashbackDiscount(ctx.state,ctx.client,invoice,paidAt);creditPixCashback(ctx.state,ctx.client,invoice,paidAt);}
+      else{
+        const alreadyCanceled=['cancelad','canceled','cancelled','expired','expirad','removid','rejeitad','recusad'].some(value=>currentStatus.includes(value));
+        if(!alreadyCanceled){await bankProxyAsService(env,ctx.sql,{action:'cancel',invoice:bankInvoice(invoice,ctx.client,ctx.state),efi:ctx.banks.secrets.efi,mercadoPago:ctx.banks.secrets.mercadoPago});const confirmed=await bankProxyAsService(env,ctx.sql,{action:'sync',invoice:bankInvoice(invoice,ctx.client,ctx.state),efi:ctx.banks.secrets.efi,mercadoPago:ctx.banks.secrets.mercadoPago});Object.assign(invoice,confirmed||{});currentStatus=text(invoice.bank_status||'').toLowerCase();const paidAfterCancel=Boolean(text(confirmed?.paidAt))||['paid','pago','settled','concluida','concluída','concluido','concluído'].some(value=>currentStatus.includes(value));if(paidAfterCancel){const paidAt=text(confirmed?.paidAt);markPortalInvoicePaid(invoice,'Pix Efí',paidAt);finalizeCashbackDiscount(ctx.state,ctx.client,invoice,paidAt);creditPixCashback(ctx.state,ctx.client,invoice,paidAt);}else if(!['cancelad','canceled','cancelled','expired','expirad','removid','rejeitad','recusad'].some(value=>currentStatus.includes(value)))throw Object.assign(new Error('Efí Pix: não foi possível confirmar o cancelamento do PIX anterior. O cashback continua reservado e nenhum novo PIX foi gerado.'),{statusCode:409});}
+        if(!text(invoice.status).toLowerCase().includes('pago')){refundCashbackDiscount(ctx.state,ctx.client,invoice,'Reserva liberada após cancelamento confirmado do Pix Efí anterior');clearPortalPixBankFields(invoice);}
+      }
+    }else if(text(invoice.bank_provider)==='efi'&&existingDetail==='efi_pix_cobv'&&text(invoice.bank_charge_id)){try{Object.assign(invoice,await bankProxyAsService(env,ctx.sql,{action:'sync',invoice:bankInvoice(invoice,ctx.client,ctx.state),efi:ctx.banks.secrets.efi,mercadoPago:ctx.banks.secrets.mercadoPago})||{})}catch{}}
+    let status=text(invoice.bank_status||invoice.status).toLowerCase(),paid=Boolean(text(invoice.paid_at))||['paid','pago','settled','concluida','concluída','concluido','concluído'].some(value=>status.includes(value));if(paid){markPortalInvoicePaid(invoice,'Pix Efí',invoice.paid_at);finalizeCashbackDiscount(ctx.state,ctx.client,invoice,invoice.paid_at);creditPixCashback(ctx.state,ctx.client,invoice,invoice.paid_at);}
+    else{
+      if(['cancelad','rejeitad','recusad','expired','expirad','removid'].some(value=>status.includes(value))){refundCashbackDiscount(ctx.state,ctx.client,invoice,'Estorno do desconto: Pix Efí cancelado ou expirado');clearPortalPixBankFields(invoice);}
+      discountCents=cashbackDiscountCents(ctx.state,ctx.client,invoice);amountCents=Math.max(0,originalCents-discountCents);const needsDiscountedPix=discountCents>0&&!Number(invoice.cashback_discount_applied_cents);
+      if(!text(invoice.bank_pix_code)||needsDiscountedPix){const source={...invoice,amount_cents:amountCents,amount:amountCents/100,billing_type:'Pix com vencimento'},remote=await bankProxyAsService(env,ctx.sql,{action:'issue',provider:'efi',invoice:bankInvoice(source,ctx.client,ctx.state),client:bankClient(ctx.client,ctx.state),efi:ctx.banks.secrets.efi,mercadoPago:ctx.banks.secrets.mercadoPago,pixAutoRecord:null});Object.assign(invoice,remote||{});if(discountCents>0&&!Number(invoice.cashback_discount_applied_cents))discountCents=applyCashbackDiscount(ctx.state,ctx.client,invoice);}
+    }
+    invoice.pix_copy_paste=text(invoice.bank_pix_code);invoice.pix_payment_url=text(invoice.bank_ticket_url);invoice.payment_origin='area-cliente';
+  }else{
+    const email=requireMpEmail(ctx.client),environment=text(ctx.vault?.mercadoPago?.environment)||'sandbox';let mp=null;
+    if(text(invoice.bank_provider)==='mercadoPago'&&text(invoice.bank_status_detail)==='mercado_pago_pix'&&text(invoice.bank_payment_id)){try{mp=await mercadoPagoRequest(ctx.vault,`/v1/payments/${encodeURIComponent(invoice.bank_payment_id)}`)}catch{}}
+    if(mp&&mpRejected(mp.status)){refundCashbackDiscount(ctx.state,ctx.client,invoice,'Estorno do desconto: Pix Mercado Pago cancelado ou recusado');mp=null;}
+    discountCents=cashbackDiscountCents(ctx.state,ctx.client,invoice);amountCents=Math.max(0,originalCents-discountCents);if(mp&&discountCents>0&&!Number(invoice.cashback_discount_applied_cents))mp=null;
+    if(!mp){const name=text(ctx.client.name),parts=name.split(/\s+/).filter(Boolean),first=parts.shift()||name,last=parts.join(' ')||first,payload={transaction_amount:amountCents/100,description:text(invoice.description)||`Fatura ${invoiceReference(invoice)}`,payment_method_id:'pix',external_reference:`PP-INV-${invoice.id}-CLI-${ctx.client.id}`,payer:{email,first_name:first,last_name:last,identification:{type:digits(ctx.client.document).length===14?'CNPJ':'CPF',number:digits(ctx.client.document)}}};mp=await mercadoPagoRequest(ctx.vault,'/v1/payments',{method:'POST',body:payload,idempotencyKey:crypto.randomUUID()});if(discountCents>0&&!Number(invoice.cashback_discount_applied_cents))discountCents=applyCashbackDiscount(ctx.state,ctx.client,invoice);}
+    Object.assign(invoice,mpPaymentFields(mp,'mercado_pago_pix',environment));invoice.payment_origin='area-cliente';if(mpPaid(mp.status)){markPortalInvoicePaid(invoice,'Pix Mercado Pago',mp.date_approved||mp.date_last_updated);finalizeCashbackDiscount(ctx.state,ctx.client,invoice,mp.date_approved||mp.date_last_updated);creditPixCashback(ctx.state,ctx.client,invoice,mp.date_approved||mp.date_last_updated);}
+  }
+  if(provider==='efi'){const status=text(invoice.bank_status||invoice.status).toLowerCase(),paid=Boolean(text(invoice.paid_at))||['paid','pago','settled','concluida','concluída','concluido','concluído'].some(value=>status.includes(value));if(paid){markPortalInvoicePaid(invoice,'Pix Efí',invoice.paid_at);finalizeCashbackDiscount(ctx.state,ctx.client,invoice,invoice.paid_at);creditPixCashback(ctx.state,ctx.client,invoice,invoice.paid_at);}}
+  discountCents=Math.max(0,Math.round(Number(invoice.cashback_discount_applied_cents)||0));amountCents=Math.max(0,originalCents-discountCents);await saveState(ctx.sql,ctx.state);const portal=await portalSnapshot(ctx.client,ctx.state,env,ctx.session.token);return {provider,providerLabel:provider==='efi'?'Efí Bank':'Mercado Pago',paymentId:text(invoice.bank_payment_id||invoice.bank_charge_id),status:text(invoice.bank_status||invoice.status),qrCode:text(invoice.pix_copy_paste||invoice.bank_pix_code),qrCodeBase64:text(invoice.pix_qr_image).replace(/^data:image\/[^;]+;base64,/,''),paymentUrl:text(invoice.pix_payment_url||invoice.bank_ticket_url),originalAmount:originalCents/100,cashbackDiscount:discountCents/100,amount:amountCents/100,portal};
+}
+async function paymentCardForSession(env,data){
+  const ctx=await portalPaymentContext(env,data),invoice=portalPaymentInvoice(ctx.state,ctx.client,data?.invoiceId);if(!ctx.banks.cardProvider)throw Object.assign(new Error('Mercado Pago não está pronto para cartão. Configure Public Key e Access Token em API Bancos.'),{statusCode:409});refundCashbackDiscount(ctx.state,ctx.client,invoice,'Estorno do desconto: pagamento alterado para cartão');
+  const pd=data?.paymentData&&typeof data.paymentData==='object'?data.paymentData:{};if(!text(pd.token)||!text(pd.payment_method_id))throw Object.assign(new Error('Os dados tokenizados do cartão não foram recebidos.'),{statusCode:400});
+  const payer={...(pd.payer&&typeof pd.payer==='object'?pd.payer:{}),email:text(pd?.payer?.email)||requireMpEmail(ctx.client)};if(!payer.identification?.number&&digits(ctx.client.document))payer.identification={type:digits(ctx.client.document).length===14?'CNPJ':'CPF',number:digits(ctx.client.document)};
+  const payload={token:text(pd.token),transaction_amount:invoiceCents(invoice)/100,installments:Math.max(1,Number(pd.installments)||1),payment_method_id:text(pd.payment_method_id),description:text(invoice.description)||`Fatura ${invoiceReference(invoice)}`,external_reference:`PP-INV-${invoice.id}-CLI-${ctx.client.id}`,payer};if(pd.issuer_id)payload.issuer_id=String(pd.issuer_id);
+  const idem=(await sha256Hex(`card|${ctx.client.id}|${invoice.id}|${text(pd.token)}`)).slice(0,64),mp=await mercadoPagoRequest(ctx.vault,'/v1/payments',{method:'POST',body:payload,idempotencyKey:idem}),environment=text(ctx.vault?.mercadoPago?.environment)||'sandbox';Object.assign(invoice,mpPaymentFields(mp,'mercado_pago_card',environment));invoice.payment_method='Cartão Mercado Pago';invoice.payment_origin='area-cliente';if(mpPaid(mp.status))markPortalInvoicePaid(invoice,'Cartão Mercado Pago',mp.date_approved||mp.date_last_updated);
+  await saveState(ctx.sql,ctx.state);const portal=await portalSnapshot(ctx.client,ctx.state,env,ctx.session.token);return {provider:'mercadoPago',providerLabel:'Mercado Pago',paymentId:text(mp.id),status:text(mp.status),statusDetail:text(mp.status_detail),message:text(mp.status_detail),portal};
+}
+async function paymentStatusForSession(env,data){
+  const ctx=await portalPaymentContext(env,data),invoice=portalPaymentInvoice(ctx.state,ctx.client,data?.invoiceId,{allowInactive:true});if(text(invoice.status).toLowerCase().includes('pago'))return {provider:text(invoice.bank_provider),status:'approved',state:text(invoice.status),paymentId:text(invoice.bank_payment_id||invoice.bank_charge_id),portal:await portalSnapshot(ctx.client,ctx.state,env,ctx.session.token)};
+  let changed=false,provider=text(invoice.bank_provider),status=text(invoice.bank_status||invoice.status),paidAt='';
+  if(provider==='mercadoPago'&&text(invoice.bank_payment_id||data?.paymentId)){const mp=await mercadoPagoRequest(ctx.vault,`/v1/payments/${encodeURIComponent(invoice.bank_payment_id||data.paymentId)}`),environment=text(ctx.vault?.mercadoPago?.environment)||'sandbox';Object.assign(invoice,mpPaymentFields(mp,text(invoice.bank_status_detail)||'mercado_pago_payment',environment));status=text(mp.status);paidAt=text(mp.date_approved||mp.date_last_updated);changed=true;if(mpPaid(status)){const isCard=text(invoice.bank_status_detail)==='mercado_pago_card';markPortalInvoicePaid(invoice,isCard?'Cartão Mercado Pago':'Pix Mercado Pago',paidAt);if(!isCard){finalizeCashbackDiscount(ctx.state,ctx.client,invoice,paidAt);creditPixCashback(ctx.state,ctx.client,invoice,paidAt);}}else if(mpRejected(status)&&text(invoice.bank_status_detail)!=='mercado_pago_card')refundCashbackDiscount(ctx.state,ctx.client,invoice,'Estorno do desconto: Pix Mercado Pago cancelado ou recusado');}
+  else if(provider==='efi'&&text(invoice.bank_charge_id)){const remote=await bankProxyAsService(env,ctx.sql,{action:'sync',invoice:bankInvoice(invoice,ctx.client,ctx.state),efi:ctx.banks.secrets.efi,mercadoPago:ctx.banks.secrets.mercadoPago});Object.assign(invoice,remote||{});status=text(remote?.bank_status||invoice.bank_status);paidAt=text(remote?.paidAt);changed=true;const normalized=status.toLowerCase(),paid=Boolean(paidAt)||['paid','pago','settled','concluida','concluída','concluido','concluído'].some(value=>normalized.includes(value));if(paid){markPortalInvoicePaid(invoice,'Pix Efí',paidAt);finalizeCashbackDiscount(ctx.state,ctx.client,invoice,paidAt);creditPixCashback(ctx.state,ctx.client,invoice,paidAt);}else if(['cancelad','rejeitad','recusad','expired','expirad','removid'].some(value=>normalized.includes(value)))refundCashbackDiscount(ctx.state,ctx.client,invoice,'Estorno do desconto: Pix Efí cancelado ou expirado');}
+  if(changed)await saveState(ctx.sql,ctx.state);const portal=await portalSnapshot(ctx.client,ctx.state,env,ctx.session.token);return {provider,status:text(invoice.status).toLowerCase().includes('pago')?'approved':status,state:text(invoice.status),paymentId:text(invoice.bank_payment_id||invoice.bank_charge_id),portal};
+}
+async function refreshPortalForSession(env,data){
+  const ctx=await portalConnectionContext(env,data),connection=await portalLiveConnection(env,ctx.sql,ctx.client);
+  return portalSnapshot(ctx.client,ctx.state,env,ctx.session.token,connection);
+}
+function completedPortalDiagnostic(connection={}){
+  const failed=Boolean(text(connection.connectionError)),checkedAt=connection.checkedAt||new Date().toISOString(),message=connection.connectionError||'Diagnóstico concluído.';
+  return {ok:!failed,success:!failed,status:failed?'error':'success',state:failed?'error':'complete',phase:failed?'error':'complete',complete:!failed,completed:!failed,done:!failed,finished:!failed,running:false,loading:false,checking:false,isChecking:false,message,detail:message,checkedAt,checkedAtLabel:portalDateLabel(checkedAt)};
+}
+function withCompletedPortalDiagnostic(portal={}){
+  const connection=portal?.connection||{},diagnostic=completedPortalDiagnostic(connection),failed=!diagnostic.ok;
+  return {...portal,success:!failed,complete:!failed,completed:!failed,done:!failed,finished:!failed,running:false,loading:false,checking:false,isChecking:false,diagnosticStatus:diagnostic.status,diagnosticMessage:diagnostic.message,diagnostic,connection:{...connection,diagnosticStatus:diagnostic.status,diagnosticState:diagnostic.state,diagnosticMessage:diagnostic.message,diagnosticComplete:diagnostic.complete,diagnosticCompleted:diagnostic.completed,diagnosticDone:diagnostic.done,diagnosticRunning:false,diagnosticLoading:false,checking:false,isChecking:false,diagnostic}};
+}
+async function connectionTestForSession(env,data){
+  return withCompletedPortalDiagnostic(await refreshPortalForSession(env,data));
+}
+
+
+function mpWebhookSignature(value){const out={};for(const part of text(value).split(',')){const index=part.indexOf('=');if(index>0)out[text(part.slice(0,index))]=text(part.slice(index+1))}return out;}
+function mpWebhookSecureEqual(a,b){a=text(a).toLowerCase();b=text(b).toLowerCase();if(a.length!==b.length)return false;let diff=0;for(let i=0;i<a.length;i++)diff|=a.charCodeAt(i)^b.charCodeAt(i);return diff===0;}
+async function validateMpWebhook(request,secret,dataId){
+  const signature=mpWebhookSignature(request.headers.get('x-signature')),ts=text(signature.ts),received=text(signature.v1),requestId=text(request.headers.get('x-request-id'));
+  if(!ts||!received||!dataId||!secret)return false;
+  let manifest=`id:${text(dataId).toLowerCase()};`;if(requestId)manifest+=`request-id:${requestId};`;manifest+=`ts:${ts};`;
+  const key=await crypto.subtle.importKey('raw',portalUtf8.encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']),raw=new Uint8Array(await crypto.subtle.sign('HMAC',key,portalUtf8.encode(manifest))),expected=[...raw].map(byte=>byte.toString(16).padStart(2,'0')).join('');
+  return mpWebhookSecureEqual(received,expected);
+}
+async function handleMercadoPagoWebhook(request,env,cors={}){
+  let body={};try{body=await request.json()}catch{}
+  const url=new URL(request.url),dataId=text(url.searchParams.get('data.id')||body?.data?.id||body?.id),eventType=text(body?.type||body?.action||url.searchParams.get('type')).toLowerCase(),vault=await readBankSettings(env),mpVault=vault?.mercadoPago||{},webhookSecret=text(mpVault.webhookSecret);
+  if(!text(mpVault.accessToken)||!webhookSecret)return json({ok:false,error:'Webhook Mercado Pago ainda não configurado no Provedor Plus.'},503,{...cors,'x-provedor-plus-edge':'cloudflare-mp-webhook'});
+  if(!dataId)return json({ok:false,error:'Notificação Mercado Pago sem identificador.'},400,{...cors,'x-provedor-plus-edge':'cloudflare-mp-webhook'});
+  if(!(await validateMpWebhook(request,webhookSecret,dataId)))return json({ok:false,error:'Assinatura do Webhook Mercado Pago inválida.'},401,{...cors,'x-provedor-plus-edge':'cloudflare-mp-webhook'});
+  if(eventType&&eventType!=='payment'&&!eventType.includes('payment'))return json({ok:true,data:{received:true,reconciled:false,ignored:eventType}},200,{...cors,'x-provedor-plus-edge':'cloudflare-mp-webhook'});
+  let payment;try{payment=await mercadoPagoRequest(vault,`/v1/payments/${encodeURIComponent(dataId)}`)}catch(error){if(Number(error?.providerStatus)===404)return json({ok:true,data:{received:true,reconciled:false,simulation:true}},200,{...cors,'x-provedor-plus-edge':'cloudflare-mp-webhook'});throw error;}
+  if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Neon não configurada.'),{statusCode:503});
+  const sql=neon(env.DATABASE_URL),state=await loadState(sql),external=text(payment?.external_reference),match=external.match(/^PP-INV-(.+?)-CLI-(\d+)$/i),invoices=Array.isArray(state?.invoices)?state.invoices:[];
+  const invoice=invoices.find(row=>text(row?.bank_payment_id)===text(dataId)||text(row?.bank_charge_id)===text(dataId))||invoices.find(row=>external&&text(row?.bank_external_reference)===external)||invoices.find(row=>match&&String(row?.id)===String(match[1]));
+  if(!invoice)return json({ok:true,data:{received:true,reconciled:false}},200,{...cors,'x-provedor-plus-edge':'cloudflare-mp-webhook'});
+  const clients=Array.isArray(state?.clients)?state.clients:[],client=clients.find(row=>Number(row?.id)===Number(invoice?.client_id));
+  if(!client)return json({ok:true,data:{received:true,reconciled:false,invoiceId:invoice.id}},200,{...cors,'x-provedor-plus-edge':'cloudflare-mp-webhook'});
+  const methodId=text(payment?.payment_method_id).toLowerCase(),detail=text(invoice.bank_status_detail)||(methodId==='pix'?'mercado_pago_pix':'mercado_pago_card'),environment=text(mpVault.environment)||'sandbox',paidAt=text(payment?.date_approved||payment?.date_last_updated);
+  Object.assign(invoice,mpPaymentFields(payment,detail,environment));
+  if(mpPaid(payment?.status)){const isCard=detail==='mercado_pago_card'||methodId!=='pix';markPortalInvoicePaid(invoice,isCard?'Cartão Mercado Pago':'Pix Mercado Pago',paidAt);if(!isCard){finalizeCashbackDiscount(state,client,invoice,paidAt);creditPixCashback(state,client,invoice,paidAt);}}
+  else if(mpRejected(payment?.status)&&detail!=='mercado_pago_card')refundCashbackDiscount(state,client,invoice,'Estorno do desconto: Pix Mercado Pago cancelado ou recusado');
+  await saveState(sql,state);
+  return json({ok:true,data:{received:true,reconciled:true,invoiceId:invoice.id,status:text(payment?.status)}},200,{...cors,'x-provedor-plus-edge':'cloudflare-mp-webhook'});
+}
+
+async function handleNativeCustomerPortal(request,env){
+  const cors=portalCors(request),origin=text(request.headers.get('origin'));
+  if(request.method==='OPTIONS')return new Response(null,{status:204,headers:cors});
+  if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405,{...cors,'x-provedor-plus-edge':'cloudflare-native-customer-portal'});
+  if(new URL(request.url).searchParams.get('mp_webhook')==='1'){try{return await handleMercadoPagoWebhook(request,env,cors)}catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,{...cors,'x-provedor-plus-edge':'cloudflare-mp-webhook'})}}
+  if(origin&&!ALLOWED_PORTAL_ORIGINS.has(origin))return json({ok:false,error:'Origem não autorizada.'},403,{...cors,'x-provedor-plus-edge':'cloudflare-native-customer-portal'});
+  try{
+    let body={};try{body=await request.json()}catch{}
+    const action=text(body?.action),data=body?.data||{};let result;
+    if(action==='login')result=await nativePortalLogin(env,data);
+    else if(action==='refresh')result=await refreshPortalForSession(env,data);
+    else if(action==='payment-config')result=await paymentConfigForSession(env,data);
+    else if(action==='payment-prepare')result=await paymentPrepareForSession(env,data);
+    else if(action==='payment-pix')result=await paymentPixForSession(env,data);
+    else if(action==='payment-card')result=await paymentCardForSession(env,data);
+    else if(action==='payment-status')result=await paymentStatusForSession(env,data);
+    else if(action==='negotiation-options')result=await negotiationOptionsForSession(env,data);
+    else if(action==='negotiate')result=await negotiateForSession(env,data);
+    else if(['connection-test','test-connection','connection-status','connection-diagnostic','diagnostic','diagnose','connection-check','check-connection','diagnostic-connection'].includes(action)||/(connection|diagnostic|diagnose|diagnost|conex[aã]o|teste.*conex)/i.test(action))result=await connectionTestForSession(env,data);
+    else throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});
+    return json({ok:true,data:result},200,{...cors,'x-provedor-plus-edge':'cloudflare-native-customer-portal'});
+  }catch(error){
+    return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,{...cors,'x-provedor-plus-edge':'cloudflare-native-customer-portal'});
+  }
+}
+
+export default {
+  async fetch(request,env){
+    const url=new URL(request.url);
+    if(url.pathname==='/api/cloudflare-health'){
+      const database=await dbHealth(env);
+      return json({ok:database.connected,worker:'painel',databaseConfigured:database.configured,databaseConnected:database.connected,protocolsReady:database.protocolsReady,coreApiMode:'cloudflare-native',customerPortalMode:'cloudflare-native',vercelCoreFallback:false,vercelCustomerPortalFallback:false,specializedIntegrationProxy:false,bankRuntime:'cloudflare-native',mikrotikRuntime:'cloudflare-native'},database.connected?200:503,{'x-provedor-plus-edge':'cloudflare-health'});
+    }
+    if(url.pathname==='/api/auth')return handleNativeAuth(request,env);
+    if(url.pathname==='/api/cloud-state')return handleNativeCloudState(request,env);
+    if(url.pathname==='/api/cloud-data')return handleNativeCloudData(request,env);
+    if(url.pathname==='/api/bank-settings')return handleBankSettings(request,env);
+    if(url.pathname===PROTOCOLS_PATH)return handleProtocols(request,env);
+    if(url.pathname===CUSTOMER_PORTAL_PATH)return handleNativeCustomerPortal(request,env);
+    if(url.pathname==='/api/bank-proxy'||url.pathname==='/api/mikrotik-proxy'||url.pathname==='/api/mikrotik-proxy-v2')return handleSpecializedNative(request,env);
+    if(url.pathname.startsWith('/api/'))return json({ok:false,error:'API não encontrada no Provedor Plus Cloudflare.'},404,{'x-provedor-plus-edge':'cloudflare-native-routing'});
+    return env.ASSETS.fetch(request);
+  }
+};

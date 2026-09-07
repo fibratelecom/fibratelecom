@@ -1,5 +1,5 @@
 # Provedor Plus — Cloudflare Worker de produção
-# build: 20260907-submit-bridge1
+# build: 20260907-submit-native2
 name = "painel"
 main = "notification-center-entry-worker.js"
 compatibility_date = "2026-08-30"

@@ -1,4 +1,4 @@
-const BUILD = '20260907-auditoria-formularios1';
+const BUILD = '20260907-submit-bridge1';
 const root = document.querySelector('#app');
 let lastValidationToastAt = 0;
 
@@ -34,6 +34,25 @@ root?.addEventListener('invalid', (event) => {
   const fieldName = String(label?.childNodes?.[0]?.textContent || '').trim();
   const nativeMessage = String(control.validationMessage || '').trim();
   showRuntimeError(new Error(`${fieldName ? `${fieldName}: ` : ''}${nativeMessage || 'preencha este campo corretamente antes de salvar.'}`));
+}, true);
+
+// Todos os botões de salvar usam o único handler de submit definido no controlador.
+// O clique é encaminhado explicitamente para evitar que validações nativas impeçam
+// silenciosamente o evento submit antes de ele chegar ao Provedor Plus.
+root?.addEventListener('click', (event) => {
+  const button = event.target.closest?.('button[type="submit"]');
+  const form = button?.form;
+  if (!button || !form) return;
+  event.preventDefault();
+  if (!form.checkValidity()) {
+    form.reportValidity();
+    return;
+  }
+  form.dispatchEvent(new SubmitEvent('submit', {
+    bubbles: true,
+    cancelable: true,
+    submitter: button,
+  }));
 }, true);
 
 async function refreshPanelModules() {

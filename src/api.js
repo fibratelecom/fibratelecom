@@ -57,6 +57,7 @@ export const dataApi = Object.freeze({
   routerSecretDelete: (id) => request('/api/cloud-data', 'routers.secret.delete', { id }),
   cashbackWallet: (clientId) => request('/api/cloud-data', 'cashback.wallet.get', { clientId }),
   cashbackAdjust: (data) => request('/api/cloud-data', 'cashback.wallet.adjust', data),
+  trafficRecord: (clientId, live, month = '') => request('/api/cloud-data', 'traffic.record', { clientId, live, month }),
 });
 
 export const bankApi = Object.freeze({
@@ -86,6 +87,16 @@ export const protocolApi = Object.freeze({
 export const pushApi = Object.freeze({
   stats: () => request('/api/push-admin', 'stats'),
   send: (data) => request('/api/push-admin', 'send', data),
+});
+
+export const pushOpsApi = Object.freeze({
+  get: () => request('/api/push-operations', 'get'),
+  save: (settings) => request('/api/push-operations', 'save', { settings }),
+  scanNow: () => request('/api/push-operations', 'scan-now'),
+  saveTemplate: (data) => request('/api/push-operations', 'save-template', data),
+  deleteTemplate: (id) => request('/api/push-operations', 'delete-template', { id }),
+  schedule: (data) => request('/api/push-operations', 'schedule-notification', data),
+  cancelSchedule: (id) => request('/api/push-operations', 'cancel-schedule', { id }),
 });
 
 export const storiesApi = Object.freeze({

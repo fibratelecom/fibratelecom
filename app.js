@@ -1,4 +1,4 @@
-const BUILD = '20260907-submit-native3';
+const BUILD = '20260907-form-id1';
 const root = document.querySelector('#app');
 let lastValidationToastAt = 0;
 
@@ -52,7 +52,7 @@ root?.addEventListener('click', (event) => {
   }
   const original = button.textContent;
   button.textContent = 'Processando…';
-  showRuntimeMessage(`Clique recebido · ${form.id || 'formulário'}`, 'success');
+  showRuntimeMessage(`Clique recebido · ${form.getAttribute('id') || 'formulário'}`, 'success');
   setTimeout(() => {
     if (button.isConnected && button.textContent === 'Processando…') button.textContent = original;
   }, 12000);
@@ -63,7 +63,7 @@ root?.addEventListener('click', (event) => {
 root?.addEventListener('submit', (event) => {
   const form = event.target instanceof HTMLFormElement ? event.target : null;
   if (!form) return;
-  showRuntimeMessage(`Enviando · ${form.id || 'formulário'}`, 'success');
+  showRuntimeMessage(`Enviando · ${form.getAttribute('id') || 'formulário'}`, 'success');
 }, true);
 
 async function refreshPanelModules() {

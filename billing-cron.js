@@ -145,6 +145,14 @@ function bankSecrets(vault){
   };
 }
 
+async function enrichPanelBankRequest(request,env){
+  if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Neon não configurada para a operação bancária.'),{statusCode:503});
+  let body={};try{body=await request.clone().json()}catch{throw Object.assign(new Error('Operação bancária inválida.'),{statusCode:400})}
+  const sql=neon(env.DATABASE_URL),vault=await readBankSettings(env,sql),secrets=bankSecrets(vault),headers=new Headers(request.headers);
+  headers.delete('content-length');headers.set('Content-Type','application/json');
+  return new Request(request.url,{method:'POST',headers,body:JSON.stringify({...body,efi:secrets.efi,mercadoPago:secrets.mercadoPago})});
+}
+
 function pixAutoRecord(client){return {clientId:Number(client.id),clientName:text(client.name),contractNumber:text(client.contract_number),idRec:text(client.pix_auto_id_rec),status:text(client.pix_auto_status),startDate:text(client.pix_auto_start_date),endDate:text(client.pix_auto_end_date),amountCents:Math.max(0,Math.round(num(client.pix_auto_amount_cents))),pixCopiaECola:text(client.pix_auto_qr),createdAt:text(client.pix_auto_created_at),updatedAt:text(client.pix_auto_updated_at)}}
 function requireEfiPix(client,vault,mode){const efi=vault?.efi||{};if(!efi.enabled||!text(efi.clientId)||!text(efi.clientSecret))throw new Error(`${client.name||client.id}: Efí não está pronta para cobrança Pix.`);if(!text(efi.certificateBase64))throw new Error(`${client.name||client.id}: certificado P12/PFX da Efí não está configurado.`);if(mode==='pix_due'&&!text(efi.pixKey))throw new Error(`${client.name||client.id}: chave Pix da Efí não está configurada.`);if(mode==='pix_auto'){if(text(client.pix_auto_status).toUpperCase()!=='APROVADA'||!text(client.pix_auto_id_rec))throw new Error(`${client.name||client.id}: Pix Automático ainda não está APROVADO na Efí.`);if(!digits(efi.pixAutoReceiverAgency)||!digits(efi.pixAutoReceiverAccount))throw new Error(`${client.name||client.id}: informe Agência e Conta recebedora do Pix Automático na Efí.`)}}
 
@@ -270,6 +278,12 @@ export { runBillingCron };
 export default {
   async fetch(request,env,ctx){
     const url=new URL(request.url);
+    if(request.method==='POST'&&url.pathname==='/api/bank-proxy'){
+      try{
+        await requireBillingPanelUser(request,env);
+        return baseWorker.fetch(await enrichPanelBankRequest(request,env),env,ctx);
+      }catch(error){return billingJson({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500)}
+    }
     if(request.method==='POST'&&url.pathname==='/api/cloud-data'){
       let body={};try{body=await request.clone().json()}catch{}
       if(text(body?.action)==='billing.run'){

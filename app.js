@@ -1,4 +1,4 @@
-const BUILD = '20260908-mikrotik-ip1';
+const BUILD = '20260908-mikrotik-device-ip1';
 const root = document.querySelector('#app');
 let lastValidationToastAt = 0;
 

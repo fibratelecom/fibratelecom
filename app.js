@@ -1,4 +1,4 @@
-const BUILD = '20260907-support-neg1';
+const BUILD = '20260908-support-neg2';
 const root = document.querySelector('#app');
 let lastValidationToastAt = 0;
 

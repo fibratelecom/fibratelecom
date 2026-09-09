@@ -1,4 +1,4 @@
-const BUILD = '20260909-remove-device-ip1';
+const BUILD = '20260909-support-neg3';
 const root = document.querySelector('#app');
 let lastValidationToastAt = 0;
 

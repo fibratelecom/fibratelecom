@@ -1,4 +1,4 @@
-const BUILD = '20260908-mikrotik-remote-only2';
+const BUILD = '20260909-remove-device-ip1';
 const root = document.querySelector('#app');
 let lastValidationToastAt = 0;
 

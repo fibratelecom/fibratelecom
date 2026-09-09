@@ -1,6 +1,6 @@
 import { dataApi, mikrotikApi } from './api.js';
 import { invoiceCents, money, nextContract, text } from './model.js';
-import { attr, checkbox, field, formMoney, option, PERMISSIONS, selectField, textareaField } from './ui-kit.js';
+import { attr, checkbox, field, formMoney, moneyToCents, option, PERMISSIONS, selectField, textareaField } from './ui-kit.js';
 
 let clientCepTimer=0;
 let clientProfileRequest=0;
@@ -226,9 +226,37 @@ function handleClientFormField(event){
   }
 }
 
+function updateSupportNegotiationPreview(form){
+  if(!(form instanceof HTMLFormElement))return;
+  const selected=[...form.querySelectorAll('input[name="invoice_ids"]:checked')],originalCents=selected.reduce((sum,input)=>sum+Math.max(0,Math.round(Number(input.dataset.amountCents)||0)),0),discountType=text(form.elements?.discount_type?.value)==='fixed'?'fixed':'percent',percentInput=form.elements?.discount_percent,fixedInput=form.elements?.discount_amount,entryInput=form.elements?.entry,interestInput=form.elements?.interest_percent;
+  if(percentInput)percentInput.disabled=discountType!=='percent';
+  if(fixedInput)fixedInput.disabled=discountType!=='fixed';
+  const discountPercent=Math.max(0,Math.min(100,Number(percentInput?.value)||0));let discountCents=discountType==='fixed'?moneyToCents(fixedInput?.value):Math.round(originalCents*discountPercent/100);
+  discountCents=originalCents>0?Math.min(Math.max(0,originalCents-1),discountCents):0;
+  const netCents=Math.max(0,originalCents-discountCents),installments=Math.max(1,Math.min(12,Math.floor(Number(form.elements?.installments?.value)||1))),periods=Math.max(0,installments-1),interestPercent=installments>1?Math.max(0,Math.min(20,Number(interestInput?.value)||0)):0;
+  if(entryInput)entryInput.disabled=installments===1;
+  if(interestInput)interestInput.disabled=installments===1;
+  let entryCents=installments===1?netCents:moneyToCents(entryInput?.value),financedCents=installments>1?Math.max(0,netCents-entryCents):0,financedWithInterest=financedCents;
+  const invalidEntry=installments>1&&(entryCents<1||entryCents>netCents-periods);
+  if(entryInput)entryInput.setCustomValidity(invalidEntry?'Informe uma entrada válida, menor que o valor negociado e suficiente para as parcelas.':'');
+  if(financedCents>0&&periods>0&&interestPercent>0){const rate=interestPercent/100,factor=Math.pow(1+rate,periods),payment=financedCents*(rate*factor)/(factor-1);financedWithInterest=Math.max(financedCents,Math.round(payment*periods));}
+  const interestCents=Math.max(0,financedWithInterest-financedCents),totalCents=installments===1?netCents:entryCents+financedWithInterest,approxCents=periods?Math.ceil(financedWithInterest/periods):netCents;
+  const set=(key,value)=>{const target=form.querySelector(`[data-negotiation-preview="${key}"]`);if(target)target.textContent=value};
+  set('original',money(originalCents,true));set('discount',money(discountCents,true));set('interest',money(interestCents,true));set('entry',installments===1?'—':money(entryCents,true));set('installments',installments===1?'À vista':`${installments}x · entrada + ${periods} parcela${periods===1?'':'s'}`);set('total',money(totalCents,true));
+  const note=form.querySelector('[data-negotiation-preview-note]');
+  if(note)note.textContent=!selected.length?'Selecione pelo menos uma fatura vencida para calcular o acordo.':invalidEntry?'A entrada precisa ser menor que o valor negociado e deixar saldo suficiente para as parcelas.':installments===1?`Pagamento à vista previsto em ${money(netCents,true)}.`:`Entrada de ${money(entryCents,true)} + ${periods} parcela${periods===1?'':'s'} de aproximadamente ${money(approxCents,true)}. O valor final exato é ${money(totalCents,true)}.`;
+}
+
+function handleSupportNegotiationField(event){
+  const form=event.target?.closest?.('#support-negotiation-form');
+  if(form)updateSupportNegotiationPreview(form);
+}
+
 if(typeof document!=='undefined'){
   document.addEventListener('input',handleClientFormField);
   document.addEventListener('change',handleClientFormField);
+  document.addEventListener('input',handleSupportNegotiationField);
+  document.addEventListener('change',handleSupportNegotiationField);
 }
 
 export function createForms(ctx){
@@ -341,10 +369,11 @@ export function createForms(ctx){
 
   function supportNegotiationForm(options={}){
     const client=options.client||{},invoices=Array.isArray(options.eligibleInvoices)?options.eligibleInvoices:[],modes=Array.isArray(options.paymentModes)?options.paymentModes:[],defaults=options.defaults||{},active=Array.isArray(options.activeNegotiations)?options.activeNegotiations:[];
-    const invoiceRows=invoices.map((row)=>`<tr><td><label class="check"><input type="checkbox" name="invoice_ids" value="${attr(row.id)}" checked> ${attr(row.reference||row.id)}</label></td><td>${attr(row.dueDate||row.dueDateRaw||'—')}</td><td>${Number(row.daysOverdue)||0} dias</td><td>${attr(row.total||money(row.amountCents,true))}</td></tr>`).join('');
+    const invoiceRows=invoices.map((row)=>`<tr><td><label class="check"><input type="checkbox" name="invoice_ids" value="${attr(row.id)}" data-amount-cents="${attr(Number(row.amountCents)||0)}" checked> ${attr(row.reference||row.id)}</label></td><td>${attr(row.dueDate||row.dueDateRaw||'—')}</td><td>${Number(row.daysOverdue)||0} dias</td><td>${attr(row.total||money(row.amountCents,true))}</td></tr>`).join('');
     const modeOptions=modes.map((mode)=>option(mode.id,mode.label,defaults.paymentMode)).join('');
     const installmentOptions=Array.from({length:12},(_,i)=>option(i+1,i===0?'À vista':`${i+1} parcelas`,defaults.installments||1)).join('');
     const activeHtml=active.length?`<div class="result-errors span-2"><strong>Acordos ativos/recentes</strong><ul>${active.map((row)=>`<li>${attr(row.protocol||row.id)} · ${attr(row.status||'Ativo')} · ${money(Number(row.totalCents)||0,true)}</li>`).join('')}</ul></div>`:'';
+    if(typeof document!=='undefined')queueMicrotask(()=>{const form=document.querySelector('#support-negotiation-form');if(form)updateSupportNegotiationPreview(form)});
     return `<form id="support-negotiation-form" class="form-grid"><input type="hidden" name="client_id" value="${attr(client.id||'')}">
       <article class="settings-card span-2"><div class="panel-title"><div><span>Atendimento financeiro</span><h3>${attr(client.name||'Cliente')}</h3></div><span class="clean-badge">Contrato ${attr(client.contract||'—')}</span></div><p class="hint">Total vencido disponível: <strong>${attr(options.originalTotal||money(options.originalCents||0,true))}</strong>. O acordo preserva as faturas antigas como renegociadas e registra protocolo e atendente.</p></article>
       ${activeHtml}
@@ -359,6 +388,7 @@ export function createForms(ctx){
         ${field('Primeiro vencimento','first_due_date',text(defaults.firstDueDate).slice(0,10),'date','required')}
         ${selectField('Forma de pagamento','payment_mode',modeOptions,'required')}
       </div><p class="hint">Em 1 parcela, a entrada e os juros são ignorados. Em parcelamento, a entrada é cobrada primeiro e as demais parcelas seguem o vencimento mensal do cliente.</p></fieldset>
+      <article class="settings-card span-2"><div class="panel-title"><div><span>Prévia do acordo</span><h3>Conferir antes de confirmar</h3></div></div><div class="detail-grid"><article><span>Dívida selecionada</span><strong data-negotiation-preview="original">${money(options.originalCents||0,true)}</strong></article><article><span>Desconto</span><strong data-negotiation-preview="discount">R$ 0,00</strong></article><article><span>Juros</span><strong data-negotiation-preview="interest">R$ 0,00</strong></article><article><span>Entrada</span><strong data-negotiation-preview="entry">—</strong></article><article><span>Pagamento</span><strong data-negotiation-preview="installments">À vista</strong></article><article><span>Total final</span><strong data-negotiation-preview="total">${money(options.originalCents||0,true)}</strong></article></div><p class="hint" data-negotiation-preview-note>Altere as condições acima para visualizar o acordo antes de confirmar.</p></article>
       ${textareaField('Observação do acordo','note','','maxlength="500" placeholder="Motivo, autorização ou observação do atendimento"')}
       <div class="form-actions span-2"><button class="btn secondary" type="button" data-action="close-modal">Cancelar</button><button class="btn primary" type="submit" ${invoiceRows&&modeOptions?'':'disabled'}>Confirmar acordo</button></div>
     </form>`;

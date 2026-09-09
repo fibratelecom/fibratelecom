@@ -198,6 +198,13 @@ function currentDueCandidate(client,today,daysBefore){
   return due;
 }
 
+function firstProratedEligible(client,today){
+  const activation=dateFromKey(client.installation_date||client.created_at),current=dateFromKey(today);
+  if(!activation||!current)return false;
+  const p=brazilParts(current),due=dueKey(p.year,p.month,client.due_day),dueDate=dateFromKey(due),cycleStart=dueDate&&dueDate.getTime()>current.getTime()?addMonthsDue(due,-1,client.due_day):due,startDate=dateFromKey(cycleStart);
+  return Boolean(startDate&&activation.getTime()>startDate.getTime());
+}
+
 function firstProrated(client,plan){
   const activation=dateFromKey(client.installation_date||client.created_at);if(!activation)return null;
   const activationKey=keyFromParts(activation.getUTCFullYear(),activation.getUTCMonth()+1,activation.getUTCDate());
@@ -253,7 +260,7 @@ async function runBillingCron(env,{force=false}={}){
     const plan=planFor(client,state);if(!plan||num(plan.price_cents)<=0){failed++;errors.push(`${client.name||client.id}: cliente sem plano com valor.`);continue}
     try{
       let dueDate='',existing=null,invoice=null;
-      const brandNew=!hasAnyInvoice(state,client.id)&&!firstInvoiceExists(state,client.id)&&dateFromKey(client.installation_date||client.created_at);
+      const brandNew=!hasAnyInvoice(state,client.id)&&!firstInvoiceExists(state,client.id)&&firstProratedEligible(client,today);
       if(brandNew){
         const calc=firstProrated(client,plan);if(!calc){skipped++;continue}
         const diff=daysBetween(today,calc.due);if(diff<1||diff>30){skipped++;continue}

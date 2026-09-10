@@ -33,21 +33,6 @@ function ipv4Parts(value){
   return nums;
 }
 
-function nextClientIpValues(values=[]){
-  const groups=new Map();
-  for(const value of values||[]){
-    const nums=ipv4Parts(value);
-    if(!nums||nums[3]===0||nums[3]===255)continue;
-    const prefix=nums.slice(0,3).join('.'),hosts=groups.get(prefix)||[];
-    hosts.push(nums[3]);groups.set(prefix,hosts);
-  }
-  if(!groups.size)return '';
-  const [prefix,hosts]=[...groups.entries()].sort((a,b)=>b[1].length-a[1].length||Math.max(...b[1])-Math.max(...a[1]))[0],used=new Set(hosts),max=Math.max(...hosts);
-  if(max<254&&!used.has(max+1))return `${prefix}.${max+1}`;
-  for(let host=2;host<=254;host+=1)if(!used.has(host))return `${prefix}.${host}`;
-  return '';
-}
-
 async function clientRouterAccess(routerId){
   const id=Number(routerId)||0;
   if(!id)throw new Error('Selecione o MikroTik.');
@@ -109,18 +94,23 @@ async function loadClientMikrotikProfiles(form,routerId,preferred=''){
   }
 }
 
-async function loadClientMikrotikIpState(form,routerId,{autoSuggest=false}={}){
+async function loadClientMikrotikIpState(form,routerId){
   const input=form?.elements?.ip,id=Number(routerId)||0;
   if(!input)return;
   clearTimeout(clientIpTimer);
   if(!id){
     input.setCustomValidity('');
-    clientFormIpStatus(form,'Selecione o MikroTik para validar o IP fixo/remoto.');
+    clientFormIpStatus(form,'IP fixo/remoto opcional. Se preenchido, selecione o MikroTik para validá-lo.');
     return;
   }
   if(text(form.elements?.connection_type?.value).toLowerCase()!=='pppoe'){
     input.setCustomValidity('');
-    clientFormIpStatus(form,'A validação de remote-address no MikroTik é aplicada aos acessos PPPoE.');
+    clientFormIpStatus(form,'IP fixo/remoto é opcional. A validação de remote-address é aplicada aos acessos PPPoE.');
+    return;
+  }
+  if(!text(input.value)){
+    input.setCustomValidity('');
+    clientFormIpStatus(form,'IP fixo/remoto opcional. Deixe vazio para clientes que recebem IP quando conectam.');
     return;
   }
   const requestId=++clientIpRequest;
@@ -131,15 +121,10 @@ async function loadClientMikrotikIpState(form,routerId,{autoSuggest=false}={}){
     const router=await clientRouterAccess(id),[snapshot,localClients]=await Promise.all([mikrotikApi.run('router.sync',router),dataApi.clients()]);
     if(requestId!==clientIpRequest||!form.isConnected||Number(form.elements?.router_id?.value)!==id)return;
     const secrets=Array.isArray(snapshot?.pppSecrets)?snapshot.pppSecrets:[],clientRows=(Array.isArray(localClients)?localClients:[]).filter((client)=>Number(client?.router_id)===id),currentId=Number(form.elements?.id?.value)||0,originalUsername=text(form.dataset.originalPppoeUsername);
-    const usedValues=[...secrets.map((item)=>text(item?.remoteAddress)),...clientRows.filter((client)=>!currentId||Number(client?.id)!==currentId).map((client)=>text(client?.ip))].filter(Boolean);
-    if(!currentId&&autoSuggest&&form.dataset.ipManual!=='1'){
-      const suggested=nextClientIpValues(usedValues);
-      if(suggested)input.value=suggested;
-    }
     const ip=text(input.value),parts=ipv4Parts(ip);
     if(!ip){
-      input.setCustomValidity('Informe o IP fixo/remoto.');
-      clientFormIpStatus(form,'Informe um IP para validar no MikroTik.');
+      input.setCustomValidity('');
+      clientFormIpStatus(form,'IP fixo/remoto opcional. Deixe vazio para clientes que recebem IP quando conectam.');
       return;
     }
     if(!parts||parts[3]===0||parts[3]===255){
@@ -177,11 +162,16 @@ function handleClientFormField(event){
   if(!form||!target?.name)return;
   if(target.name==='ip'){
     form.dataset.ipManual='1';
+    clearTimeout(clientIpTimer);
+    if(!text(target.value)){
+      target.setCustomValidity('');
+      clientFormIpStatus(form,'IP fixo/remoto opcional. Deixe vazio para clientes que recebem IP quando conectam.');
+      return;
+    }
     const routerId=Number(form.elements?.router_id?.value)||0;
     if(routerId&&text(form.elements?.connection_type?.value).toLowerCase()==='pppoe'){
       target.setCustomValidity('Validando o IP no MikroTik…');
       clientFormIpStatus(form,'Validando o IP informado no MikroTik…');
-      clearTimeout(clientIpTimer);
       clientIpTimer=setTimeout(()=>loadClientMikrotikIpState(form,routerId),300);
     }else target.setCustomValidity('');
     return;
@@ -189,13 +179,13 @@ function handleClientFormField(event){
   if(target.name==='router_id'){
     const planProfile=text(form.elements?.plan_id?.selectedOptions?.[0]?.dataset?.profile)||'default';
     loadClientMikrotikProfiles(form,target.value,planProfile);
-    loadClientMikrotikIpState(form,target.value,{autoSuggest:!Number(form.elements?.id?.value)});
+    loadClientMikrotikIpState(form,target.value);
     return;
   }
   if(target.name==='connection_type'){
     const routerId=Number(form.elements?.router_id?.value)||0;
-    if(text(target.value).toLowerCase()==='pppoe'&&routerId)loadClientMikrotikIpState(form,routerId,{autoSuggest:!Number(form.elements?.id?.value)});
-    else if(form.elements?.ip){form.elements.ip.setCustomValidity('');clientFormIpStatus(form,'A validação de remote-address no MikroTik é aplicada aos acessos PPPoE.');}
+    if(text(target.value).toLowerCase()==='pppoe'&&routerId)loadClientMikrotikIpState(form,routerId);
+    else if(form.elements?.ip){form.elements.ip.setCustomValidity('');clientFormIpStatus(form,'IP fixo/remoto é opcional. A validação de remote-address é aplicada aos acessos PPPoE.');}
     return;
   }
   if(target.name==='plan_id'){
@@ -274,7 +264,7 @@ export function createForms(ctx){
     const planOpts=`<option value="" data-profile="default">Sem plano</option>${data.plans.map((p)=>`<option value="${attr(p.id)}" data-profile="${attr(text(p.mikrotik_profile)||'default')}"${String(p.id)===String(item.plan_id)?' selected':''}>${attr(`${p.name} · ${money(p.price_cents,true)}`)}</option>`).join('')}`;
     const routerOpts=`<option value="">Sem MikroTik</option>${routers.map((r)=>option(r.id,r.name||r.host,item.router_id)).join('')}`;
     const contract=item.contract_number||nextContract(clients),billingMode=text(item.billing_mode)||'boleto',billingBank=text(item.billing_bank_provider),pixStatus=text(item.pix_auto_status)||'Não configurado',customMonthlyCents=Math.max(0,Math.round(Number(item.custom_monthly_cents)||0)),customMonthlyValue=customMonthlyCents?formMoney(customMonthlyCents):'';
-    const localIpSeed=clients.filter((client)=>!item.router_id||Number(client?.router_id)===Number(item.router_id)).map((client)=>text(client?.ip)),fixedIp=text(item.ip)||(!item.id?nextClientIpValues(localIpSeed):''),mikrotikProfile=text(item.mikrotik_profile)||text(byPlan(item.plan_id)?.mikrotik_profile)||'default';
+    const fixedIp=text(item.ip),mikrotikProfile=text(item.mikrotik_profile)||text(byPlan(item.plan_id)?.mikrotik_profile)||'default';
     const profileNames=[mikrotikProfile,'default',...data.plans.map((p)=>text(p?.mikrotik_profile)),...clients.map((c)=>text(c?.mikrotik_profile))].filter(Boolean).filter((value,index,list)=>list.indexOf(value)===index),profileOptions=profileNames.map((value)=>option(value,value,mikrotikProfile)).join('');
     const billingOption=(value,label,bank,selected)=>`<option value="${attr(value)}" data-bank="${attr(bank)}"${selected?' selected':''}>${attr(label)}</option>`;
     const billingOptions=[
@@ -286,7 +276,7 @@ export function createForms(ctx){
       billingOption('pix_auto','Pix Automático — Efí','efi',billingMode==='pix_auto')
     ].join('');
     const efiOperations=item.id?`<fieldset class="form-section span-2"><legend>Efí — recorrência e carnê</legend><div class="form-actions"><button class="btn secondary" type="button" data-action="client-pix-auto" data-id="${attr(item.id)}" ${efiReady?'':'disabled'}>Pix Automático</button><button class="btn secondary" type="button" data-action="client-carnet" data-id="${attr(item.id)}" ${efiReady?'':'disabled'}>Gerar carnê</button></div><p class="hint">Pix Automático: <strong>${attr(pixStatus)}</strong>. ${efiReady?'Efí pronta para estas operações.':'Configure e ative a Efí Bank para liberar estas operações.'}</p></fieldset>`:'';
-    if(typeof document!=='undefined')queueMicrotask(()=>{const form=document.querySelector('#client-form');if(form){loadClientMikrotikProfiles(form,form.elements?.router_id?.value,mikrotikProfile);loadClientMikrotikIpState(form,form.elements?.router_id?.value,{autoSuggest:!item.id});}});
+    if(typeof document!=='undefined')queueMicrotask(()=>{const form=document.querySelector('#client-form');if(form){loadClientMikrotikProfiles(form,form.elements?.router_id?.value,mikrotikProfile);loadClientMikrotikIpState(form,form.elements?.router_id?.value);}});
     return `<form id="client-form" class="form-grid" data-original-plan-id="${attr(item.plan_id||'')}" data-original-mikrotik-profile="${attr(text(item.mikrotik_profile))}" data-original-pppoe-username="${attr(text(item.pppoe_username||item.pppoe_user))}" data-ip-manual="0">
       <input type="hidden" name="id" value="${attr(item.id||'')}">
       <input type="hidden" name="custom_monthly_cents" value="${attr(customMonthlyCents)}">
@@ -314,8 +304,8 @@ export function createForms(ctx){
       <fieldset class="form-section span-2"><legend>Acesso PPPoE / MikroTik</legend><div class="form-grid inner-grid">
         ${selectField('MikroTik','router_id',routerOpts)}${selectField('Tipo de conexão','connection_type',['PPPoE','IPoE','Estático'].map((v)=>option(v,v,item.connection_type||'PPPoE')).join(''))}
         ${field('Usuário PPPoE','pppoe_username',item.pppoe_username||item.pppoe_user)}${field('Senha PPPoE','pppoe_password','','password','placeholder="Informe para criar ou trocar; vazio mantém a atual"')}
-        ${selectField('Perfil MikroTik','mikrotik_profile',profileOptions)}${field('IP fixo / remoto','ip',fixedIp,'text',`${item.id?'':'required '}inputmode="decimal" autocomplete="off" spellcheck="false"`)}${field('MAC / Caller-ID','mac_address',item.mac_address)}
-      </div><p class="hint" data-client-profile-status>Os profiles serão carregados diretamente do MikroTik selecionado.</p><p class="hint" data-client-ip-status>O IP fixo/remoto será validado diretamente no MikroTik selecionado para evitar duplicidade.</p></fieldset>
+        ${selectField('Perfil MikroTik','mikrotik_profile',profileOptions)}${field('IP fixo / remoto','ip',fixedIp,'text','inputmode="decimal" autocomplete="off" spellcheck="false"')}${field('MAC / Caller-ID','mac_address',item.mac_address)}
+      </div><p class="hint" data-client-profile-status>Os profiles serão carregados diretamente do MikroTik selecionado.</p><p class="hint" data-client-ip-status>IP fixo / remoto é opcional. Deixe vazio para clientes que recebem IP quando conectam; preencha somente se quiser definir e validar um remote-address fixo.</p></fieldset>
       ${textareaField('Observações','notes',item.notes)}
       <div class="form-actions span-2">${item.id?'<button class="btn danger" type="button" data-action="delete-client" data-id="'+attr(item.id)+'">Excluir cliente</button>':''}<span class="form-spacer"></span><button class="btn secondary" type="button" data-action="close-modal">Cancelar</button><button class="btn primary" type="submit">Salvar e sincronizar</button></div>
     </form>`;

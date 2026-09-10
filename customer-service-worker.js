@@ -26,6 +26,7 @@ async function saveState(sql,state){const updatedAt=new Date().toISOString(),raw
 function localClientIndex(state,id){return (Array.isArray(state?.clients)?state.clients:[]).findIndex(row=>Number(row?.id)===Number(id))}
 function localClient(state,id){const index=localClientIndex(state,id);return index>=0?state.clients[index]:null}
 function planFor(client,state){const plans=Array.isArray(state?.plans)?state.plans:[],id=Number(client?.plan_id)||0,name=normalize(client?.plan||client?.plan_name);return plans.find(plan=>id&&Number(plan?.id)===id)||plans.find(plan=>name&&normalize(plan?.name)===name)||null}
+function planById(state,id){return (Array.isArray(state?.plans)?state.plans:[]).find(plan=>Number(plan?.id)===Number(id))||null}
 function planPriceCents(client,state){const plan=planFor(client,state),local=localClient(state,client?.id);for(const value of [plan?.price_cents,local?.plan_price_cents,local?.price_cents]){const n=Number(value);if(Number.isFinite(n)&&n>0)return Math.round(n)}return 0}
 function nextInvoiceId(state){const invoices=Array.isArray(state?.invoices)?state.invoices:[],max=Math.max(Number(state?.seq?.invoices)||0,...invoices.map(row=>Number(row?.id)||0)),id=max+1;state.seq={...(state.seq||{}),invoices:id};return id}
 
@@ -80,6 +81,16 @@ function safeProtocol(row){return {id:Number(row?.id)||0,protocol:text(row?.prot
 async function createProtocol(sql,{clientId,category,subject,status='Concluído',details={}}){await ensureProtocolTable(sql);const raw=JSON.stringify(details||{}),rows=await sql`INSERT INTO pp_protocols (client_id,category,subject,source,status,created_by_name,details) VALUES (${Number(clientId)||null},${text(category)||'Área do Cliente'},${text(subject)||'Ação do cliente'},'area-cliente',${text(status)||'Concluído'},'Área do Cliente',${raw}::jsonb) RETURNING *`,created=rows?.[0];if(!created?.id)throw new Error('Não foi possível gerar o protocolo.');const code=protocolCode(created.id,created.created_at),updated=await sql`UPDATE pp_protocols SET protocol=${code} WHERE id=${Number(created.id)} RETURNING *`;return safeProtocol(updated?.[0]||{...created,protocol:code})}
 async function finishProtocol(sql,protocol,status,details={}){const raw=JSON.stringify(details||{}),rows=await sql`UPDATE pp_protocols SET status=${status},details=${raw}::jsonb,closed_at=now() WHERE protocol=${protocol} RETURNING *`;return rows?.[0]?safeProtocol(rows[0]):null}
 async function lastDueChange(sql,clientId){await ensureProtocolTable(sql);const rows=await sql`SELECT protocol,created_at FROM pp_protocols WHERE client_id=${Number(clientId)} AND category='Vencimento' AND subject='Alteração de vencimento' AND status='Concluído' ORDER BY created_at DESC LIMIT 1`;return rows?.[0]||null}
+async function planActivity(sql,clientId){
+  await ensureProtocolTable(sql);
+  const rows=await sql`SELECT id,protocol,client_id,category,subject,source,status,details,created_at,closed_at FROM pp_protocols WHERE client_id=${Number(clientId)} AND category='Plano' AND subject IN ('Plano recomendado','Solicitação de mudança de plano') ORDER BY created_at DESC LIMIT 50`,items=(rows||[]).map(safeProtocol);
+  return {planRecommendations:items.filter(item=>item.subject==='Plano recomendado'&&normalize(item.status)==='recomendado'),planRequests:items.filter(item=>item.subject==='Solicitação de mudança de plano').slice(0,20)};
+}
+async function augmentPortalPlanContext(response,env){
+  if(!response?.ok||!env.DATABASE_URL)return response;
+  let body={};try{body=await response.clone().json()}catch{return response}const clientId=Number(body?.data?.client?.id)||0;if(!clientId)return response;
+  try{const context=await planActivity(neon(env.DATABASE_URL),clientId);body.data={...(body.data||{}),...context};const headers=new Headers(response.headers);headers.delete('content-length');headers.delete('content-encoding');headers.delete('etag');return new Response(JSON.stringify(body),{status:response.status,statusText:response.statusText,headers})}catch(error){console.error('Provedor Plus: não foi possível carregar recomendações de plano.',error);return response}
+}
 
 async function portalClient(sql,id){const rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code FROM pp_clients WHERE id=${Number(id)} LIMIT 1`;return rows?.[0]||null}
 async function dueEligibility(sql,client,state,targetDay=null){
@@ -142,6 +153,22 @@ async function handleDueDate(request,env){
   }catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error),data:error?.data||null},Number(error?.statusCode)||500,cors)}
 }
 
+async function handlePlanRequest(request,env,body={}){
+  const cors=corsFor(request);if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405,cors);
+  try{
+    const origin=text(request.headers.get('origin'));if(!PORTAL_ORIGINS.has(origin))throw Object.assign(new Error('Origem não autorizada.'),{statusCode:403});if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Provedor Plus não configurada.'),{statusCode:503});
+    const data=body?.data||{},session=await verifySession(data.session,env),sql=neon(env.DATABASE_URL),client=await portalClient(sql,session.clientId);if(!client)throw Object.assign(new Error('Cliente não encontrado.'),{statusCode:404});const state=await loadState(sql),planId=Number(data.planId)||0,target=planById(state,planId);if(!target||target.active===false||target.portal_visible===false)throw Object.assign(new Error('Este plano não está disponível para solicitação no momento.'),{statusCode:409});
+    if(Number(client.plan_id)===planId||(!client.plan_id&&normalize(client.plan)===normalize(target.name)))throw Object.assign(new Error('Este já é o seu plano atual.'),{statusCode:409});
+    await ensureProtocolTable(sql);
+    const pendingRows=await sql`SELECT id,protocol,client_id,category,subject,source,status,details,created_at,closed_at FROM pp_protocols WHERE client_id=${Number(client.id)} AND category='Plano' AND subject='Solicitação de mudança de plano' AND status='Aguardando aprovação' ORDER BY created_at DESC LIMIT 10`,pending=(pendingRows||[]).map(safeProtocol),same=pending.find(item=>Number(item?.details?.planId)===planId);
+    if(same){const context=await planActivity(sql,client.id);return json({ok:true,data:{requested:true,existing:true,protocol:same.protocol,protocolRecord:same,message:`Sua solicitação para o plano ${text(target.name)||`#${planId}`} já está aguardando aprovação.`,...context}},200,cors)}
+    if(pending.length)throw Object.assign(new Error(`Você já possui uma solicitação de mudança de plano aguardando aprovação (${pending[0].protocol}).`),{statusCode:409});
+    const recommendationRows=await sql`SELECT id,protocol,client_id,category,subject,source,status,details,created_at,closed_at FROM pp_protocols WHERE client_id=${Number(client.id)} AND category='Plano' AND subject='Plano recomendado' AND status='Recomendado' ORDER BY created_at DESC LIMIT 20`,recommendation=(recommendationRows||[]).map(safeProtocol).find(item=>Number(item?.details?.planId)===planId)||null,currentPlan=planFor(client,state),created=await createProtocol(sql,{clientId:client.id,category:'Plano',subject:'Solicitação de mudança de plano',status:'Aguardando aprovação',details:{planId,planName:text(target.name),planSpeed:text(target.speed),planPriceCents:Math.max(0,Number(target.price_cents)||0),currentPlanId:Number(client.plan_id)||null,currentPlanName:text(currentPlan?.name||client.plan),recommended:Boolean(recommendation),recommendationProtocol:text(recommendation?.protocol),requestedAt:new Date().toISOString()}});
+    if(recommendation?.protocol)await sql`UPDATE pp_protocols SET status='Solicitado',closed_at=now() WHERE protocol=${recommendation.protocol} AND status='Recomendado'`;
+    const context=await planActivity(sql,client.id);return json({ok:true,data:{requested:true,protocol:created.protocol,protocolRecord:created,message:`Solicitação enviada. O plano ${text(target.name)} ficará aguardando aprovação da Fibra+. Protocolo ${created.protocol}.`,...context}},200,cors);
+  }catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error),data:error?.data||null},Number(error?.statusCode)||500,cors)}
+}
+
 function portalAuditDefinition(path,action){
   if(path===TRUST_PATH&&action==='release')return {category:'Conexão',subject:'Liberação em confiança',details:{hours:48}};
   if(path!==PORTAL_PATH)return null;
@@ -149,7 +176,7 @@ function portalAuditDefinition(path,action){
   if(action==='payment-card')return {category:'Financeiro',subject:'Pagamento com cartão'};
   if(action==='negotiate')return {category:'Financeiro',subject:'Negociação realizada'};
   if(['connection-test','test-connection','connection-status','connection-diagnostic','diagnostic','diagnose','connection-check','check-connection','diagnostic-connection'].includes(action)||/(connection|diagnostic|diagnose|diagnost|conex[aã]o|teste.*conex)/i.test(action))return {category:'Conexão',subject:'Diagnóstico da conexão'};
-  const passive=new Set(['refresh','payment-config','payment-prepare','payment-status','negotiation-options']);
+  const passive=new Set(['login','refresh','payment-config','payment-prepare','payment-status','negotiation-options','plan-request']);
   if(passive.has(action))return null;
   return action?{category:'Área do Cliente',subject:`Ação: ${action}`} : null;
 }
@@ -168,7 +195,9 @@ async function clientIdForAudit(body,responseData,env){const direct=Number(respo
 async function augmentResponseWithProtocol(response,protocol){if(!protocol)return response;let body={};try{body=await response.clone().json()}catch{return response}if(!body||typeof body!=='object')return response;body.data=body.data&&typeof body.data==='object'?{...body.data,protocol:protocol.protocol,protocolRecord:protocol}:{protocol:protocol.protocol,protocolRecord:protocol};const headers=new Headers(response.headers);headers.delete('content-length');headers.delete('content-encoding');headers.delete('etag');return new Response(JSON.stringify(body),{status:response.status,statusText:response.statusText,headers})}
 async function recordAuditProtocol(body,action,definition,response,env){let responseData={};try{const parsed=await response.clone().json();responseData=parsed?.data||{}}catch{}const clientId=await clientIdForAudit(body,responseData,env);if(!clientId)return null;return createProtocol(neon(env.DATABASE_URL),{clientId,category:definition.category,subject:definition.subject,status:'Concluído',details:safeAuditDetails(action,body?.data||{},responseData,definition.details||{})})}
 async function auditedBaseFetch(request,env,ctx){
-  let body={};try{body=await request.clone().json()}catch{}const action=text(body?.action),path=new URL(request.url).pathname,definition=portalAuditDefinition(path,action),response=await baseWorker.fetch(request,env,ctx);if(!definition||!response.ok||!env.DATABASE_URL)return response;
+  let body={};try{body=await request.clone().json()}catch{}const action=text(body?.action),path=new URL(request.url).pathname;
+  if(path===PORTAL_PATH&&action==='plan-request')return handlePlanRequest(request,env,body);
+  const definition=portalAuditDefinition(path,action),baseResponse=await baseWorker.fetch(request,env,ctx),response=path===PORTAL_PATH&&['login','refresh'].includes(action)?await augmentPortalPlanContext(baseResponse,env):baseResponse;if(!definition||!response.ok||!env.DATABASE_URL)return response;
   try{const protocol=await recordAuditProtocol(body,action,definition,response,env);return augmentResponseWithProtocol(response,protocol)}catch(error){console.error('Provedor Plus: ação da Área do Cliente concluída, mas o protocolo não pôde ser registrado.',error);return response}
 }
 

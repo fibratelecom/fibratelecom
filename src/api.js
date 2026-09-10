@@ -137,6 +137,25 @@ async function removePppoeAccess(client) {
   return raw('/api/mikrotik-proxy', { action: 'pppoe.delete', router, data: client });
 }
 
+function clientLocalFields(data = {}) {
+  const local = { rg: valueText(data?.rg), birth_date: valueText(data?.birth_date) };
+  if (typeof document === 'undefined' || typeof HTMLFormElement === 'undefined') return local;
+  const form = document.querySelector('#client-form');
+  if (!(form instanceof HTMLFormElement)) return local;
+  const formId = Number(form.elements?.id?.value) || 0, dataId = Number(data?.id) || 0;
+  if (formId && dataId && formId !== dataId) return local;
+  return {
+    rg: valueText(form.elements?.rg?.value ?? local.rg),
+    birth_date: valueText(form.elements?.birth_date?.value ?? local.birth_date),
+  };
+}
+
+async function saveCloudClient(data) {
+  const local = clientLocalFields(data);
+  const saved = await request('/api/cloud-data', 'clients.save', { ...data, ...local });
+  return { ...saved, ...local };
+}
+
 async function clientSaveSafe(data) {
   const id = Number(data?.id) || 0;
   let pending = id ? pppoeMigrations.get(id) : null;
@@ -150,12 +169,12 @@ async function clientSaveSafe(data) {
       const changedUsername = nextHasPppoe && valueText(previous.pppoe_username) !== valueText(data?.pppoe_username);
       const changedPppoeIdentity = changedRouter || changedUsername;
       if (!nextHasPppoe) {
-        const saved = await request('/api/cloud-data', 'clients.save', data);
+        const saved = await saveCloudClient(data);
         try {
           await removePppoeAccess(previous);
-          return request('/api/cloud-data', 'clients.save', { ...saved, mikrotik_secret_id: '', mikrotik_status: 'Sem PPPoE', mikrotik_last_sync: new Date().toISOString() });
+          return saveCloudClient({ ...saved, mikrotik_secret_id: '', mikrotik_status: 'Sem PPPoE', mikrotik_last_sync: new Date().toISOString() });
         } catch (error) {
-          await request('/api/cloud-data', 'clients.save', previousNetworkPayload(saved, previous));
+          await saveCloudClient(previousNetworkPayload(saved, previous));
           throw new Error(`Não foi possível remover o PPPoE antigo. O cadastro de rede foi restaurado: ${error.message || error}`);
         }
       }
@@ -168,7 +187,7 @@ async function clientSaveSafe(data) {
   }
 
   const payload = createdPending ? { ...data, mikrotik_status: 'Migração PPPoE pendente' } : data;
-  const saved = await request('/api/cloud-data', 'clients.save', payload);
+  const saved = await saveCloudClient(payload);
   if (!pending || createdPending) return saved;
 
   const failed = /^falha de sincroniza/i.test(normalizeConnection(data?.mikrotik_status));
@@ -176,7 +195,7 @@ async function clientSaveSafe(data) {
 
   if (failed) {
     pppoeMigrations.delete(id);
-    return request('/api/cloud-data', 'clients.save', previousNetworkPayload(saved, pending.previous));
+    return saveCloudClient(previousNetworkPayload(saved, pending.previous));
   }
   if (!confirmed) return saved;
 
@@ -187,7 +206,7 @@ async function clientSaveSafe(data) {
   } catch (oldError) {
     let newRollbackError = null;
     try { await removePppoeAccess(data); } catch (error) { newRollbackError = error; }
-    const restored = await request('/api/cloud-data', 'clients.save', previousNetworkPayload(saved, pending.previous));
+    const restored = await saveCloudClient(previousNetworkPayload(saved, pending.previous));
     pppoeMigrations.delete(id);
     if (newRollbackError) {
       throw new Error(`O novo PPPoE foi criado, mas não foi possível remover o acesso antigo nem compensar o acesso novo. Cadastro restaurado para o roteador anterior. Antigo: ${oldError.message || oldError}. Novo: ${newRollbackError.message || newRollbackError}`);

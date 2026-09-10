@@ -288,6 +288,8 @@ export function createForms(ctx){
       <fieldset class="form-section span-2"><legend>Identificação e contrato</legend><div class="form-grid inner-grid">
         ${field('Nome completo / Razão social','name',item.name,'text','required')}
         ${field('CPF/CNPJ','document',item.document,'text','inputmode="numeric"')}
+        ${field('RG','rg',item.rg,'text','maxlength="30" autocomplete="off"')}
+        ${field('Data de nascimento','birth_date',text(item.birth_date||item.date_of_birth).slice(0,10),'date')}
         ${field('Contrato','contract_number',contract,'text','required readonly aria-readonly="true"')}
         ${field('Data de instalação','installation_date',text(item.installation_date||item.activation_date).slice(0,10),'date')}
         ${field('E-mail','email',item.email,'email')}${field('Telefone / WhatsApp','phone',item.phone)}

@@ -1,4 +1,4 @@
-const BUILD = '20260910-plan-workflow1';
+const BUILD = '20260910-client-rg-birth1';
 const root = document.querySelector('#app');
 let lastValidationToastAt = 0;
 

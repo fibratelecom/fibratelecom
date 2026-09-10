@@ -145,7 +145,6 @@ async function handleDueDate(request,env){
 function portalAuditDefinition(path,action){
   if(path===TRUST_PATH&&action==='release')return {category:'Conexão',subject:'Liberação em confiança',details:{hours:48}};
   if(path!==PORTAL_PATH)return null;
-  if(action==='login')return {category:'Acesso',subject:'Login na Área do Cliente'};
   if(action==='payment-pix')return {category:'Financeiro',subject:'Pix solicitado'};
   if(action==='payment-card')return {category:'Financeiro',subject:'Pagamento com cartão'};
   if(action==='negotiate')return {category:'Financeiro',subject:'Negociação realizada'};
@@ -170,10 +169,6 @@ async function augmentResponseWithProtocol(response,protocol){if(!protocol)retur
 async function recordAuditProtocol(body,action,definition,response,env){let responseData={};try{const parsed=await response.clone().json();responseData=parsed?.data||{}}catch{}const clientId=await clientIdForAudit(body,responseData,env);if(!clientId)return null;return createProtocol(neon(env.DATABASE_URL),{clientId,category:definition.category,subject:definition.subject,status:'Concluído',details:safeAuditDetails(action,body?.data||{},responseData,definition.details||{})})}
 async function auditedBaseFetch(request,env,ctx){
   let body={};try{body=await request.clone().json()}catch{}const action=text(body?.action),path=new URL(request.url).pathname,definition=portalAuditDefinition(path,action),response=await baseWorker.fetch(request,env,ctx);if(!definition||!response.ok||!env.DATABASE_URL)return response;
-  if(action==='login'&&typeof ctx?.waitUntil==='function'){
-    ctx.waitUntil(recordAuditProtocol(body,action,definition,response,env).catch(error=>console.error('Provedor Plus: login concluído, mas o protocolo não pôde ser registrado em segundo plano.',error)));
-    return response;
-  }
   try{const protocol=await recordAuditProtocol(body,action,definition,response,env);return augmentResponseWithProtocol(response,protocol)}catch(error){console.error('Provedor Plus: ação da Área do Cliente concluída, mas o protocolo não pôde ser registrado.',error);return response}
 }
 

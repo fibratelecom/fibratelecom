@@ -116,10 +116,16 @@ function mergedClient(remote,state){
     pix_auto_qr:text(local.pix_auto_qr),
     pix_auto_created_at:text(local.pix_auto_created_at),
     pix_auto_updated_at:text(local.pix_auto_updated_at),
+    custom_monthly_cents:Math.max(0,Math.round(num(local.custom_monthly_cents||remote.custom_monthly_cents))),
     plan_id:Number(remote.plan_id||local.plan_id)||null,
     plan_name:text(plan?.name||remote.plan||local.plan)||'Plano Fibra+',
     plan_price_cents:Math.max(0,Math.round(num(plan?.price_cents)))
   };
+}
+
+function monthlyCents(client,plan){
+  const custom=Math.max(0,Math.round(num(client?.custom_monthly_cents)));
+  return custom>0?custom:Math.max(0,Math.round(num(plan?.price_cents)));
 }
 
 function readyProviders(vault){
@@ -210,7 +216,7 @@ function firstProrated(client,plan){
   const activationKey=keyFromParts(activation.getUTCFullYear(),activation.getUTCMonth()+1,activation.getUTCDate());
   let due=dueKey(activation.getUTCFullYear(),activation.getUTCMonth()+1,client.due_day);
   if(dateFromKey(due)?.getTime()<=activation.getTime())due=addMonthsDue(due,1,client.due_day);
-  const previous=addMonthsDue(due,-1,client.due_day),cycleDays=Math.max(1,daysBetween(previous,due)),serviceDays=Math.max(1,Math.min(cycleDays,daysBetween(activationKey,due))),base=Math.max(0,Math.round(num(plan?.price_cents))),amount=Math.max(1,Math.min(base,Math.round(base*serviceDays/cycleDays)));
+  const previous=addMonthsDue(due,-1,client.due_day),cycleDays=Math.max(1,daysBetween(previous,due)),serviceDays=Math.max(1,Math.min(cycleDays,daysBetween(activationKey,due))),base=monthlyCents(client,plan),amount=Math.max(1,Math.min(base,Math.round(base*serviceDays/cycleDays)));
   return {due,serviceDays,cycleDays,base,amount};
 }
 
@@ -227,9 +233,9 @@ function makeInvoice(state,client,dueDate,amountCents,{first=false,serviceDays=0
   };
 }
 
-function prepareCombinedMonthly(invoice,plan,dueDate){
-  const monthlyCents=Math.max(1,Math.round(num(plan?.price_cents))),agreementCents=Math.max(1,Math.round(num(invoice?.negotiation_installment_amount_cents))),reference=dueDate.slice(0,7),part=Math.max(2,Math.round(num(invoice?.installment_number))),total=Math.max(part,Math.round(num(invoice?.installment_total)||part));
-  Object.assign(invoice,{due_date:dueDate,amount_cents:monthlyCents+agreementCents,status:'Pendente',billing_type:'Mensalidade + Renegociação',description:`Mensalidade ${reference} + Acordo ${text(invoice?.negotiation_id)} · Parcela ${part}/${total}`,billing_origin:'monthly_auto_combined',auto_generated:true,competency:reference,reference,base_amount_cents:monthlyCents,monthly_amount_cents:monthlyCents,negotiation_installment_amount_cents:agreementCents,cashback_base_cents:monthlyCents,combined_billing:true,bank_issue_deferred:false,cashback_eligible:false,cashback_enabled:false,cashback_reason:'mensalidade_com_renegociacao',billing_items:[{type:'monthly',label:`Mensalidade ${reference}`,amount_cents:monthlyCents},{type:'negotiation',label:`Parcela ${part}/${total} do acordo`,amount_cents:agreementCents,installment_number:part,installment_total:total,negotiation_id:text(invoice?.negotiation_id)}]});
+function prepareCombinedMonthly(invoice,client,plan,dueDate){
+  const monthlyAmount=Math.max(1,monthlyCents(client,plan)),agreementCents=Math.max(1,Math.round(num(invoice?.negotiation_installment_amount_cents))),reference=dueDate.slice(0,7),part=Math.max(2,Math.round(num(invoice?.installment_number))),total=Math.max(part,Math.round(num(invoice?.installment_total)||part));
+  Object.assign(invoice,{due_date:dueDate,amount_cents:monthlyAmount+agreementCents,status:'Pendente',billing_type:'Mensalidade + Renegociação',description:`Mensalidade ${reference} + Acordo ${text(invoice?.negotiation_id)} · Parcela ${part}/${total}`,billing_origin:'monthly_auto_combined',auto_generated:true,competency:reference,reference,base_amount_cents:monthlyAmount,monthly_amount_cents:monthlyAmount,negotiation_installment_amount_cents:agreementCents,cashback_base_cents:monthlyAmount,combined_billing:true,bank_issue_deferred:false,cashback_eligible:false,cashback_enabled:false,cashback_reason:'mensalidade_com_renegociacao',billing_items:[{type:'monthly',label:`Mensalidade ${reference}`,amount_cents:monthlyAmount},{type:'negotiation',label:`Parcela ${part}/${total} do acordo`,amount_cents:agreementCents,installment_number:part,installment_total:total,negotiation_id:text(invoice?.negotiation_id)}]});
   return invoice;
 }
 
@@ -269,12 +275,13 @@ async function runBillingCron(env,{force=false}={}){
       }else{
         dueDate=currentDueCandidate(client,today,daysBefore);if(!dueDate){skipped++;continue}
         existing=invoiceForDue(state,client.id,dueDate);
-        invoice=existing||makeInvoice(state,client,dueDate,Math.max(1,Math.round(num(plan.price_cents))),{baseAmount:plan.price_cents});
+        const amount=monthlyCents(client,plan);
+        invoice=existing||makeInvoice(state,client,dueDate,Math.max(1,amount),{baseAmount:amount});
       }
       const inactive=['pago','paid','baixado','renegociado','renegotiated','substituido','substituida'].some(value=>normalize(invoice.status).includes(value));
       const mpPixWaiting=text(invoice.bank_status_detail)==='mercado_pago_pix_on_demand'&&(normalize(invoice.payment_mode_override)==='pix_mp'||normalize(client.billing_mode)==='pix_mp');
       if(inactive||text(invoice.bank_charge_id)||mpPixWaiting){skipped++;continue}
-      if(existing&&deferredNegotiationInstallment(invoice))prepareCombinedMonthly(invoice,plan,dueDate);
+      if(existing&&deferredNegotiationInstallment(invoice))prepareCombinedMonthly(invoice,client,plan,dueDate);
       const remoteIssued=await issueAndSave(env,sql,state,invoice,client,vault,Boolean(existing));
       if(remoteIssued)issued++;if(!existing)generated++;
     }catch(error){failed++;errors.push(`${client.name||client.id}: ${error instanceof Error?error.message:String(error)}`)}

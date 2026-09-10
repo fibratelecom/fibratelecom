@@ -138,7 +138,11 @@ async function removePppoeAccess(client) {
 }
 
 function clientLocalFields(data = {}) {
-  const local = { rg: valueText(data?.rg), birth_date: valueText(data?.birth_date) };
+  const local = {
+    rg: valueText(data?.rg),
+    birth_date: valueText(data?.birth_date),
+    custom_monthly_cents: Math.max(0, Math.round(Number(data?.custom_monthly_cents) || 0)),
+  };
   if (typeof document === 'undefined' || typeof HTMLFormElement === 'undefined') return local;
   const form = document.querySelector('#client-form');
   if (!(form instanceof HTMLFormElement)) return local;
@@ -147,6 +151,7 @@ function clientLocalFields(data = {}) {
   return {
     rg: valueText(form.elements?.rg?.value ?? local.rg),
     birth_date: valueText(form.elements?.birth_date?.value ?? local.birth_date),
+    custom_monthly_cents: Math.max(0, Math.round(Number(form.elements?.custom_monthly_cents?.value ?? local.custom_monthly_cents) || 0)),
   };
 }
 

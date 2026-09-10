@@ -204,6 +204,10 @@ function handleClientFormField(event){
     selectClientProfile(form,profile);
     return;
   }
+  if(target.name==='custom_monthly'){
+    if(form.elements?.custom_monthly_cents)form.elements.custom_monthly_cents.value=String(moneyToCents(target.value));
+    return;
+  }
   if(target.name==='billing_mode'){
     const selected=target.selectedOptions?.[0];
     if(selected?.hasAttribute('data-bank')&&form.elements.billing_bank_provider)form.elements.billing_bank_provider.value=text(selected.dataset.bank);
@@ -233,7 +237,9 @@ function updateSupportNegotiationPreview(form){
   if(fixedInput)fixedInput.disabled=discountType!=='fixed';
   const discountPercent=Math.max(0,Math.min(100,Number(percentInput?.value)||0));let discountCents=discountType==='fixed'?moneyToCents(fixedInput?.value):Math.round(originalCents*discountPercent/100);
   discountCents=originalCents>0?Math.min(Math.max(0,originalCents-1),discountCents):0;
-  const netCents=Math.max(0,originalCents-discountCents),installments=Math.max(1,Math.min(12,Math.floor(Number(form.elements?.installments?.value)||1))),periods=Math.max(0,installments-1),interestPercent=installments>1?Math.max(0,Math.min(20,Number(interestInput?.value)||0)):0;
+  const netCents=Math.max(0,originalCents-discountCents),installments=Math.max(1,Math.min(12,Math.floor(Number(form.elements?.installments?.value)||1))),periods=Math.max(0,installments-1),interestPercent=installments>1?Math.max(0,Math.min(20,Number(interestInput?.value)||0):0);
+  if(percentInput)percentInput.disabled=discountType!=='percent';
+  if(fixedInput)fixedInput.disabled=discountType!=='fixed';
   if(entryInput)entryInput.disabled=installments===1;
   if(interestInput)interestInput.disabled=installments===1;
   let entryCents=installments===1?netCents:moneyToCents(entryInput?.value),financedCents=installments>1?Math.max(0,netCents-entryCents):0,financedWithInterest=financedCents;
@@ -269,7 +275,7 @@ export function createForms(ctx){
   function clientForm(item={}){
     const planOpts=`<option value="" data-profile="default">Sem plano</option>${data.plans.map((p)=>`<option value="${attr(p.id)}" data-profile="${attr(text(p.mikrotik_profile)||'default')}"${String(p.id)===String(item.plan_id)?' selected':''}>${attr(`${p.name} · ${money(p.price_cents,true)}`)}</option>`).join('')}`;
     const routerOpts=`<option value="">Sem MikroTik</option>${routers.map((r)=>option(r.id,r.name||r.host,item.router_id)).join('')}`;
-    const contract=item.contract_number||nextContract(clients),billingMode=text(item.billing_mode)||'boleto',billingBank=text(item.billing_bank_provider),pixStatus=text(item.pix_auto_status)||'Não configurado';
+    const contract=item.contract_number||nextContract(clients),billingMode=text(item.billing_mode)||'boleto',billingBank=text(item.billing_bank_provider),pixStatus=text(item.pix_auto_status)||'Não configurado',customMonthlyCents=Math.max(0,Math.round(Number(item.custom_monthly_cents)||0)),customMonthlyValue=customMonthlyCents?formMoney(customMonthlyCents):'';
     const localIpSeed=clients.filter((client)=>!item.router_id||Number(client?.router_id)===Number(item.router_id)).map((client)=>text(client?.ip)),fixedIp=text(item.ip)||(!item.id?nextClientIpValues(localIpSeed):''),mikrotikProfile=text(item.mikrotik_profile)||text(byPlan(item.plan_id)?.mikrotik_profile)||'default';
     const profileNames=[mikrotikProfile,'default',...data.plans.map((p)=>text(p?.mikrotik_profile)),...clients.map((c)=>text(c?.mikrotik_profile))].filter(Boolean).filter((value,index,list)=>list.indexOf(value)===index),profileOptions=profileNames.map((value)=>option(value,value,mikrotikProfile)).join('');
     const billingOption=(value,label,bank,selected)=>`<option value="${attr(value)}" data-bank="${attr(bank)}"${selected?' selected':''}>${attr(label)}</option>`;
@@ -285,6 +291,7 @@ export function createForms(ctx){
     if(typeof document!=='undefined')queueMicrotask(()=>{const form=document.querySelector('#client-form');if(form){loadClientMikrotikProfiles(form,form.elements?.router_id?.value,mikrotikProfile);loadClientMikrotikIpState(form,form.elements?.router_id?.value,{autoSuggest:!item.id});}});
     return `<form id="client-form" class="form-grid" data-original-plan-id="${attr(item.plan_id||'')}" data-original-mikrotik-profile="${attr(text(item.mikrotik_profile))}" data-original-pppoe-username="${attr(text(item.pppoe_username||item.pppoe_user))}" data-ip-manual="0">
       <input type="hidden" name="id" value="${attr(item.id||'')}">
+      <input type="hidden" name="custom_monthly_cents" value="${attr(customMonthlyCents)}">
       <fieldset class="form-section span-2"><legend>Identificação e contrato</legend><div class="form-grid inner-grid">
         ${field('Nome completo / Razão social','name',item.name,'text','required')}
         ${field('CPF/CNPJ','document',item.document,'text','inputmode="numeric"')}
@@ -298,13 +305,13 @@ export function createForms(ctx){
         ${field('CEP','zip_code',item.zip_code||item.cep,'text','inputmode="numeric" maxlength="9" autocomplete="postal-code"')}${field('Endereço','address',item.address||item.street)}${field('Número','address_number',item.address_number)}${field('Bairro','neighborhood',item.neighborhood)}${field('Complemento','complement',item.complement)}${field('Cidade','city',item.city)}${field('UF','state',item.state,'text','maxlength="2"')}
       </div><p class="hint" data-client-cep-status></p></fieldset>
       <fieldset class="form-section span-2"><legend>Plano e cobrança</legend><div class="form-grid inner-grid">
-        ${selectField('Plano','plan_id',planOpts)}${field('Dia do vencimento','due_day',item.due_day||10,'number','min="1" max="31"')}
+        ${selectField('Plano','plan_id',planOpts)}${field('Valor mensal personalizado (R$)','custom_monthly',customMonthlyValue,'text','inputmode="decimal" placeholder="Vazio = valor do plano"')}${field('Dia do vencimento','due_day',item.due_day||10,'number','min="1" max="31"')}
         ${selectField('Status','status',['Ativo','Em atraso','Bloqueado','Suspenso','Cancelado'].map((v)=>option(v,v,item.status||'Ativo')).join(''))}
         ${selectField('Banco preferencial','billing_bank_provider',`<option value="">Padrão do sistema</option>${option('efi','Efí Bank',billingBank)}${option('mercadoPago','Mercado Pago',billingBank)}`)}
         ${selectField('Cobrança automática','billing_mode',billingOptions)}
         <label class="check"><input type="checkbox" name="auto_block" ${checkbox(item.auto_block)?'checked':''}>Bloqueio automático por atraso</label>
         ${field('Dias para bloquear','block_after_days',item.block_after_days||7,'number','min="1" max="90"')}
-      </div><p class="hint">Boleto pode usar o banco padrão, Efí Bank ou Mercado Pago. Pix com vencimento e Pix Automático usam a Efí. Pix Mercado Pago usa o fluxo Pix já existente e gera o QR quando o cliente inicia o pagamento. Ao escolher a cobrança, o banco preferencial é ajustado automaticamente.</p></fieldset>
+      </div><p class="hint"><strong>Valor personalizado:</strong> deixe vazio para cobrar o valor normal do plano. Quando preenchido, somente este cliente usa esse valor nas novas mensalidades automáticas, primeira mensalidade proporcional e carnê. Cobranças já emitidas não são alteradas. Boleto pode usar o banco padrão, Efí Bank ou Mercado Pago.</p></fieldset>
       ${efiOperations}
       <fieldset class="form-section span-2"><legend>Acesso PPPoE / MikroTik</legend><div class="form-grid inner-grid">
         ${selectField('MikroTik','router_id',routerOpts)}${selectField('Tipo de conexão','connection_type',['PPPoE','IPoE','Estático'].map((v)=>option(v,v,item.connection_type||'PPPoE')).join(''))}
@@ -317,7 +324,7 @@ export function createForms(ctx){
   }
 
   function pixAutoForm(item={}){
-    const p=byPlan(item.plan_id),amount=item.pix_auto_amount_cents||p?.price_cents||0,status=text(item.pix_auto_status)||'Não configurado';
+    const p=byPlan(item.plan_id),amount=item.pix_auto_amount_cents||item.custom_monthly_cents||p?.price_cents||0,status=text(item.pix_auto_status)||'Não configurado';
     return `<form id="pix-auto-form" class="form-grid"><input type="hidden" name="client_id" value="${attr(item.id||'')}">
       ${field('Cliente','client_name',item.name,'text','readonly')}${field('Status atual','current_status',status,'text','readonly')}
       ${field('Início da recorrência','start_date',text(item.pix_auto_start_date).slice(0,10)||today(),'date','required')}${field('Fim da recorrência','end_date',text(item.pix_auto_end_date).slice(0,10),'date')}
@@ -329,7 +336,7 @@ export function createForms(ctx){
   }
 
   function carnetForm(item={}){
-    const p=byPlan(item.plan_id),amount=p?.price_cents||0;
+    const p=byPlan(item.plan_id),amount=item.custom_monthly_cents||p?.price_cents||0;
     return `<form id="carnet-form" class="form-grid"><input type="hidden" name="client_id" value="${attr(item.id||'')}">
       ${field('Cliente','client_name',item.name,'text','readonly')}${field('Contrato','contract_number',item.contract_number||'','text','readonly')}
       ${field('Quantidade de parcelas','installments',6,'number','required min="2" max="24"')}${field('Primeiro vencimento','first_due',futureDate(7),'date','required')}

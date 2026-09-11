@@ -115,12 +115,21 @@ async function portalLoginRateKeys(request,env,data){
   const pairHash=await portalLoginHash(env,`${ip||'sem-ip'}|${identity}`),ipHash=ip?await portalLoginHash(env,ip):'';
   return {pairKey:`portal_login_pair_${pairHash}`,ipKey:ipHash?`portal_login_ip_${ipHash}`:''};
 }
+async function portalLoginRateRows(sql,keys){
+  const query=()=>keys.ipKey?sql`SELECT key,blocked_until FROM pp_portal_login_rate WHERE key=${keys.pairKey} OR key=${keys.ipKey}`:sql`SELECT key,blocked_until FROM pp_portal_login_rate WHERE key=${keys.pairKey}`;
+  try{const rows=await query();portalLoginRateSchemaReady=true;return rows}
+  catch(error){
+    if(portalLoginRateSchemaReady||text(error?.code)!=='42P01')throw error;
+    await ensurePortalLoginRateTable(sql);
+    return query();
+  }
+}
 async function checkPortalLoginRate(sql,keys){
-  await ensurePortalLoginRateTable(sql);
-  const rows=keys.ipKey?await sql`SELECT key,blocked_until FROM pp_portal_login_rate WHERE key=${keys.pairKey} OR key=${keys.ipKey}`:await sql`SELECT key,blocked_until FROM pp_portal_login_rate WHERE key=${keys.pairKey}`;
+  const rows=await portalLoginRateRows(sql,keys);
   let blockedUntil=null;
   for(const row of rows||[]){const at=row?.blocked_until?new Date(row.blocked_until):null;if(at&&!Number.isNaN(at.getTime())&&at.getTime()>Date.now()&&(!blockedUntil||at>blockedUntil))blockedUntil=at}
   if(blockedUntil)throw portalLoginRateError(blockedUntil);
+  return {pairExists:(rows||[]).some(row=>text(row?.key)===keys.pairKey)};
 }
 async function recordPortalLoginFailure(sql,key,limit){
   const now=Date.now(),nowIso=new Date(now).toISOString(),cutoffIso=new Date(now-PORTAL_LOGIN_WINDOW_MS).toISOString(),blockIso=new Date(now+PORTAL_LOGIN_BLOCK_MS).toISOString();
@@ -149,11 +158,17 @@ async function preparePortalLoginRate(request,env,path){
   if(path!==PORTAL_LOGIN_PATH||request.method!=='POST'||!env?.DATABASE_URL)return null;
   const origin=text(request.headers.get('origin'));if(origin&&!CLIENT_ORIGINS.has(origin))return null;
   let body={};try{body=await request.clone().json()}catch{return null};if(text(body?.action)!=='login')return null;
-  const sql=neon(env.DATABASE_URL),keys=await portalLoginRateKeys(request,env,body?.data||{});await checkPortalLoginRate(sql,keys);return {sql,keys};
+  const sql=neon(env.DATABASE_URL),keys=await portalLoginRateKeys(request,env,body?.data||{}),check=await checkPortalLoginRate(sql,keys);return {sql,keys,...check};
 }
-async function finishPortalLoginRate(request,response,rate){
+async function finishPortalLoginRate(request,response,rate,ctx){
   if(!rate)return response;
-  if(response?.ok){try{await rate.sql`DELETE FROM pp_portal_login_rate WHERE key=${rate.keys.pairKey}`}catch(error){console.error('Provedor Plus: não foi possível limpar a contagem de login válido.',error)}return response}
+  if(response?.ok){
+    if(rate.pairExists){
+      const cleanup=async()=>{try{await rate.sql`DELETE FROM pp_portal_login_rate WHERE key=${rate.keys.pairKey}`}catch(error){console.error('Provedor Plus: não foi possível limpar a contagem de login válido.',error)}};
+      if(typeof ctx?.waitUntil==='function')ctx.waitUntil(cleanup());else await cleanup();
+    }
+    return response;
+  }
   if(![400,404].includes(Number(response?.status)))return response;
   try{await registerPortalLoginFailure(rate.sql,rate.keys);return response}catch(error){if(Number(error?.statusCode)===429)return portalLoginRateResponse(request,error);console.error('Provedor Plus: não foi possível registrar a tentativa de login.',error);return response}
 }
@@ -168,7 +183,7 @@ async function stateMutationRequest(request,path){
   if(path==='/api/bank-settings')return action==='save-default';
   if(path==='/api/customer-trust-release')return action==='release';
   if(path==='/api/customer-due-date')return action==='change';
-  if(path==='/api/customer-portal')return new Set(['login','refresh','payment-config','payment-prepare','payment-pix','payment-card','payment-status','negotiate']).has(action);
+  if(path==='/api/customer-portal')return new Set(['refresh','payment-config','payment-prepare','payment-pix','payment-card','payment-status','negotiate']).has(action);
   return false;
 }
 async function acquireStateWriteLock(env,maxWaitMs=20000){
@@ -438,7 +453,7 @@ export default {
     let portalLoginRate=null;
     try{portalLoginRate=await preparePortalLoginRate(request,env,path)}catch(error){if(Number(error?.statusCode)===429)return portalLoginRateResponse(request,error);console.error('Provedor Plus: proteção de tentativas do login não pôde ser preparada.',error)}
     try{
-      const forward=async()=>{let response=await baseWorker.fetch(request,env,ctx);if(portalLoginRate)response=await finishPortalLoginRate(request,response,portalLoginRate);return path==='/api/bank-settings'?await sanitizeBankResponse(response):response};
+      const forward=async()=>{let response=await baseWorker.fetch(request,env,ctx);if(portalLoginRate)response=await finishPortalLoginRate(request,response,portalLoginRate,ctx);return path==='/api/bank-settings'?await sanitizeBankResponse(response):response};
       if(await stateMutationRequest(request,path))return await withStateWriteLock(env,forward);
       return await forward();
     }catch(error){return stateLockErrorResponse(request,error)}

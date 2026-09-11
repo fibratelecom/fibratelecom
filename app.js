@@ -1,4 +1,4 @@
-const BUILD = '20260911-table-search1';
+const BUILD = '20260911-invoice-reference1';
 const root = document.querySelector('#app');
 let lastValidationToastAt = 0;
 
@@ -57,6 +57,25 @@ root?.addEventListener('click', (event) => {
     if (button.isConnected && button.textContent === 'Processando…') button.textContent = original;
   }, 12000);
 }, true);
+
+function syncInvoiceReference(event) {
+  const input = event.target instanceof HTMLInputElement ? event.target : null;
+  const form = input?.closest?.('#invoice-form');
+  if (!input || !(form instanceof HTMLFormElement)) return;
+  const reference = form.elements?.reference;
+  if (!(reference instanceof HTMLInputElement)) return;
+  if (input.name === 'reference') {
+    form.dataset.referenceManual = '1';
+    return;
+  }
+  if (input.name === 'due_date' && form.dataset.referenceManual !== '1') {
+    const month = String(input.value || '').slice(0, 7);
+    if (month) reference.value = month;
+  }
+}
+
+root?.addEventListener('input', syncInvoiceReference);
+root?.addEventListener('change', syncInvoiceReference);
 
 // Filtra localmente as tabelas de Clientes e Mensalidades. O listener fica no
 // controlador externo para respeitar a CSP do painel e não gera consultas ao Neon.

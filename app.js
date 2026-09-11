@@ -1,4 +1,4 @@
-const BUILD = '20260910-client-custom-price1';
+const BUILD = '20260911-table-search1';
 const root = document.querySelector('#app');
 let lastValidationToastAt = 0;
 
@@ -57,6 +57,24 @@ root?.addEventListener('click', (event) => {
     if (button.isConnected && button.textContent === 'Processando…') button.textContent = original;
   }, 12000);
 }, true);
+
+// Filtra localmente as tabelas de Clientes e Mensalidades. O listener fica no
+// controlador externo para respeitar a CSP do painel e não gera consultas ao Neon.
+root?.addEventListener('input', (event) => {
+  const input = event.target instanceof HTMLInputElement ? event.target : null;
+  if (!input || input.type !== 'search') return;
+  const scope = input.closest('[data-table-filter-scope]');
+  if (!scope) return;
+  const normalize = (value) => String(value || '')
+    .toLocaleLowerCase('pt-BR')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  const query = normalize(input.value).trim();
+  scope.querySelectorAll('.table-wrap tbody tr').forEach((row) => {
+    const searchable = normalize(`${row.dataset.search || ''} ${row.textContent || ''}`);
+    row.hidden = Boolean(query) && !searchable.includes(query);
+  });
+});
 
 // Este observador roda antes do controlador e comprova que a validação nativa liberou
 // a submissão. Não cancela nem altera o evento.

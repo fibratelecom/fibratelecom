@@ -1,4 +1,4 @@
-const BUILD = '20260911-invoice-reference1';
+const BUILD = '20260911-invoice-reference2';
 const root = document.querySelector('#app');
 let lastValidationToastAt = 0;
 
@@ -68,7 +68,8 @@ function syncInvoiceReference(event) {
     form.dataset.referenceManual = '1';
     return;
   }
-  if (input.name === 'due_date' && form.dataset.referenceManual !== '1') {
+  const existingId = String(form.elements?.id?.value || '').trim();
+  if (!existingId && input.name === 'due_date' && form.dataset.referenceManual !== '1') {
     const month = String(input.value || '').slice(0, 7);
     if (month) reference.value = month;
   }

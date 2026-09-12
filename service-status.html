@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta http-equiv="Cache-Control" content="no-store,no-cache,must-revalidate">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://discordstatus.com https://status.epicgames.com https://status.roblox.com https://status.mercadopago.com https://www.cloudflarestatus.com https://www.githubstatus.com https://status.pagbank.com.br https://status.cloud.google.com https://status.playstation.com; frame-ancestors 'none'; base-uri 'self'">
+  <title>Status de Serviços · Provedor Plus</title>
+  <link rel="stylesheet" href="/styles.css?v=20260912-service-status1">
+  <link rel="stylesheet" href="/src/panel.css?v=20260912-service-status1">
+  <link rel="stylesheet" href="/service-status.css?v=20260912-service-status1">
+</head>
+<body class="service-status-page">
+  <header class="status-header">
+    <div class="status-brand"><span class="brand-symbol">F+</span><div><strong>Provedor Plus</strong><small>Status de Serviços</small></div></div>
+    <div class="status-header-actions"><a class="btn secondary" href="/">← Voltar ao painel</a><button class="btn primary" id="refresh-status" type="button">Atualizar agora</button></div>
+  </header>
+
+  <main class="status-workspace">
+    <section class="page-head">
+      <div><span class="section-label">MONITORAMENTO EXTERNO</span><h1>Status de Serviços</h1><p>Consulte falhas e instabilidades informadas pelas fontes oficiais. A atualização automática ocorre a cada 1 minuto.</p></div>
+    </section>
+
+    <section class="status-note">
+      <strong>Importante:</strong> WhatsApp, Instagram, Facebook, Riot e Xbox não oferecem uma API pública aberta equivalente ao Downdetector. Eles permanecem listados com acesso direto à fonte oficial, sem inventar um estado automático.
+    </section>
+
+    <section class="status-summary" id="status-summary">
+      <article><span>Monitorados automaticamente</span><strong>—</strong></article>
+      <article><span>Com atenção agora</span><strong>—</strong></article>
+      <article><span>Fontes com consulta limitada</span><strong>—</strong></article>
+    </section>
+
+    <div class="status-toolbar"><span id="checked-at">Preparando consulta…</span><span class="auto-refresh"><i></i> Atualização automática ativa</span></div>
+    <section class="services-grid" id="services-grid" aria-live="polite"></section>
+  </main>
+
+  <script type="module" src="/service-status.js?v=20260912-service-status1"></script>
+</body>
+</html>

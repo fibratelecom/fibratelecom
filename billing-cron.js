@@ -78,9 +78,15 @@ function daysBetween(fromKey,toKey){const a=dateFromKey(fromKey),b=dateFromKey(t
 function activeClient(client){return !/cancelado|inativo|suspenso/i.test(text(client?.status))}
 function planFor(client,state){return (Array.isArray(state?.plans)?state.plans:[]).find(plan=>Number(plan?.id)===Number(client?.plan_id))||null}
 function invoiceActive(row){return !['cancelado','canceled'].includes(normalize(row?.status))}
-function invoiceForDue(state,clientId,dueDate){return (Array.isArray(state?.invoices)?state.invoices:[]).find(row=>Number(row?.client_id)===Number(clientId)&&text(row?.due_date).slice(0,10)===dueDate&&invoiceActive(row))||null}
-function hasAnyInvoice(state,clientId){return (Array.isArray(state?.invoices)?state.invoices:[]).some(row=>Number(row?.client_id)===Number(clientId)&&invoiceActive(row))}
-function firstInvoiceExists(state,clientId){return (Array.isArray(state?.invoices)?state.invoices:[]).some(row=>Number(row?.client_id)===Number(clientId)&&(row?.billing_origin==='first_prorated'||row?.prorated_first_invoice===true)&&invoiceActive(row))}
+function serviceContractId(client){return text(client?._contract_id||client?.contract_id)}
+function invoiceBelongsToService(row,clientId,contractId=''){
+  if(Number(row?.client_id)!==Number(clientId))return false;
+  const rowContract=text(row?.contract_id),expected=text(contractId);
+  return expected?rowContract===expected:!rowContract;
+}
+function invoiceForDue(state,clientId,dueDate,contractId=''){return (Array.isArray(state?.invoices)?state.invoices:[]).find(row=>invoiceBelongsToService(row,clientId,contractId)&&text(row?.due_date).slice(0,10)===dueDate&&invoiceActive(row))||null}
+function hasAnyInvoice(state,clientId,contractId=''){return (Array.isArray(state?.invoices)?state.invoices:[]).some(row=>invoiceBelongsToService(row,clientId,contractId)&&invoiceActive(row))}
+function firstInvoiceExists(state,clientId,contractId=''){return (Array.isArray(state?.invoices)?state.invoices:[]).some(row=>invoiceBelongsToService(row,clientId,contractId)&&(row?.billing_origin==='first_prorated'||row?.prorated_first_invoice===true)&&invoiceActive(row))}
 function nextInvoiceId(state){const invoices=Array.isArray(state?.invoices)?state.invoices:[],max=Math.max(Number(state?.seq?.invoices)||0,...invoices.map(row=>Number(row?.id)||0)),id=max+1;state.seq={...(state.seq||{}),invoices:id};return id}
 function deferredNegotiationInstallment(row){return row?.bank_issue_deferred===true&&Number(row?.installment_number)>1&&Boolean(text(row?.negotiation_id))}
 
@@ -90,6 +96,7 @@ function mergedClient(remote,state){
   return {
     ...local,...remote,
     id:Number(remote.id),
+    _contract_id:'',contract_id:'',contract_label:'Principal',
     document:text(remote.document||local.document),
     contract_number:text(remote.contract_number||local.contract_number),
     due_day:Number(remote.due_day||local.due_day)||10,
@@ -100,6 +107,7 @@ function mergedClient(remote,state){
     address:text(remote.address||local.address||local.street),
     address_number:text(local.address_number),
     neighborhood:text(local.neighborhood),
+    complement:text(local.complement),
     cep:digits(local.cep||remote.zip_code||local.zip_code),
     zip_code:digits(remote.zip_code||local.zip_code||local.cep),
     city:text(remote.city||local.city),
@@ -122,6 +130,36 @@ function mergedClient(remote,state){
     plan_price_cents:Math.max(0,Math.round(num(plan?.price_cents)))
   };
 }
+function mergedContractClient(contract,owner,state){
+  const plan=planFor(contract,state);
+  return {
+    ...owner,...contract,
+    id:Number(owner.id),
+    _contract_id:text(contract.id),contract_id:text(contract.id),contract_label:text(contract.label)||'Ponto adicional',
+    name:text(owner.name),document:text(owner.document),email:text(owner.email),phone:text(owner.phone),whatsapp:text(owner.whatsapp||owner.phone),
+    contract_number:text(contract.contract_number),
+    due_day:Number(contract.due_day)||10,
+    status:text(contract.status)||'Ativo',
+    street:text(contract.address||contract.street||owner.address||owner.street),
+    address:text(contract.address||contract.street||owner.address||owner.street),
+    address_number:text(contract.address_number||owner.address_number),
+    neighborhood:text(contract.neighborhood||owner.neighborhood),
+    complement:text(contract.complement||owner.complement),
+    cep:digits(contract.cep||contract.zip_code||owner.cep||owner.zip_code),
+    zip_code:digits(contract.zip_code||contract.cep||owner.zip_code||owner.cep),
+    city:text(contract.city||owner.city),
+    state:text(contract.state||owner.state).toUpperCase(),
+    installation_date:text(contract.installation_date||contract.activation_date||contract.created_at),
+    created_at:text(contract.created_at),
+    billing_bank_provider:text(contract.billing_bank_provider||owner.billing_bank_provider),
+    billing_mode:text(contract.billing_mode||owner.billing_mode)||'boleto',
+    custom_monthly_cents:Math.max(0,Math.round(num(contract.custom_monthly_cents))),
+    plan_id:Number(contract.plan_id)||null,
+    plan_name:text(plan?.name||contract.plan||contract.plan_name)||'Plano Fibra+',
+    plan_price_cents:Math.max(0,Math.round(num(plan?.price_cents)))
+  };
+}
+function billingSubject(client){const contract=text(client?.contract_number);return contract?`${text(client?.name)||client?.id} · ${contract}`:(text(client?.name)||String(client?.id||'Cliente'))}
 
 function monthlyCents(client,plan){
   const custom=Math.max(0,Math.round(num(client?.custom_monthly_cents)));
@@ -160,8 +198,8 @@ async function enrichPanelBankRequest(request,env){
 }
 
 function pixAutoRecord(client){return {clientId:Number(client.id),clientName:text(client.name),contractNumber:text(client.contract_number),idRec:text(client.pix_auto_id_rec),status:text(client.pix_auto_status),startDate:text(client.pix_auto_start_date),endDate:text(client.pix_auto_end_date),amountCents:Math.max(0,Math.round(num(client.pix_auto_amount_cents))),pixCopiaECola:text(client.pix_auto_qr),createdAt:text(client.pix_auto_created_at),updatedAt:text(client.pix_auto_updated_at)}}
-function requireEfiPix(client,vault,mode){const efi=vault?.efi||{};if(!efi.enabled||!text(efi.clientId)||!text(efi.clientSecret))throw new Error(`${client.name||client.id}: Efí não está pronta para cobrança Pix.`);if(!text(efi.certificateBase64))throw new Error(`${client.name||client.id}: certificado P12/PFX da Efí não está configurado.`);if(mode==='pix_due'&&!text(efi.pixKey))throw new Error(`${client.name||client.id}: chave Pix da Efí não está configurada.`);if(mode==='pix_auto'){if(text(client.pix_auto_status).toUpperCase()!=='APROVADA'||!text(client.pix_auto_id_rec))throw new Error(`${client.name||client.id}: Pix Automático ainda não está APROVADO na Efí.`);if(!digits(efi.pixAutoReceiverAgency)||!digits(efi.pixAutoReceiverAccount))throw new Error(`${client.name||client.id}: informe Agência e Conta recebedora do Pix Automático na Efí.`)}}
-function requireMpPix(client,vault){const mp=vault?.mercadoPago||{};if(!mp.enabled||!text(mp.accessToken))throw new Error(`${client.name||client.id}: Mercado Pago não está pronto para cobrança Pix.`)}
+function requireEfiPix(client,vault,mode){const efi=vault?.efi||{};if(!efi.enabled||!text(efi.clientId)||!text(efi.clientSecret))throw new Error(`${billingSubject(client)}: Efí não está pronta para cobrança Pix.`);if(!text(efi.certificateBase64))throw new Error(`${billingSubject(client)}: certificado P12/PFX da Efí não está configurado.`);if(mode==='pix_due'&&!text(efi.pixKey))throw new Error(`${billingSubject(client)}: chave Pix da Efí não está configurada.`);if(mode==='pix_auto'){if(text(client.pix_auto_status).toUpperCase()!=='APROVADA'||!text(client.pix_auto_id_rec))throw new Error(`${billingSubject(client)}: Pix Automático ainda não está APROVADO na Efí.`);if(!digits(efi.pixAutoReceiverAgency)||!digits(efi.pixAutoReceiverAccount))throw new Error(`${billingSubject(client)}: informe Agência e Conta recebedora do Pix Automático na Efí.`)}}
+function requireMpPix(client,vault){const mp=vault?.mercadoPago||{};if(!mp.enabled||!text(mp.accessToken))throw new Error(`${billingSubject(client)}: Mercado Pago não está pronto para cobrança Pix.`)}
 
 async function bankAction(env,payload){
   const response=await handleBankProxy(new Request('https://painel.fibramais.workers.dev/api/bank-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),env);
@@ -221,14 +259,15 @@ function firstProrated(client,plan){
 }
 
 function makeInvoice(state,client,dueDate,amountCents,{first=false,serviceDays=0,cycleDays=0,baseAmount=0}={}){
-  const now=new Date().toISOString(),id=nextInvoiceId(state),reference=dueDate.slice(0,7);
+  const now=new Date().toISOString(),id=nextInvoiceId(state),reference=dueDate.slice(0,7),contractId=serviceContractId(client),contractNumber=text(client.contract_number),contractSuffix=contractNumber?` · Contrato ${contractNumber}`:'';
   return {
     id,client_id:Number(client.id),due_date:dueDate,amount_cents:Math.max(1,Math.round(amountCents)),status:'Pendente',document_type:'Boleto',
     billing_type:first?'Primeira mensalidade proporcional':'Mensalidade',
-    description:first?`Primeira mensalidade proporcional · ${serviceDays} dia${serviceDays===1?'':'s'} de serviço`:`Mensalidade ${reference}`,
+    description:first?`Primeira mensalidade proporcional · ${serviceDays} dia${serviceDays===1?'':'s'} de serviço${contractSuffix}`:`Mensalidade ${reference}${contractSuffix}`,
     billing_origin:first?'first_prorated':'monthly_auto',auto_generated:true,prorated_first_invoice:first===true,
     competency:reference,reference,base_amount_cents:Math.max(1,Math.round(baseAmount||amountCents)),cashback_eligible:!first,cashback_reason:first?'primeira_cobranca_proporcional':'mensalidade_normal',
-    payment_method:'',paid_by:'',paid_at:null,created_at:now,
+    payment_method:'',paid_by:'',paid_at:null,created_at:now,contract_number:contractNumber,
+    ...(contractId?{contract_id:contractId,contract_label:text(client.contract_label)||'Ponto adicional'}:{}),
     ...(first?{service_days:serviceDays,cycle_days:cycleDays}:{})
   };
 }
@@ -260,21 +299,22 @@ async function runBillingCron(env,{force=false}={}){
   const todayParts=brazilParts(),today=keyFromParts(todayParts.year,todayParts.month,todayParts.day),daysBefore=Math.max(1,Math.min(30,Math.floor(num(state.settings.billing_auto_days_before)||7)));
   if(!force&&text(state.settings.billing_cloudflare_last_run)===today)return {alreadyRan:true,date:today,generated:0,issued:0,skipped:0,failed:0,errors:[]};
   const vault=await readBankSettings(env,sql),rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code FROM pp_clients ORDER BY id ASC`;
+  const primaryClients=(Array.isArray(rows)?rows:[]).map(remote=>mergedClient(remote,state)),owners=new Map(primaryClients.map(item=>[Number(item.id),item])),extraContracts=Array.isArray(state?.client_contracts)?state.client_contracts:[],contractClients=extraContracts.map(item=>{const owner=owners.get(Number(item?.client_id));return owner?mergedContractClient(item,owner,state):null}).filter(Boolean),billable=[...primaryClients,...contractClients];
   let generated=0,issued=0,skipped=0,failed=0;const errors=[];
-  for(const remote of Array.isArray(rows)?rows:[]){
-    const client=mergedClient(remote,state);if(!activeClient(client)){skipped++;continue}
-    const plan=planFor(client,state);if(!plan||num(plan.price_cents)<=0){failed++;errors.push(`${client.name||client.id}: cliente sem plano com valor.`);continue}
+  for(const client of billable){
+    if(!activeClient(client)){skipped++;continue}
+    const plan=planFor(client,state);if(!plan||num(plan.price_cents)<=0){failed++;errors.push(`${billingSubject(client)}: contrato sem plano com valor.`);continue}
     try{
-      let dueDate='',existing=null,invoice=null;
-      const brandNew=!hasAnyInvoice(state,client.id)&&!firstInvoiceExists(state,client.id)&&firstProratedEligible(client,today);
+      let dueDate='',existing=null,invoice=null;const contractId=serviceContractId(client);
+      const brandNew=!hasAnyInvoice(state,client.id,contractId)&&!firstInvoiceExists(state,client.id,contractId)&&firstProratedEligible(client,today);
       if(brandNew){
         const calc=firstProrated(client,plan);if(!calc){skipped++;continue}
         const diff=daysBetween(today,calc.due);if(diff<1||diff>30){skipped++;continue}
-        dueDate=calc.due;existing=invoiceForDue(state,client.id,dueDate);
+        dueDate=calc.due;existing=invoiceForDue(state,client.id,dueDate,contractId);
         invoice=existing||makeInvoice(state,client,dueDate,calc.amount,{first:true,serviceDays:calc.serviceDays,cycleDays:calc.cycleDays,baseAmount:calc.base});
       }else{
         dueDate=currentDueCandidate(client,today,daysBefore);if(!dueDate){skipped++;continue}
-        existing=invoiceForDue(state,client.id,dueDate);
+        existing=invoiceForDue(state,client.id,dueDate,contractId);
         const amount=monthlyCents(client,plan);
         invoice=existing||makeInvoice(state,client,dueDate,Math.max(1,amount),{baseAmount:amount});
       }
@@ -284,7 +324,7 @@ async function runBillingCron(env,{force=false}={}){
       if(existing&&deferredNegotiationInstallment(invoice))prepareCombinedMonthly(invoice,client,plan,dueDate);
       const remoteIssued=await issueAndSave(env,sql,state,invoice,client,vault,Boolean(existing));
       if(remoteIssued)issued++;if(!existing)generated++;
-    }catch(error){failed++;errors.push(`${client.name||client.id}: ${error instanceof Error?error.message:String(error)}`)}
+    }catch(error){failed++;errors.push(`${billingSubject(client)}: ${error instanceof Error?error.message:String(error)}`)}
   }
   state.settings.billing_auto_enabled=enabled;
   state.settings.billing_auto_days_before=daysBefore;

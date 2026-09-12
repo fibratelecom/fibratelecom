@@ -231,9 +231,7 @@ function updateSupportNegotiationPreview(form){
   if(fixedInput)fixedInput.disabled=discountType!=='fixed';
   const discountPercent=Math.max(0,Math.min(100,Number(percentInput?.value)||0));let discountCents=discountType==='fixed'?moneyToCents(fixedInput?.value):Math.round(originalCents*discountPercent/100);
   discountCents=originalCents>0?Math.min(Math.max(0,originalCents-1),discountCents):0;
-  const netCents=Math.max(0,originalCents-discountCents),installments=Math.max(1,Math.min(12,Math.floor(Number(form.elements?.installments?.value)||1))),periods=Math.max(0,installments-1),interestPercent=installments>1?Math.max(0,Math.min(20,Number(interestInput?.value)||0):0;
-  if(percentInput)percentInput.disabled=discountType!=='percent';
-  if(fixedInput)fixedInput.disabled=discountType!=='fixed';
+  const netCents=Math.max(0,originalCents-discountCents),installments=Math.max(1,Math.min(12,Math.floor(Number(form.elements?.installments?.value)||1))),periods=Math.max(0,installments-1),interestPercent=installments>1?Math.max(0,Math.min(20,Number(interestInput?.value)||0)):0;
   if(entryInput)entryInput.disabled=installments===1;
   if(interestInput)interestInput.disabled=installments===1;
   let entryCents=installments===1?netCents:moneyToCents(entryInput?.value),financedCents=installments>1?Math.max(0,netCents-entryCents):0,financedWithInterest=financedCents;

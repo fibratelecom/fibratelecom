@@ -1,6 +1,7 @@
 import baseWorker from './push-worker.js';
 import {handleStoriesRequest,isStoriesPath} from './stories-worker.js';
 import {handleStoryReactionsRequest,isStoryReactionsPath} from './story-reactions-worker.js';
+import {handleServiceStatus} from './service-status-worker.js';
 import {neon} from '@neondatabase/serverless';
 
 const STATE_KEY='web_state_v1017';
@@ -131,6 +132,7 @@ async function fetchWithFinancialConsistency(request,env,ctx){
 export default {
   fetch(request,env,ctx){
     const path=new URL(request.url).pathname;
+    if(path==='/api/service-status')return handleServiceStatus(request,env,ctx,baseWorker);
     if(isStoryReactionsPath(path))return handleStoryReactionsRequest(request,env);
     if(isStoriesPath(path))return handleStoriesRequest(request,env);
     return fetchWithFinancialConsistency(request,env,ctx);

@@ -2,6 +2,7 @@ node_modules/
 .github/
 AGENTS.md
 notification-center-entry-worker.js
+service-status-worker.js
 operations-entry-worker.js
 stories-entry-worker.js
 push-worker.js

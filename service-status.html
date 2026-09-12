@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light">
   <meta http-equiv="Cache-Control" content="no-store,no-cache,must-revalidate">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://discordstatus.com https://status.epicgames.com https://status.roblox.com https://status.mercadopago.com https://www.cloudflarestatus.com https://www.githubstatus.com https://status.pagbank.com.br https://status.cloud.google.com https://status.playstation.com https://metastatus.com https://status.riotgames.com https://xbguide.com https://api.allorigins.win https://allorigins.vercel.app; frame-ancestors 'none'; base-uri 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'">
   <title>Status de Serviços · Provedor Plus</title>
-  <link rel="stylesheet" href="/styles.css?v=20260912-service-status1">
-  <link rel="stylesheet" href="/src/panel.css?v=20260912-service-status1">
-  <link rel="stylesheet" href="/service-status.css?v=20260912-service-status1">
+  <link rel="stylesheet" href="/styles.css?v=20260912-service-status3">
+  <link rel="stylesheet" href="/src/panel.css?v=20260912-service-status3">
+  <link rel="stylesheet" href="/service-status.css?v=20260912-service-status3">
 </head>
 <body class="service-status-page">
   <header class="status-header">
@@ -19,12 +19,13 @@
 
   <main class="status-workspace">
     <section class="page-head">
-      <div><span class="section-label">MONITORAMENTO EXTERNO</span><h1>Status de Serviços</h1><p>Consulte falhas e instabilidades informadas por fontes públicas de status. A atualização automática ocorre a cada 1 minuto.</p></div>
+      <div><span class="section-label">MONITORAMENTO EXTERNO</span><h1>Status de Serviços</h1><p>Falhas, instabilidades e histórico coletados pelo Provedor Plus. A atualização automática ocorre a cada 1 minuto.</p></div>
     </section>
 
     <section class="status-note">
-      <strong>Consulta automática:</strong> quando uma fonte oficial bloqueia leitura direta pelo navegador, o Provedor Plus usa um proxy público somente para ler a página de status. Nenhuma senha, sessão ou dado de cliente é enviado ao proxy.
+      <strong>Como ler o gráfico:</strong> cada ponto representa uma coleta real. Quanto mais baixo o ponto, maior a gravidade: normal → instabilidade → manutenção → fora do ar. O histórico começa a ser formado a partir desta versão e mantém as últimas 24 horas.
     </section>
+    <section class="status-legend" aria-label="Legenda dos gráficos"><span class="ok"><i></i>Normal</span><span class="warn"><i></i>Instabilidade</span><span class="maint"><i></i>Manutenção</span><span class="down"><i></i>Fora do ar</span><span><i></i>Sem resposta</span></section>
 
     <section class="status-summary" id="status-summary">
       <article><span>Monitorados automaticamente</span><strong>—</strong></article>
@@ -36,6 +37,6 @@
     <section class="services-grid" id="services-grid" aria-live="polite"></section>
   </main>
 
-  <script type="module" src="/service-status.js?v=20260912-service-status2"></script>
+  <script type="module" src="/service-status.js?v=20260912-service-status3"></script>
 </body>
 </html>

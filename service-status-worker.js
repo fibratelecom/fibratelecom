@@ -167,9 +167,7 @@ async function ensureServiceStatusTable(sql){
 async function saveResults(sql,results){
   if(!results.length)return;
   const bucket=new Date(Math.floor(Date.now()/HISTORY_BUCKET_MS)*HISTORY_BUCKET_MS).toISOString();
-  const valid=results.filter(result=>result.status!=='error');
-  if(!valid.length)return;
-  const payload=JSON.stringify(valid.map(result=>({
+  const payload=JSON.stringify(results.map(result=>({
     service_id:result.id,
     status:result.status,
     detail:safeText(result.detail).slice(0,800),
@@ -202,17 +200,22 @@ async function readStatusPayload(sql){
   await ensureServiceStatusTable(sql);
   const rows=await sql`SELECT service_id,status,detail,components,response_ms,checked_at
     FROM pp_service_status_history
-    WHERE checked_at>=now()-interval '24 hours' AND status<>'error'
+    WHERE checked_at>=now()-interval '24 hours'
     ORDER BY checked_at ASC`;
-  const current=new Map();
-  for(const row of rows||[])current.set(safeText(row.service_id),row);
+  const latestAny=new Map(),latestValid=new Map();
+  for(const row of rows||[]){
+    const id=safeText(row.service_id);
+    latestAny.set(id,row);
+    if(safeText(row.status)!=='error')latestValid.set(id,row);
+  }
   return {
     sources:SOURCES.map(statusPublicSource),
     current:SOURCES.map(source=>{
-      const row=current.get(source.id);
-      return row?{id:source.id,status:safeText(row.status)||'error',detail:safeText(row.detail),components:Array.isArray(row.components)?row.components:[],responseMs:Number(row.response_ms)||0,checkedAt:row.checked_at}:null;
-    }).filter(Boolean),
-    history:(rows||[]).map(row=>({id:safeText(row.service_id),status:safeText(row.status),responseMs:Number(row.response_ms)||0,checkedAt:row.checked_at})),
+      const row=latestValid.get(source.id)||latestAny.get(source.id);
+      if(!row)return {id:source.id,status:'error',detail:'Ainda não foi possível concluir a primeira coleta deste serviço.',components:[],responseMs:0,checkedAt:null};
+      return {id:source.id,status:safeText(row.status)||'error',detail:safeText(row.detail),components:Array.isArray(row.components)?row.components:[],responseMs:Number(row.response_ms)||0,checkedAt:row.checked_at};
+    }),
+    history:(rows||[]).filter(row=>safeText(row.status)!=='error').map(row=>({id:safeText(row.service_id),status:safeText(row.status),responseMs:Number(row.response_ms)||0,checkedAt:row.checked_at})),
   };
 }
 

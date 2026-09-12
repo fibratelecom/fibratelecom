@@ -138,7 +138,7 @@ function mergedContractClient(contract,owner,state){
     _contract_id:text(contract.id),contract_id:text(contract.id),contract_label:text(contract.label)||'Ponto adicional',
     name:text(owner.name),document:text(owner.document),email:text(owner.email),phone:text(owner.phone),whatsapp:text(owner.whatsapp||owner.phone),
     contract_number:text(contract.contract_number),
-    due_day:Number(contract.due_day)||10,
+    due_day:text(contract.due_day)==='0'?0:(Number(contract.due_day)||10),
     status:text(contract.status)||'Ativo',
     street:text(contract.address||contract.street||owner.address||owner.street),
     address:text(contract.address||contract.street||owner.address||owner.street),
@@ -303,6 +303,7 @@ async function runBillingCron(env,{force=false}={}){
   let generated=0,issued=0,skipped=0,failed=0;const errors=[];
   for(const client of billable){
     if(!activeClient(client)){skipped++;continue}
+    if(serviceContractId(client)&&Number(client.due_day)===0){skipped++;continue}
     const plan=planFor(client,state);if(!plan||num(plan.price_cents)<=0){failed++;errors.push(`${billingSubject(client)}: contrato sem plano com valor.`);continue}
     try{
       let dueDate='',existing=null,invoice=null;const contractId=serviceContractId(client);

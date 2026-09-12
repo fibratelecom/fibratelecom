@@ -1,5 +1,7 @@
 import baseWorker from './trust-release-worker.js';
 import {neon} from '@neondatabase/serverless';
+import {resolveRouterForService} from './worker-native-api.js';
+import {handleMikrotikProxy} from './worker-mikrotik-native.js';
 
 const STATE_KEY='web_state_v1017';
 const DUE_PATH='/api/customer-due-date';
@@ -93,6 +95,52 @@ async function augmentPortalPlanContext(response,env){
 }
 
 async function portalClient(sql,id){const rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code FROM pp_clients WHERE id=${Number(id)} LIMIT 1`;return rows?.[0]||null}
+
+function contractPlan(state,contract){const plan=planById(state,contract?.plan_id);return {id:Number(contract?.plan_id)||Number(plan?.id)||null,name:text(plan?.name||contract?.plan)||'Sem plano',speed:text(plan?.speed||plan?.bandwidth),priceCents:Math.max(0,Math.round(Number(contract?.custom_monthly_cents||plan?.price_cents)||0))}}
+function contractAddress(contract,client){return [text(contract?.address||client?.address),text(contract?.address_number),text(contract?.neighborhood),text(contract?.city||client?.city),text(contract?.state||client?.state)].filter(Boolean).join(' - ')}
+function portalContracts(client,state){
+  const primaryPlan=contractPlan(state,client),primary={id:'primary',primary:true,label:'Contrato principal',contractNumber:text(client?.contract_number),planId:primaryPlan.id,plan:primaryPlan.name,dueDay:Number(client?.due_day)||10,status:text(client?.status)||'Ativo',address:[client?.address,client?.city,client?.state].map(text).filter(Boolean).join(' - ')};
+  const extras=(Array.isArray(state?.client_contracts)?state.client_contracts:[]).filter(item=>Number(item?.client_id)===Number(client?.id)).map(item=>{const plan=contractPlan(state,item),rawDue=text(item?.due_day);return {id:text(item?.id),primary:false,label:text(item?.label)||`Ponto ${text(item?.contract_number)||text(item?.id)}`,contractNumber:text(item?.contract_number),planId:plan.id,plan:plan.name,dueDay:rawDue===''?null:Number(item?.due_day),status:text(item?.status)||'Ativo',address:contractAddress(item,client),connectionType:text(item?.connection_type),pppoeUsername:text(item?.pppoe_username),routerId:Number(item?.router_id)||null,ip:text(item?.ip)}}).filter(item=>item.id);
+  return [primary,...extras];
+}
+function rawContractFor(client,state,contractId){if(!contractId||contractId==='primary')return null;return (Array.isArray(state?.client_contracts)?state.client_contracts:[]).find(item=>Number(item?.client_id)===Number(client?.id)&&text(item?.id)===text(contractId))||null}
+function selectedContractRows(state,client,contract){
+  const rows=(Array.isArray(state?.invoices)?state.invoices:[]).filter(row=>Number(row?.client_id)===Number(client?.id));
+  if(contract.primary)return rows.filter(row=>!text(row?.contract_id)&&(!text(row?.contract_number)||text(row?.contract_number)===text(client?.contract_number)));
+  return rows.filter(row=>text(row?.contract_id)===text(contract.id)||(!text(row?.contract_id)&&text(row?.contract_number)&&text(row?.contract_number)===text(contract.contractNumber)));
+}
+function portalCurrentInvoice(invoices=[]){const inactive=new Set(['pago','paid','baixado','cancelado','canceled','renegociado','renegotiated','substituido','substituida']),pending=invoices.filter(row=>!inactive.has(normalize(row?.status))).sort((a,b)=>text(a?.dueDateRaw).localeCompare(text(b?.dueDateRaw)));return pending[0]||invoices[0]||null}
+function contractDateTime(value){if(!value)return '';const date=new Date(value);if(Number.isNaN(date.getTime()))return '';return new Intl.DateTimeFormat('pt-BR',{dateStyle:'short',timeStyle:'short',timeZone:'America/Sao_Paulo'}).format(date)}
+function storedContractConnection(contract,base={}){const connectionType=normalize(contract?.connection_type),status=text(contract?.mikrotik_status||contract?.status),online=/online|conectado|ativo/.test(normalize(status))&&!/offline|desconectado|bloqueado|suspenso|cancelado/.test(normalize(status)),pppoe=connectionType==='pppoe',checkedAt=text(contract?.mikrotik_last_sync);return {...base,status:status||'Aguardando dados',pppoeStatus:pppoe?(online?'Conectado':'Aguardando confirmação'):'Não se aplica',pppoeConnected:pppoe?online:null,online:pppoe?online:null,ip:text(contract?.ip)||'Aguardando dados',lastConnection:contractDateTime(checkedAt)||'Aguardando dados',lastConnectionIso:checkedAt,lastConnectionLabel:contractDateTime(checkedAt),checkedAt,uptime:'',downloadBps:null,uploadBps:null,liveRatesAvailable:false,latencyMs:null,packetLoss:null,quality:online?'Boa':'Aguardando dados',qualityAvailable:false,diagnosticStatus:'idle',diagnosticMessage:'Pronto para verificar esta conexão.',checking:false,isChecking:false,source:'stored-contract',connectionError:''}}
+async function liveContractConnection(env,contract,client,base={}){
+  const fallback=storedContractConnection(contract,base),connectionType=normalize(contract?.connection_type);
+  if(connectionType!=='pppoe'||!Number(contract?.router_id)||!text(contract?.pppoe_username))return fallback;
+  try{
+    const router=await resolveRouterForService(env,contract.router_id),request=new Request('https://painel.fibramais.workers.dev/api/mikrotik-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'client.status',router,data:{...contract,name:text(client?.name),document:text(client?.document)}})}),response=await handleMikrotikProxy(request);let body={};try{body=await response.json()}catch{}if(!response.ok||!body?.ok)throw new Error(body?.error||`Falha ao consultar o MikroTik (HTTP ${response.status}).`);const live=body.data||{},checkedAt=text(live.checkedAt)||new Date().toISOString(),latency=live.qualityAvailable&&Number.isFinite(Number(live.latencyMs))?Math.max(0,Math.round(Number(live.latencyMs))):null,loss=live.packetLoss===null||live.packetLoss===undefined||!Number.isFinite(Number(live.packetLoss))?null:Math.max(0,Math.min(100,Math.round(Number(live.packetLoss))));return {...fallback,status:live.online?'Online':'Offline',pppoeStatus:live.online?'Conectado':'Desconectado',pppoeConnected:Boolean(live.online),online:Boolean(live.online),ip:text(live.ip)||text(contract?.ip)||'Aguardando dados',uptime:text(live.uptime),downloadBps:Number.isFinite(Number(live.downloadBps))?Math.max(0,Number(live.downloadBps)):null,uploadBps:Number.isFinite(Number(live.uploadBps))?Math.max(0,Number(live.uploadBps)):null,liveRatesAvailable:Boolean(live.liveRatesAvailable),latencyMs:latency,packetLoss:loss,quality:text(live.quality)||(live.online?'Boa':'Sem conexão'),qualityAvailable:Boolean(live.qualityAvailable),checkedAt,lastConnection:contractDateTime(checkedAt),lastConnectionIso:checkedAt,lastConnectionLabel:contractDateTime(checkedAt),diagnosticStatus:'complete',diagnosticMessage:'Diagnóstico concluído.',checking:false,isChecking:false,source:'mikrotik-contract-live',connectionError:''};
+  }catch(error){const message=error instanceof Error?error.message:String(error),checkedAt=new Date().toISOString();return {...fallback,status:'Indisponível',quality:'Indisponível',checkedAt,lastConnection:contractDateTime(text(contract?.mikrotik_last_sync)||checkedAt),lastConnectionIso:text(contract?.mikrotik_last_sync)||checkedAt,lastConnectionLabel:contractDateTime(text(contract?.mikrotik_last_sync)||checkedAt),diagnosticStatus:'error',diagnosticMessage:message,checking:false,isChecking:false,source:'mikrotik-contract-error',connectionError:message}}
+}
+function isConnectionAction(action){return ['connection-test','test-connection','connection-status','connection-diagnostic','diagnostic','diagnose','connection-check','check-connection','diagnostic-connection'].includes(action)||/(connection|diagnostic|diagnose|diagnost|conex[aã]o|teste.*conex)/i.test(action)}
+async function scopePortalToContract(portal,client,state,env,requestedContractId='primary',liveConnection=false){
+  if(!portal||typeof portal!=='object')return portal;
+  const contracts=portalContracts(client,state),requested=text(requestedContractId)||'primary',selected=contracts.find(item=>text(item.id)===requested)||contracts[0],base={...portal,contracts,selectedContractId:selected.id,contractSwitchAvailable:contracts.length>1};
+  if(contracts.length<=1)return base;
+  const rawRows=selectedContractRows(state,client,selected),allowedIds=new Set(rawRows.map(row=>String(row?.id))),mapped=(Array.isArray(portal.invoices)?portal.invoices:[]).filter(row=>allowedIds.has(String(row?.id))),raw=selected.primary?null:rawContractFor(client,state,selected.id),selectedPlan=selected.primary?contractPlan(state,client):contractPlan(state,raw||selected),selectedAddress=selected.primary?[client?.address,client?.city,client?.state].map(text).filter(Boolean).join(' - '):contractAddress(raw||{},client),invoices=mapped.map(row=>selected.primary?row:{...row,contract:selected.contractNumber,serviceName:selectedPlan.name,customerAddress:selectedAddress||row.customerAddress}),current=portalCurrentInvoice(invoices);
+  if(selected.primary)return {...base,invoice:current,invoices,client:{...(portal.client||{}),selectedContractId:'primary',contractLabel:selected.label,primaryContract:true}};
+  const connection=liveConnection?await liveContractConnection(env,raw,client,portal.connection||{}):storedContractConnection(raw,portal.connection||{}),diagnostic={ok:!text(connection?.connectionError),status:text(connection?.connectionError)?'error':connection?.diagnosticStatus==='complete'?'complete':'idle',message:text(connection?.connectionError)||text(connection?.diagnosticMessage)||'Pronto para verificar esta conexão.',checkedAt:text(connection?.checkedAt)};
+  return {...base,invoice:current,invoices,client:{...(portal.client||{}),contract:selected.contractNumber,plan:selectedPlan.name,status:selected.status,address:selectedAddress||portal?.client?.address,selectedContractId:selected.id,contractLabel:selected.label,primaryContract:false,dueDay:selected.dueDay},connection,diagnostic};
+}
+async function augmentPortalContractContext(response,env,requestBody={},action=''){
+  if(!response?.ok||!env.DATABASE_URL)return response;
+  let body={};try{body=await response.clone().json()}catch{return response}if(!body?.ok||!body?.data||typeof body.data!=='object')return response;
+  const topPortal=body.data?.client&&Array.isArray(body.data?.invoices)?body.data:null,nestedPortal=body.data?.portal?.client&&Array.isArray(body.data.portal?.invoices)?body.data.portal:null,portal=topPortal||nestedPortal;if(!portal)return response;
+  try{
+    let clientId=Number(portal?.client?.id)||0;if(!clientId&&requestBody?.data?.session)clientId=(await verifySession(requestBody.data.session,env)).clientId;if(!clientId)return response;
+    const sql=neon(env.DATABASE_URL),client=await portalClient(sql,clientId);if(!client)return response;const state=await loadState(sql),contractId=action==='login'?'primary':text(requestBody?.data?.contractId)||'primary',live=!contractId.startsWith('primary')&&(action==='refresh'||isConnectionAction(action)),scoped=await scopePortalToContract(portal,client,state,env,contractId,live);
+    if(topPortal)body.data=scoped;else body.data={...body.data,portal:scoped};
+    const headers=new Headers(response.headers);headers.delete('content-length');headers.delete('content-encoding');headers.delete('etag');return new Response(JSON.stringify(body),{status:response.status,statusText:response.statusText,headers});
+  }catch(error){console.error('Provedor Plus: não foi possível aplicar o contexto do contrato na Área do Cliente.',error);return response}
+}
+
 async function dueEligibility(sql,client,state,targetDay=null){
   const local=localClient(state,client.id),currentDay=Number(client?.due_day||local?.due_day)||10,priceCents=planPriceCents(client,state),last=await lastDueChange(sql,client.id),lastAt=last?.created_at?new Date(last.created_at):null,nextAvailableAt=lastAt&&!Number.isNaN(lastAt.getTime())?new Date(lastAt.getTime()+COOLDOWN_DAYS*DAY).toISOString():'',cooldownActive=Boolean(nextAvailableAt&&new Date(nextAvailableAt).getTime()>Date.now());
   const base={eligible:true,currentDay,allowedDays:ALLOWED_DUE_DAYS,planPriceCents:priceCents,planPrice:brMoney(priceCents),cooldownDays:COOLDOWN_DAYS,lastChangedAt:lastAt?.toISOString?.()||'',lastProtocol:text(last?.protocol),nextAvailableAt,hasOverdue:hasOverdue(state,client.id),message:'Escolha um novo dia de vencimento. O cálculo proporcional é feito somente pelo Provedor Plus.'};
@@ -157,7 +205,7 @@ async function handlePlanRequest(request,env,body={}){
   const cors=corsFor(request);if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405,cors);
   try{
     const origin=text(request.headers.get('origin'));if(!PORTAL_ORIGINS.has(origin))throw Object.assign(new Error('Origem não autorizada.'),{statusCode:403});if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Provedor Plus não configurada.'),{statusCode:503});
-    const data=body?.data||{},session=await verifySession(data.session,env),sql=neon(env.DATABASE_URL),client=await portalClient(sql,session.clientId);if(!client)throw Object.assign(new Error('Cliente não encontrado.'),{statusCode:404});const state=await loadState(sql),planId=Number(data.planId)||0,target=planById(state,planId);if(!target||target.active===false||target.portal_visible===false)throw Object.assign(new Error('Este plano não está disponível para solicitação no momento.'),{statusCode:409});
+    const data=body?.data||{};if(text(data.contractId)&&text(data.contractId)!=='primary')throw Object.assign(new Error('A mudança de plano está disponível somente no contrato principal.'),{statusCode:409});const session=await verifySession(data.session,env),sql=neon(env.DATABASE_URL),client=await portalClient(sql,session.clientId);if(!client)throw Object.assign(new Error('Cliente não encontrado.'),{statusCode:404});const state=await loadState(sql),planId=Number(data.planId)||0,target=planById(state,planId);if(!target||target.active===false||target.portal_visible===false)throw Object.assign(new Error('Este plano não está disponível para solicitação no momento.'),{statusCode:409});
     if(Number(client.plan_id)===planId||(!client.plan_id&&normalize(client.plan)===normalize(target.name)))throw Object.assign(new Error('Este já é o seu plano atual.'),{statusCode:409});
     await ensureProtocolTable(sql);
     const pendingRows=await sql`SELECT id,protocol,client_id,category,subject,source,status,details,created_at,closed_at FROM pp_protocols WHERE client_id=${Number(client.id)} AND category='Plano' AND subject='Solicitação de mudança de plano' AND status='Aguardando aprovação' ORDER BY created_at DESC LIMIT 10`,pending=(pendingRows||[]).map(safeProtocol),same=pending.find(item=>Number(item?.details?.planId)===planId);
@@ -175,7 +223,7 @@ function portalAuditDefinition(path,action){
   if(action==='payment-pix')return {category:'Financeiro',subject:'Pix solicitado'};
   if(action==='payment-card')return {category:'Financeiro',subject:'Pagamento com cartão'};
   if(action==='negotiate')return {category:'Financeiro',subject:'Negociação realizada'};
-  if(['connection-test','test-connection','connection-status','connection-diagnostic','diagnostic','diagnose','connection-check','check-connection','diagnostic-connection'].includes(action)||/(connection|diagnostic|diagnose|diagnost|conex[aã]o|teste.*conex)/i.test(action))return {category:'Conexão',subject:'Diagnóstico da conexão'};
+  if(isConnectionAction(action))return {category:'Conexão',subject:'Diagnóstico da conexão'};
   const passive=new Set(['login','refresh','payment-config','payment-prepare','payment-status','negotiation-options','plan-request']);
   if(passive.has(action))return null;
   return action?{category:'Área do Cliente',subject:`Ação: ${action}`} : null;
@@ -189,6 +237,7 @@ function safeAuditDetails(action,requestData,responseData,base={}){
   const installments=Number(requestData?.installments||responseData?.installments);if(Number.isFinite(installments)&&installments>0)out.installments=Math.round(installments);
   const latency=Number(responseData?.latencyMs);if(Number.isFinite(latency))out.latencyMs=Math.round(latency);
   const loss=Number(responseData?.packetLoss);if(Number.isFinite(loss))out.packetLoss=loss;
+  const contractId=text(requestData?.contractId);if(contractId)out.contractId=contractId;
   return out;
 }
 async function clientIdForAudit(body,responseData,env){const direct=Number(responseData?.client?.id)||0;if(direct)return direct;const token=body?.data?.session;if(token)try{return (await verifySession(token,env)).clientId}catch{}return 0}
@@ -197,7 +246,7 @@ async function recordAuditProtocol(body,action,definition,response,env){let resp
 async function auditedBaseFetch(request,env,ctx){
   let body={};try{body=await request.clone().json()}catch{}const action=text(body?.action),path=new URL(request.url).pathname;
   if(path===PORTAL_PATH&&action==='plan-request')return handlePlanRequest(request,env,body);
-  const definition=portalAuditDefinition(path,action),baseResponse=await baseWorker.fetch(request,env,ctx),response=path===PORTAL_PATH&&['login','refresh'].includes(action)?await augmentPortalPlanContext(baseResponse,env):baseResponse;if(!definition||!response.ok||!env.DATABASE_URL)return response;
+  const definition=portalAuditDefinition(path,action),baseResponse=await baseWorker.fetch(request,env,ctx);let response=path===PORTAL_PATH&&['login','refresh'].includes(action)?await augmentPortalPlanContext(baseResponse,env):baseResponse;if(path===PORTAL_PATH)response=await augmentPortalContractContext(response,env,body,action);if(!definition||!response.ok||!env.DATABASE_URL)return response;
   try{const protocol=await recordAuditProtocol(body,action,definition,response,env);return augmentResponseWithProtocol(response,protocol)}catch(error){console.error('Provedor Plus: ação da Área do Cliente concluída, mas o protocolo não pôde ser registrado.',error);return response}
 }
 

@@ -42,15 +42,25 @@ function renderPayload(data){
   checkedAt.textContent=`Última atualização: ${formatDateTime(data?.generatedAt||new Date())}`;
 }
 
+async function statusRequest(url){
+  const response=await fetch(url,{method:'GET',credentials:'same-origin',cache:'no-store'});
+  let body={};try{body=await response.json()}catch{}
+  if(response.status===401){location.replace('/');throw new Error('Sessão expirada.');}
+  if(!response.ok||body?.ok!==true)throw new Error(body?.error||`HTTP ${response.status}`);
+  return body.data||{};
+}
+
 async function loadStatus(force=false){
   if(refreshButton.disabled)return;
   refreshButton.disabled=true;refreshButton.textContent=force?'Atualizando…':'Consultando…';
   try{
-    const response=await fetch(`/api/service-status${force?'?refresh=1':''}`,{method:'GET',credentials:'same-origin',cache:'no-store'});
-    let body={};try{body=await response.json()}catch{}
-    if(response.status===401){location.replace('/');return}
-    if(!response.ok||body?.ok!==true)throw new Error(body?.error||`HTTP ${response.status}`);
-    renderPayload(body.data||{});
+    const initial=await statusRequest('/api/service-status');
+    renderPayload(initial);
+    const batchCount=Math.max(1,Math.floor(Number(initial?.batchCount)||1));
+    checkedAt.textContent=`Atualizando serviços em ${batchCount} etapas seguras…`;
+    await Promise.all(Array.from({length:batchCount},(_,batch)=>statusRequest(`/api/service-status?batch=${batch}`)));
+    const fresh=await statusRequest('/api/service-status');
+    renderPayload(fresh);
   }catch(error){
     checkedAt.textContent=`Falha ao atualizar: ${error instanceof Error?error.message:String(error)}`;
   }finally{refreshButton.disabled=false;refreshButton.textContent='Atualizar agora';}

@@ -4,6 +4,7 @@ const STATUS_PATH='/api/service-status';
 const HISTORY_WINDOW_HOURS=24;
 const HISTORY_BUCKET_MS=5*60*1000;
 const SOURCE_TIMEOUT_MS=8000;
+const SOURCE_BATCH_SIZE=10;
 let serviceStatusSchemaReady=false;
 
 const SOURCES=[
@@ -209,9 +210,9 @@ async function saveResults(sql,results){
   try{await sql`DELETE FROM pp_service_status_history WHERE checked_at<now()-interval '48 hours'`}catch{}
 }
 
-export async function pollServiceStatuses(env,sqlArg=null){
+export async function pollServiceStatuses(env,sqlArg=null,sources=SOURCES){
   if(!env?.DATABASE_URL)return [];
-  const sql=sqlArg||neon(env.DATABASE_URL),settled=await Promise.all(SOURCES.map(checkSource));
+  const sql=sqlArg||neon(env.DATABASE_URL),settled=await Promise.all(sources.map(checkSource));
   await saveResults(sql,settled);
   return settled;
 }
@@ -242,9 +243,12 @@ export async function handleServiceStatus(request,env,ctx,baseWorker){
     await requirePanelSession(request,env,ctx,baseWorker);
     if(!env?.DATABASE_URL)throw Object.assign(new Error('Conexão com o Provedor Plus não configurada.'),{statusCode:503});
     const sql=neon(env.DATABASE_URL),url=new URL(request.url);await ensureServiceStatusTable(sql);
-    const latest=await sql`SELECT MAX(checked_at) AS checked_at,COUNT(DISTINCT service_id)::int AS services FROM pp_service_status_history`,lastAt=latest?.[0]?.checked_at?new Date(latest[0].checked_at).getTime():0,needsRefresh=url.searchParams.get('refresh')==='1'||Number(latest?.[0]?.services)!==SOURCES.length||Date.now()-lastAt>90000;
-    if(needsRefresh)await pollServiceStatuses(env,sql);
+    const batchCount=Math.ceil(SOURCES.length/SOURCE_BATCH_SIZE),batchParam=url.searchParams.get('batch');
+    if(batchParam!==null){
+      const parsed=Math.floor(Number(batchParam)),batch=Number.isFinite(parsed)?Math.max(0,Math.min(batchCount-1,parsed)):0,start=batch*SOURCE_BATCH_SIZE,sources=SOURCES.slice(start,start+SOURCE_BATCH_SIZE),results=await pollServiceStatuses(env,sql,sources);
+      return responseJson({ok:true,data:{batch,batchCount,collected:results.length}});
+    }
     const data=await readStatusPayload(sql);
-    return responseJson({ok:true,data:{...data,generatedAt:new Date().toISOString(),historyHours:HISTORY_WINDOW_HOURS}});
+    return responseJson({ok:true,data:{...data,generatedAt:new Date().toISOString(),historyHours:HISTORY_WINDOW_HOURS,batchCount}});
   }catch(error){return responseJson({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500)}
 }

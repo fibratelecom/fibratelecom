@@ -99,8 +99,9 @@ async function loadClientMikrotikIpState(form,routerId){
   if(!input)return;
   clearTimeout(clientIpTimer);
   if(!id){
-    input.setCustomValidity('');
-    clientFormIpStatus(form,'IP fixo/remoto opcional. Se preenchido, selecione o MikroTik para validá-lo.');
+    const mustValidate=text(input.value)&&text(form.elements?.connection_type?.value).toLowerCase()==='pppoe';
+    input.setCustomValidity(mustValidate?'Selecione o MikroTik para validar este IP antes de salvar.':'');
+    clientFormIpStatus(form,mustValidate?'Selecione o MikroTik para validar o IP fixo/remoto antes de salvar.':'IP fixo/remoto opcional. Se preenchido, selecione o MikroTik para validá-lo.');
     return;
   }
   if(text(form.elements?.connection_type?.value).toLowerCase()!=='pppoe'){
@@ -143,8 +144,8 @@ async function loadClientMikrotikIpState(form,routerId){
     clientFormIpStatus(form,`IP ${ip} disponível no MikroTik selecionado. ${secrets.length} acesso${secrets.length===1?'':'s'} PPPoE conferido${secrets.length===1?'':'s'}.`);
   }catch(error){
     if(requestId===clientIpRequest&&form?.isConnected){
-      input.setCustomValidity('');
-      clientFormIpStatus(form,`Não foi possível validar o IP no MikroTik agora: ${error instanceof Error?error.message:String(error)}`);
+      input.setCustomValidity('Não foi possível validar este IP no MikroTik. Tente novamente antes de salvar.');
+      clientFormIpStatus(form,`Validação obrigatória do IP falhou. O cadastro não será salvo com IP fixo até o MikroTik responder: ${error instanceof Error?error.message:String(error)}`);
     }
   }finally{
     if(requestId===clientIpRequest&&input?.isConnected)input.removeAttribute('aria-busy');
@@ -168,11 +169,14 @@ function handleClientFormField(event){
       clientFormIpStatus(form,'IP fixo/remoto opcional. Deixe vazio para clientes que recebem IP quando conectam.');
       return;
     }
-    const routerId=Number(form.elements?.router_id?.value)||0;
-    if(routerId&&text(form.elements?.connection_type?.value).toLowerCase()==='pppoe'){
+    const routerId=Number(form.elements?.router_id?.value)||0,pppoe=text(form.elements?.connection_type?.value).toLowerCase()==='pppoe';
+    if(pppoe&&routerId){
       target.setCustomValidity('Validando o IP no MikroTik…');
       clientFormIpStatus(form,'Validando o IP informado no MikroTik…');
       clientIpTimer=setTimeout(()=>loadClientMikrotikIpState(form,routerId),300);
+    }else if(pppoe){
+      target.setCustomValidity('Selecione o MikroTik para validar este IP antes de salvar.');
+      clientFormIpStatus(form,'Selecione o MikroTik para validar o IP fixo/remoto antes de salvar.');
     }else target.setCustomValidity('');
     return;
   }
@@ -184,7 +188,7 @@ function handleClientFormField(event){
   }
   if(target.name==='connection_type'){
     const routerId=Number(form.elements?.router_id?.value)||0;
-    if(text(target.value).toLowerCase()==='pppoe'&&routerId)loadClientMikrotikIpState(form,routerId);
+    if(text(target.value).toLowerCase()==='pppoe')loadClientMikrotikIpState(form,routerId);
     else if(form.elements?.ip){form.elements.ip.setCustomValidity('');clientFormIpStatus(form,'IP fixo/remoto é opcional. A validação de remote-address é aplicada aos acessos PPPoE.');}
     return;
   }
@@ -227,7 +231,9 @@ function updateSupportNegotiationPreview(form){
   if(fixedInput)fixedInput.disabled=discountType!=='fixed';
   const discountPercent=Math.max(0,Math.min(100,Number(percentInput?.value)||0));let discountCents=discountType==='fixed'?moneyToCents(fixedInput?.value):Math.round(originalCents*discountPercent/100);
   discountCents=originalCents>0?Math.min(Math.max(0,originalCents-1),discountCents):0;
-  const netCents=Math.max(0,originalCents-discountCents),installments=Math.max(1,Math.min(12,Math.floor(Number(form.elements?.installments?.value)||1))),periods=Math.max(0,installments-1),interestPercent=installments>1?Math.max(0,Math.min(20,Number(interestInput?.value)||0)):0;
+  const netCents=Math.max(0,originalCents-discountCents),installments=Math.max(1,Math.min(12,Math.floor(Number(form.elements?.installments?.value)||1))),periods=Math.max(0,installments-1),interestPercent=installments>1?Math.max(0,Math.min(20,Number(interestInput?.value)||0):0;
+  if(percentInput)percentInput.disabled=discountType!=='percent';
+  if(fixedInput)fixedInput.disabled=discountType!=='fixed';
   if(entryInput)entryInput.disabled=installments===1;
   if(interestInput)interestInput.disabled=installments===1;
   let entryCents=installments===1?netCents:moneyToCents(entryInput?.value),financedCents=installments>1?Math.max(0,netCents-entryCents):0,financedWithInterest=financedCents;

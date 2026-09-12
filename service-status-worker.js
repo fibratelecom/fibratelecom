@@ -21,6 +21,29 @@ const SOURCES=[
   {id:'facebook',name:'Facebook / Meta API',category:'Meta',kind:'meta',endpoint:'https://metastatus.com/graph-api',page:'https://metastatus.com/graph-api'},
   {id:'riot',name:'Riot Games · LoL / VALORANT',category:'Jogos',kind:'riot',endpoint:'https://status.riotgames.com/api/v1/incidents',page:'https://status.riotgames.com/?locale=pt_BR&product=all&region=br',fallback:'https://lolprofile.net/server-status'},
   {id:'xbox',name:'Xbox Network',category:'Jogos',kind:'xbox',endpoint:'https://support.xbox.com/pt-BR/xbox-live-status',page:'https://support.xbox.com/pt-BR/xbox-live-status',fallback:'https://www.saashub.com/xbox-live-status'},
+  {id:'claro',name:'Claro',category:'Telecom',kind:'probe',endpoint:'https://www.claro.com.br/',page:'https://www.claro.com.br/'},
+  {id:'vivo',name:'Vivo',category:'Telecom',kind:'probe',endpoint:'https://vivo.com.br/',page:'https://vivo.com.br/'},
+  {id:'tim',name:'TIM',category:'Telecom',kind:'probe',endpoint:'https://www.tim.com.br/',page:'https://www.tim.com.br/'},
+  {id:'caixa',name:'Caixa Econômica Federal',category:'Bancos',kind:'probe',endpoint:'https://www.caixa.gov.br/',page:'https://www.caixa.gov.br/'},
+  {id:'google',name:'Google',category:'Serviços web',kind:'probe',endpoint:'https://www.google.com/',page:'https://www.google.com/'},
+  {id:'youtube',name:'YouTube',category:'Streaming',kind:'probe',endpoint:'https://www.youtube.com/',page:'https://www.youtube.com/'},
+  {id:'pix',name:'Pix',category:'Pagamentos',kind:'probe',endpoint:'https://www.bcb.gov.br/estabilidadefinanceira/indice-disponibilidade-spi',page:'https://www.bcb.gov.br/estabilidadefinanceira/indice-disponibilidade-spi'},
+  {id:'sefaz',name:'Sefaz',category:'Governo',kind:'probe',endpoint:'https://www.nfe.fazenda.gov.br/portal/disponibilidade.aspx?versao=0.00',page:'https://www.nfe.fazenda.gov.br/portal/disponibilidade.aspx?versao=0.00'},
+  {id:'gemini',name:'Google Gemini',category:'IA',kind:'probe',endpoint:'https://gemini.google.com/',page:'https://gemini.google.com/'},
+  {id:'bradesco',name:'Bradesco',category:'Bancos',kind:'probe',endpoint:'https://banco.bradesco/',page:'https://banco.bradesco/'},
+  {id:'nubank',name:'Nubank',category:'Bancos',kind:'probe',endpoint:'https://nubank.com.br/',page:'https://nubank.com.br/'},
+  {id:'openai',name:'OpenAI',category:'IA',kind:'probe',endpoint:'https://status.openai.com/',page:'https://status.openai.com/'},
+  {id:'disney-plus',name:'Disney+',category:'Streaming',kind:'probe',endpoint:'https://www.disneyplus.com/pt-br',page:'https://www.disneyplus.com/pt-br'},
+  {id:'steam',name:'Steam',category:'Jogos',kind:'probe',endpoint:'https://store.steampowered.com/',page:'https://store.steampowered.com/'},
+  {id:'unitv',name:'UniTV',category:'Streaming',kind:'probe',endpoint:'https://www.unitv.net.br/',page:'https://www.unitv.net.br/'},
+  {id:'netflix',name:'Netflix',category:'Streaming',kind:'probe',endpoint:'https://www.netflix.com/br/',page:'https://www.netflix.com/br/'},
+  {id:'banco-inter',name:'Banco Inter',category:'Bancos',kind:'probe',endpoint:'https://inter.co/',page:'https://inter.co/'},
+  {id:'gov-br',name:'GOV.BR',category:'Governo',kind:'probe',endpoint:'https://www.gov.br/',page:'https://www.gov.br/'},
+  {id:'mercado-livre',name:'Mercado Livre',category:'Marketplace',kind:'probe',endpoint:'https://www.mercadolivre.com.br/',page:'https://www.mercadolivre.com.br/'},
+  {id:'x-twitter',name:'X (Twitter)',category:'Redes sociais',kind:'probe',endpoint:'https://x.com/',page:'https://x.com/'},
+  {id:'globoplay',name:'Globoplay',category:'Streaming',kind:'probe',endpoint:'https://globoplay.globo.com/',page:'https://globoplay.globo.com/'},
+  {id:'banco-do-brasil',name:'Banco do Brasil',category:'Bancos',kind:'probe',endpoint:'https://www.bb.com.br/',page:'https://www.bb.com.br/'},
+  {id:'c6-bank',name:'C6 Bank',category:'Bancos',kind:'probe',endpoint:'https://www.c6bank.com.br/',page:'https://www.c6bank.com.br/'},
 ];
 
 const safeText=value=>String(value??'').trim();
@@ -137,6 +160,12 @@ async function checkXbox(source){
   return {status:'outage',detail:'Os endpoints públicos do Xbox verificados não responderam.',components:['Verificação de disponibilidade'],responseMs:maxMs};
 }
 
+async function checkProbe(source){
+  const result=await fetchTimed(source.endpoint,{probe:true});
+  if(result.reachable)return {status:'operational',detail:`O endpoint público de ${source.name} está respondendo normalmente.`,components:[source.name],responseMs:result.responseMs};
+  return {status:'outage',detail:`O endpoint público de ${source.name} respondeu com falha HTTP ${result.status}.`,components:[source.name],responseMs:result.responseMs};
+}
+
 async function checkSource(source){
   const started=Date.now();
   try{
@@ -147,6 +176,7 @@ async function checkSource(source){
     else if(source.kind==='meta')result=await checkMeta(source);
     else if(source.kind==='riot')result=await checkRiot(source);
     else if(source.kind==='xbox')result=await checkXbox(source);
+    else if(source.kind==='probe')result=await checkProbe(source);
     else throw new Error('Fonte sem verificador');
     return {...statusPublicSource(source),...result,checkedAt:new Date().toISOString()};
   }catch(error){return {...statusPublicSource(source),status:'error',detail:`Sem resposta confiável nesta verificação (${safeText(error?.message)||'falha de consulta'}).`,components:[],responseMs:Date.now()-started,checkedAt:new Date().toISOString()}}

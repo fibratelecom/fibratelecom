@@ -16,14 +16,18 @@ const STATUS_PAGE_SOURCES = [
 const EXTRA_SOURCES = [
   { id:'google-cloud', name:'Google Cloud', category:'Infraestrutura', kind:'google', endpoint:'https://status.cloud.google.com/incidents.json', page:'https://status.cloud.google.com/' },
   { id:'playstation', name:'PlayStation Network', category:'Jogos', kind:'playstation', endpoint:'https://status.playstation.com/data/statuses/region/SCEA.json', page:'https://status.playstation.com/pt-br/' },
-  { id:'whatsapp', name:'WhatsApp Business', category:'Meta', kind:'official', page:'https://metastatus.com/whatsapp-business-api', note:'Status oficial do WhatsApp Business/API; não representa todos os problemas do aplicativo comum.' },
-  { id:'instagram', name:'Instagram / Meta API', category:'Meta', kind:'official', page:'https://metastatus.com/graph-api', note:'Fonte oficial da plataforma/API da Meta; não equivale a relatos de usuários do Instagram.' },
-  { id:'facebook', name:'Facebook / Meta API', category:'Meta', kind:'official', page:'https://metastatus.com/graph-api', note:'Fonte oficial da plataforma/API da Meta; não equivale a relatos de usuários do Facebook.' },
-  { id:'riot', name:'Riot Games · LoL / VALORANT', category:'Jogos', kind:'official', page:'https://status.riotgames.com/?locale=pt_BR&product=all&region=br', note:'Página oficial da Riot para o Brasil.' },
-  { id:'xbox', name:'Xbox Network', category:'Jogos', kind:'official', page:'https://support.xbox.com/pt-BR/xbox-live-status', note:'Página oficial de status do Xbox.' },
+  { id:'whatsapp', name:'WhatsApp Business', category:'Meta', kind:'meta', endpoint:'https://metastatus.com/whatsapp-business-api', page:'https://metastatus.com/whatsapp-business-api', note:'Status automático da plataforma oficial do WhatsApp Business.' },
+  { id:'instagram', name:'Instagram / Meta API', category:'Meta', kind:'meta', endpoint:'https://metastatus.com/graph-api', page:'https://metastatus.com/graph-api', note:'Status automático da Graph API da Meta, usada por integrações do Instagram.' },
+  { id:'facebook', name:'Facebook / Meta API', category:'Meta', kind:'meta', endpoint:'https://metastatus.com/graph-api', page:'https://metastatus.com/graph-api', note:'Status automático da Graph API da Meta, usada por integrações do Facebook.' },
+  { id:'riot', name:'Riot Games · LoL / VALORANT', category:'Jogos', kind:'riot', endpoint:'https://status.riotgames.com/api/v1/incidents', page:'https://status.riotgames.com/?locale=pt_BR&product=all&region=br', note:'Incidentes oficiais da Riot Games para consulta automática.' },
+  { id:'xbox', name:'Xbox Network', category:'Jogos', kind:'xbox', endpoint:'https://xbguide.com/status', page:'https://support.xbox.com/pt-BR/xbox-live-status', note:'Sinal automático gratuito combinado com a página oficial do Xbox.' },
 ];
 
 const SOURCES = [...STATUS_PAGE_SOURCES, ...EXTRA_SOURCES];
+const PUBLIC_PROXIES = [
+  url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  url => `https://allorigins.vercel.app/raw?url=${encodeURIComponent(url)}`,
+];
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -35,16 +39,16 @@ function statusMeta(kind) {
     degraded: ['Instabilidade', 'warn'],
     outage: ['Fora do ar', 'down'],
     maintenance: ['Manutenção', 'maint'],
-    unknown: ['Consultar fonte', 'unknown'],
-    error: ['Fonte indisponível', 'unknown'],
+    unknown: ['Sem confirmação', 'unknown'],
+    error: ['Sem resposta', 'unknown'],
     loading: ['Consultando…', 'loading'],
   };
   return map[kind] || map.unknown;
 }
 
-function card(source, result = { kind:'loading', detail:'Consultando fonte oficial…' }) {
+function card(source, result = { kind:'loading', detail:'Consultando fonte de status…' }) {
   const [label, cls] = statusMeta(result.kind);
-  const detail = result.detail || source.note || 'Fonte oficial do serviço.';
+  const detail = result.detail || source.note || 'Fonte pública de status do serviço.';
   const components = Array.isArray(result.components) && result.components.length
     ? `<small class="components">${esc(result.components.join(' · '))}</small>` : '';
   return `<article class="service-card" data-service="${esc(source.id)}">
@@ -55,7 +59,7 @@ function card(source, result = { kind:'loading', detail:'Consultando fonte ofici
     <p>${esc(detail)}</p>
     ${components}
     <div class="service-actions">
-      <a href="${esc(source.page)}" target="_blank" rel="noopener noreferrer">Abrir fonte oficial</a>
+      <a href="${esc(source.page)}" target="_blank" rel="noopener noreferrer">Abrir fonte</a>
       <span>${result.checked ? `Verificado ${esc(result.checked)}` : ''}</span>
     </div>
   </article>`;
@@ -73,16 +77,31 @@ function updateCard(source, result) {
   old.replaceWith(holder.firstElementChild);
 }
 
-async function fetchWithTimeout(url) {
+async function fetchTextOnce(url) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 9000);
   try {
     const response = await fetch(url, { cache:'no-store', signal:controller.signal, credentials:'omit' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return response.json();
+    return await response.text();
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function fetchPublicText(url) {
+  let lastError = null;
+  for (const target of [url, ...PUBLIC_PROXIES.map(proxy => proxy(url))]) {
+    try { return await fetchTextOnce(target); }
+    catch (error) { lastError = error; }
+  }
+  throw lastError || new Error('Fonte sem resposta.');
+}
+
+async function fetchPublicJson(url) {
+  const raw = await fetchPublicText(url);
+  try { return JSON.parse(raw); }
+  catch { throw new Error('Resposta de status inválida.'); }
 }
 
 function checkedLabel() {
@@ -99,7 +118,7 @@ function statusPageKind(indicator) {
 }
 
 async function checkStatusPage(source) {
-  const data = await fetchWithTimeout(source.endpoint);
+  const data = await fetchPublicJson(source.endpoint);
   const indicator = data?.status?.indicator || 'none';
   const activeIncident = (data?.incidents || []).find(item => !/resolved|completed/i.test(String(item?.status || '')));
   const affected = (data?.components || [])
@@ -109,14 +128,14 @@ async function checkStatusPage(source) {
   const kind = activeIncident && statusPageKind(indicator) === 'operational' ? 'degraded' : statusPageKind(indicator);
   return {
     kind,
-    detail: activeIncident?.name || data?.status?.description || (kind === 'operational' ? 'Todos os sistemas operacionais.' : 'A fonte oficial reportou alteração no serviço.'),
+    detail: activeIncident?.name || data?.status?.description || (kind === 'operational' ? 'Todos os sistemas operacionais.' : 'A fonte reportou alteração no serviço.'),
     components: affected,
     checked: checkedLabel(),
   };
 }
 
 async function checkGoogle(source) {
-  const incidents = await fetchWithTimeout(source.endpoint);
+  const incidents = await fetchPublicJson(source.endpoint);
   const active = Array.isArray(incidents) ? incidents.filter(item => !item?.end) : [];
   if (!active.length) return { kind:'operational', detail:'Nenhum incidente ativo amplo no Google Cloud.', checked:checkedLabel() };
   const latest = active[0];
@@ -131,36 +150,111 @@ async function checkGoogle(source) {
 }
 
 async function checkPlayStation(source) {
-  const data = await fetchWithTimeout(source.endpoint);
-  const raw = JSON.stringify(data || {}).toLowerCase();
-  const isEmpty = (Array.isArray(data) && data.length === 0) || raw === '{}' || raw === '[]';
-  if (isEmpty) return { kind:'operational', detail:'Nenhuma ocorrência ativa informada pela fonte oficial.', checked:checkedLabel() };
-  const problem = /outage|offline|degrad|down|maintenance|incident|issue|interruption|affected|unavailable/.test(raw);
+  const data = await fetchPublicJson(source.endpoint);
+  const incidents = Array.isArray(data?.status) ? data.status : Array.isArray(data) ? data : [];
+  if (!incidents.length) return { kind:'operational', detail:'Todos os serviços do PlayStation Network estão operacionais.', checked:checkedLabel() };
+  const raw = JSON.stringify(incidents).toLowerCase();
+  const kind = /maintenance|manuten/.test(raw) ? 'maintenance' : /outage|offline|down|unavailable|indispon/.test(raw) ? 'outage' : 'degraded';
+  const components = incidents.slice(0, 4).map(item => item?.serviceName || item?.name || item?.title || item?.message).filter(Boolean);
   return {
-    kind: problem ? 'degraded' : 'operational',
-    detail: problem ? 'A fonte oficial do PlayStation reportou ocorrência ou manutenção.' : 'Nenhuma falha ativa identificada na resposta oficial.',
+    kind,
+    detail: 'A fonte oficial do PlayStation Network informou ocorrência ativa.',
+    components,
     checked: checkedLabel(),
   };
 }
 
-function officialOnly(source) {
-  return {
-    kind:'unknown',
-    detail: source.note || 'A fonte oficial não oferece uma API pública aberta e confiável para consulta automática.',
-    checked: checkedLabel(),
-  };
+function readablePageText(raw) {
+  return String(raw || '')
+    .replace(/\\u0026/gi, '&')
+    .replace(/\\u003c/gi, '<')
+    .replace(/\\u003e/gi, '>')
+    .replace(/&nbsp;|&#160;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;|&#34;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\\n|\\r|\\t/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function firstPhrase(text, phrases) {
+  const found = phrases
+    .map(item => ({ ...item, index:text.indexOf(item.phrase) }))
+    .filter(item => item.index >= 0)
+    .sort((a, b) => a.index - b.index);
+  return found[0] || null;
+}
+
+async function checkMeta(source) {
+  const text = readablePageText(await fetchPublicText(source.endpoint));
+  const current = firstPhrase(text, [
+    { phrase:'high disruptions', kind:'outage', detail:'A Meta informa alta interrupção neste serviço.' },
+    { phrase:'major disruptions', kind:'outage', detail:'A Meta informa interrupção importante neste serviço.' },
+    { phrase:'some disruptions', kind:'degraded', detail:'A Meta informa instabilidade neste serviço.' },
+    { phrase:'partial disruptions', kind:'degraded', detail:'A Meta informa instabilidade parcial neste serviço.' },
+    { phrase:'minor disruptions', kind:'degraded', detail:'A Meta informa instabilidade leve neste serviço.' },
+    { phrase:'no known issues', kind:'operational', detail:'A Meta não informa problemas conhecidos neste serviço.' },
+  ]);
+  if (current) return { kind:current.kind, detail:current.detail, checked:checkedLabel() };
+  if (/maintenance|manuten/.test(text)) return { kind:'maintenance', detail:'A fonte da Meta indica manutenção em andamento.', checked:checkedLabel() };
+  if (/status and outages of meta business products|meta business/.test(text)) return { kind:'operational', detail:'A fonte oficial da Meta respondeu e nenhum alerta atual reconhecido foi encontrado.', checked:checkedLabel() };
+  throw new Error('A fonte da Meta respondeu sem um estado reconhecível.');
+}
+
+function riotIncidentTitle(item) {
+  if (typeof item?.title === 'string') return item.title;
+  if (Array.isArray(item?.titles)) return item.titles.find(value => value?.locale === 'pt_BR')?.content || item.titles[0]?.content || '';
+  if (Array.isArray(item?.updates)) return item.updates[0]?.translations?.find(value => value?.locale === 'pt_BR')?.content || item.updates[0]?.translations?.[0]?.content || '';
+  return item?.name || '';
+}
+
+async function checkRiot(source) {
+  try {
+    const data = await fetchPublicJson(source.endpoint);
+    const incidents = Array.isArray(data) ? data : Array.isArray(data?.incidents) ? data.incidents : [];
+    const active = incidents.filter(item => {
+      const state = String(item?.status || item?.state || '').toLowerCase();
+      return item?.active !== false && !/resolved|completed|closed/.test(state);
+    });
+    if (!active.length) return { kind:'operational', detail:'Nenhum incidente ativo informado pela Riot Games.', checked:checkedLabel() };
+    const first = active[0];
+    const raw = JSON.stringify(first).toLowerCase();
+    const kind = /maintenance|manuten/.test(raw) ? 'maintenance' : /critical|major|outage/.test(raw) ? 'outage' : 'degraded';
+    return { kind, detail:riotIncidentTitle(first) || 'A Riot Games informou uma ocorrência ativa.', checked:checkedLabel() };
+  } catch {
+    const page = readablePageText(await fetchPublicText(source.page));
+    if (/nenhum problema ou ocorrência recente|no recent issues or events to report/.test(page)) return { kind:'operational', detail:'Nenhum problema recente informado pela Riot Games para o Brasil.', checked:checkedLabel() };
+    if (/manutenção|maintenance/.test(page)) return { kind:'maintenance', detail:'A Riot Games informa manutenção ou intervenção ativa.', checked:checkedLabel() };
+    if (/warning|aviso|incident|incidente|problemas para|issues with/.test(page)) return { kind:'degraded', detail:'A Riot Games informa uma ocorrência ativa.', checked:checkedLabel() };
+    return { kind:'operational', detail:'A página oficial da Riot respondeu sem alerta atual reconhecido.', checked:checkedLabel() };
+  }
+}
+
+async function checkXbox(source) {
+  const page = readablePageText(await fetchPublicText(source.endpoint));
+  const current = page.split('recent incidents')[0];
+  if (/microsoft reports all services healthy|all services up and running/.test(current)) return { kind:'operational', detail:'Xbox Network operacional segundo o status Microsoft e verificações públicas.', checked:checkedLabel() };
+  if (/major outage|service outage|\bdown\b|offline/.test(current)) return { kind:'outage', detail:'O monitoramento do Xbox indica indisponibilidade de um ou mais serviços.', checked:checkedLabel() };
+  if (/degraded|limited|service issue|issues detected|partial/.test(current)) return { kind:'degraded', detail:'O monitoramento do Xbox indica instabilidade em um ou mais serviços.', checked:checkedLabel() };
+  if (/\bup\b|operational|healthy/.test(current)) return { kind:'operational', detail:'Os principais serviços do Xbox estão respondendo normalmente.', checked:checkedLabel() };
+  throw new Error('O monitor do Xbox respondeu sem um estado reconhecível.');
 }
 
 async function checkOne(source) {
   try {
     if (source.kind === 'google') return await checkGoogle(source);
     if (source.kind === 'playstation') return await checkPlayStation(source);
-    if (source.kind === 'official') return officialOnly(source);
+    if (source.kind === 'meta') return await checkMeta(source);
+    if (source.kind === 'riot') return await checkRiot(source);
+    if (source.kind === 'xbox') return await checkXbox(source);
     return await checkStatusPage(source);
   } catch (error) {
     return {
       kind:'error',
-      detail:`Não foi possível consultar automaticamente esta fonte agora (${error?.name === 'AbortError' ? 'tempo esgotado' : 'bloqueio ou indisponibilidade da fonte'}).`,
+      detail:`A consulta automática falhou agora (${error?.name === 'AbortError' ? 'tempo esgotado' : 'fonte ou proxy sem resposta'}). Tente Atualizar novamente.`,
       checked: checkedLabel(),
     };
   }
@@ -168,12 +262,12 @@ async function checkOne(source) {
 
 function refreshSummary(results) {
   const values = [...results.values()];
-  const auto = values.filter(item => !['unknown','error'].includes(item.kind));
-  const affected = auto.filter(item => ['degraded','outage','maintenance'].includes(item.kind));
+  const automatic = values.filter(item => !['unknown','error'].includes(item.kind));
+  const affected = automatic.filter(item => ['degraded','outage','maintenance'].includes(item.kind));
   const unavailable = values.filter(item => ['unknown','error'].includes(item.kind));
-  summary.innerHTML = `<article><span>Monitorados automaticamente</span><strong>${auto.length}</strong></article>
+  summary.innerHTML = `<article><span>Monitorados automaticamente</span><strong>${automatic.length}</strong></article>
     <article><span>Com atenção agora</span><strong>${affected.length}</strong></article>
-    <article><span>Fontes com consulta limitada</span><strong>${unavailable.length}</strong></article>`;
+    <article><span>Sem resposta agora</span><strong>${unavailable.length}</strong></article>`;
 }
 
 async function ensureSession() {

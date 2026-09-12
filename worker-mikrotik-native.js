@@ -231,17 +231,19 @@ async function profiles(router){
   return {profiles:list.map(x=>({id:text(x['.id']),name:text(x.name),local_address:text(x['local-address']),remote_address:text(x['remote-address'])})).filter(x=>x.name)};
 }
 async function savePppoe(router,data){
-  const username=text(data?.pppoe_username),password=text(data?.pppoe_password),profile=text(data?.mikrotik_profile)||'default';
+  const username=text(data?.pppoe_username),password=text(data?.pppoe_password),profile=text(data?.mikrotik_profile)||'default',remoteAddress=text(data?.ip);
   if(!username)throw Error('Informe o usuário PPPoE do cliente.');
   const found=await findSecret(router,username);if(!found&&!password)throw Error('Informe a senha PPPoE para criar o acesso.');
+  if(remoteAddress){const conflict=(await pppSecrets(router)).find((item)=>item.remoteAddress===remoteAddress&&item.name!==username);if(conflict)throw Error(`IP ${remoteAddress} já está em uso no MikroTik pelo PPPoE ${conflict.name}. Escolha outro IP.`);}
   const restricted=/bloqueado|suspenso|cancelado/.test(text(data?.status).toLowerCase());
   const payload={name:username,service:'pppoe',profile,disabled:restricted?'true':'false',comment:`Provedor Plus - ${text(data?.name)||username}`};
-  if(password)payload.password=password;if(text(data?.ip))payload['remote-address']=text(data.ip);if(text(data?.mac_address))payload['caller-id']=text(data.mac_address).toUpperCase();
+  if(password)payload.password=password;if(found)payload['remote-address']=remoteAddress;else if(remoteAddress)payload['remote-address']=remoteAddress;if(text(data?.mac_address))payload['caller-id']=text(data.mac_address).toUpperCase();
   let action='created',secretId='';
   if(found){const id=text(found['.id']);const updated=await request(router,`ppp/secret/${encodeURIComponent(id)}`,{method:'PATCH',body:payload});action='updated';secretId=text(updated?.['.id'])||id}
   else{const created=await request(router,'ppp/secret',{method:'PUT',body:payload});secretId=text(created?.['.id'])}
   if(restricted)await disconnect(router,username);
   const saved=await findSecret(router,username);if(!saved)throw Error('O MikroTik não confirmou o acesso PPPoE após salvar.');
+  const savedRemote=text(saved['remote-address']);if(savedRemote!==remoteAddress)throw Error(remoteAddress?`O MikroTik não confirmou o remote-address ${remoteAddress} após salvar.`:'O MikroTik não confirmou a remoção do remote-address antigo.');
   const disabled=boolValue(saved.disabled);if(disabled!==restricted)throw Error(restricted?'O MikroTik não confirmou o bloqueio do PPPoE após salvar.':'O MikroTik não confirmou a liberação do PPPoE após salvar.');
   if(restricted&&(await activeSessions(router,username)).length)throw Error('O PPPoE foi desabilitado, mas a sessão continua ativa no MikroTik.');
   return {action,secretId:text(saved['.id'])||secretId,username,verified:true,blocked:restricted};

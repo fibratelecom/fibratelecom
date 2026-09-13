@@ -18,6 +18,16 @@ export const esc=(value)=>String(value??'').replace(/[&<>"']/g,(c)=>({'&':'&amp;
 export const attr=esc;
 export const status=(value)=>`<span class="status ${statusKind(value)}"><i></i>${esc(text(value)||'—')}</span>`;
 export const formMoney=(cents)=>(Math.max(0,Number(cents)||0)/100).toFixed(2).replace('.',',');
+export function formatPhone(value=''){
+  let digits=String(value??'').replace(/\D/g,'');
+  if((digits.length===12||digits.length===13)&&digits.startsWith('55'))digits=digits.slice(2);
+  digits=digits.slice(0,11);
+  if(!digits)return '';
+  if(digits.length<=2)return `(${digits}`;
+  if(digits.length<=6)return `(${digits.slice(0,2)}) ${digits.slice(2)}`;
+  if(digits.length<=10)return `(${digits.slice(0,2)}) ${digits.slice(2,6)}-${digits.slice(6)}`;
+  return `(${digits.slice(0,2)}) ${digits.slice(2,7)}-${digits.slice(7)}`;
+}
 export function moneyToCents(value){
   let raw=String(value??'').trim().replace(/\s/g,'').replace(/^R\$/i,'').replace(/[^\d,.-]/g,'');
   if(!raw||raw.startsWith('-'))return 0;

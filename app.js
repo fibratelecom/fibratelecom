@@ -1,4 +1,4 @@
-const BUILD = '20260913-live-connections2';
+const BUILD = '20260913-central-restored1';
 const root = document.querySelector('#app');
 let lastValidationToastAt = 0;
 

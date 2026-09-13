@@ -182,6 +182,11 @@ function providerFor(client,state,vault,existing=''){
   throw new Error('Há dois bancos ativos. Defina o banco do cliente ou o emissor padrão.');
 }
 
+function lateInvoiceSettings(state){
+  const settings=state?.settings||{},enabled=settings.late_fee_enabled===true||String(settings.late_fee_enabled).toLowerCase()==='true';
+  return {late_fee_enabled:enabled,late_fine_percent:Math.max(0,Math.min(20,num(settings.late_fine_percent??2))),late_interest_daily_percent:Math.max(0,Math.min(1,num(settings.late_interest_daily_percent??0.033))),late_charge_after_days:Math.max(1,Math.min(30,Math.floor(num(settings.late_charge_after_days)||1)))};
+}
+
 function bankSecrets(vault){
   return {
     efi:{environment:text(vault?.efi?.environment)||'sandbox',clientId:text(vault?.efi?.clientId),clientSecret:text(vault?.efi?.clientSecret),certificatePassword:String(vault?.efi?.certificatePassword||''),certificateBase64:String(vault?.efi?.certificateBase64||''),pixKey:text(vault?.efi?.pixKey),pixAutoReceiverAgency:text(vault?.efi?.pixAutoReceiverAgency),pixAutoReceiverAccount:text(vault?.efi?.pixAutoReceiverAccount),webhookUrl:text(vault?.efi?.webhookUrl)},
@@ -218,7 +223,7 @@ async function issueRealCharge(env,invoice,client,state,vault){
   }
   if(mode==='pix_due'){requireEfiPix(client,vault,mode);invoice.billing_type='Pix com vencimento';invoice.document_type='Pix com vencimento';invoice.bank_provider='efi'}
   if(mode==='pix_auto'){requireEfiPix(client,vault,mode);invoice.billing_type='Pix Automático';invoice.document_type='Pix Automático';invoice.bank_provider='efi'}
-  const provider=mode==='pix_due'||mode==='pix_auto'?'efi':providerFor(client,state,vault,invoice.bank_provider),secrets=bankSecrets(vault),source={...invoice,bank_provider:provider,client_name:client.name,client_contract_number:client.contract_number};
+  const provider=mode==='pix_due'||mode==='pix_auto'?'efi':providerFor(client,state,vault,invoice.bank_provider),secrets=bankSecrets(vault),source={...invoice,...lateInvoiceSettings(state),bank_provider:provider,client_name:client.name,client_contract_number:client.contract_number};
   const remote=await bankAction(env,{action:'issue',provider,invoice:source,client,efi:secrets.efi,mercadoPago:secrets.mercadoPago,pixAutoRecord:mode==='pix_auto'?pixAutoRecord(client):null});
   Object.assign(invoice,{bank_provider:provider},remote||{});
   return true;
@@ -266,7 +271,7 @@ function makeInvoice(state,client,dueDate,amountCents,{first=false,serviceDays=0
     description:first?`Primeira mensalidade proporcional · ${serviceDays} dia${serviceDays===1?'':'s'} de serviço${contractSuffix}`:`Mensalidade ${reference}${contractSuffix}`,
     billing_origin:first?'first_prorated':'monthly_auto',auto_generated:true,prorated_first_invoice:first===true,
     competency:reference,reference,base_amount_cents:Math.max(1,Math.round(baseAmount||amountCents)),cashback_eligible:!first,cashback_reason:first?'primeira_cobranca_proporcional':'mensalidade_normal',
-    payment_method:'',paid_by:'',paid_at:null,created_at:now,contract_number:contractNumber,
+    payment_method:'',paid_by:'',paid_at:null,created_at:now,contract_number:contractNumber,...lateInvoiceSettings(state),
     ...(contractId?{contract_id:contractId,contract_label:text(client.contract_label)||'Ponto adicional'}:{}),
     ...(first?{service_days:serviceDays,cycle_days:cycleDays}:{})
   };

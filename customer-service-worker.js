@@ -95,6 +95,15 @@ async function augmentPortalPlanContext(response,env){
 }
 
 async function portalClient(sql,id){const rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code FROM pp_clients WHERE id=${Number(id)} LIMIT 1`;return rows?.[0]||null}
+async function remapAdditionalContractLogin(request,env,body={},action='',path=''){
+  if(path!==PORTAL_PATH||action!=='login'||!env.DATABASE_URL)return {request,body};
+  const contract=text(body?.data?.contract);if(!contract)return {request,body};const wanted=contract.replace(/\D/g,'');if(!wanted)return {request,body};
+  try{
+    const sql=neon(env.DATABASE_URL),state=await loadState(sql),extra=(Array.isArray(state?.client_contracts)?state.client_contracts:[]).find(item=>{const number=text(item?.contract_number);return number===contract||number.replace(/\D/g,'')===wanted});
+    if(!extra?.client_id)return {request,body};const owner=await portalClient(sql,extra.client_id);if(!owner?.contract_number)return {request,body};
+    const nextBody={...body,data:{...(body?.data||{}),contract:text(owner.contract_number)}},headers=new Headers(request.headers),nextRequest=new Request(request.url,{method:request.method,headers,body:JSON.stringify(nextBody)});return {request:nextRequest,body:nextBody};
+  }catch(error){console.error('Provedor Plus: não foi possível resolver o contrato adicional informado no login.',error);return {request,body}}
+}
 
 function contractPlan(state,contract){const plan=planById(state,contract?.plan_id);return {id:Number(contract?.plan_id)||Number(plan?.id)||null,name:text(plan?.name||contract?.plan)||'Sem plano',speed:text(plan?.speed||plan?.bandwidth),priceCents:Math.max(0,Math.round(Number(contract?.custom_monthly_cents||plan?.price_cents)||0))}}
 function contractAddress(contract,client){return [text(contract?.address||client?.address),text(contract?.address_number),text(contract?.neighborhood),text(contract?.city||client?.city),text(contract?.state||client?.state)].filter(Boolean).join(' - ')}
@@ -251,6 +260,7 @@ async function augmentResponseWithProtocol(response,protocol){if(!protocol)retur
 async function recordAuditProtocol(body,action,definition,response,env){let responseData={};try{const parsed=await response.clone().json();responseData=parsed?.data||{}}catch{}const clientId=await clientIdForAudit(body,responseData,env);if(!clientId)return null;return createProtocol(neon(env.DATABASE_URL),{clientId,category:definition.category,subject:definition.subject,status:'Concluído',details:safeAuditDetails(action,body?.data||{},responseData,definition.details||{})})}
 async function auditedBaseFetch(request,env,ctx){
   let body={};try{body=await request.clone().json()}catch{}const action=text(body?.action),path=new URL(request.url).pathname;
+  const remapped=await remapAdditionalContractLogin(request,env,body,action,path);request=remapped.request;body=remapped.body;
   if(path===PORTAL_PATH&&action==='plan-request')return handlePlanRequest(request,env,body);
   const definition=portalAuditDefinition(path,action),baseResponse=await baseWorker.fetch(request,env,ctx);let response=path===PORTAL_PATH&&['login','refresh'].includes(action)?await augmentPortalPlanContext(baseResponse,env):baseResponse;if(path===PORTAL_PATH)response=await augmentPortalContractContext(response,env,body,action);if(!definition||!response.ok||!env.DATABASE_URL)return response;
   try{const protocol=await recordAuditProtocol(body,action,definition,response,env);return augmentResponseWithProtocol(response,protocol)}catch(error){console.error('Provedor Plus: ação da Área do Cliente concluída, mas o protocolo não pôde ser registrado.',error);return response}

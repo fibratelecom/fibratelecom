@@ -161,10 +161,6 @@ function selectClientProfile(form,value){
 function handleClientFormField(event){
   const target=event.target,form=clientFormTarget(target);
   if(!form||!target?.name)return;
-  if(target.name==='phone'){
-    target.setCustomValidity('');
-    return;
-  }
   if(target.name==='ip'){
     form.dataset.ipManual='1';
     clearTimeout(clientIpTimer);
@@ -238,21 +234,16 @@ function handleClientWhatsapp(event){
   if(digits.length<12||digits.length>15){
     input.setCustomValidity('Informe um número de WhatsApp válido com DDD.');
     input.reportValidity();
+    input.setCustomValidity('');
     input.focus();
     return;
   }
-  input.setCustomValidity('');
   window.open(`https://wa.me/${digits}`,'_blank','noopener,noreferrer');
 }
 
 function updateSupportNegotiationPreview(form){
   if(!(form instanceof HTMLFormElement))return;
   const selected=[...form.querySelectorAll('input[name="invoice_ids"]:checked')],originalCents=selected.reduce((sum,input)=>sum+Math.max(0,Math.round(Number(input.dataset.amountCents)||0)),0),discountType=text(form.elements?.discount_type?.value)==='fixed'?'fixed':'percent',percentInput=form.elements?.discount_percent,fixedInput=form.elements?.discount_amount,entryInput=form.elements?.entry,interestInput=form.elements?.interest_percent;
-  if(percentInput)percentInput.disabled=discountType!=='percent';
-  if(fixedInput)fixedInput.disabled=discountType!=='fixed';
-  const discountPercent=Math.max(0,Math.min(100,Number(percentInput?.value)||0));let discountCents=discountType==='fixed'?moneyToCents(fixedInput?.value):Math.round(originalCents*discountPercent/100);
-  discountCents=originalCents>0?Math.min(Math.max(0,originalCents-1),discountCents):0;
-  const netCents=Math.max(0,originalCents-discountCents),installments=Math.max(1,Math.min(12,Math.floor(Number(form.elements?.installments?.value)||1))),periods=Math.max(0,installments-1),interestPercent=installments>1?Math.max(0,Math.min(20,Number(interestInput?.value)||0):0;
   if(percentInput)percentInput.disabled=discountType!=='percent';
   if(fixedInput)fixedInput.disabled=discountType!=='fixed';
   const discountPercent=Math.max(0,Math.min(100,Number(percentInput?.value)||0));let discountCents=discountType==='fixed'?moneyToCents(fixedInput?.value):Math.round(originalCents*discountPercent/100);

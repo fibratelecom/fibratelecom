@@ -52,7 +52,10 @@ export function table(headers,rows){const body=Array.isArray(rows)?rows.join('')
 export function actions(items){return `<div class="row-actions">${items.filter(Boolean).join('')}</div>`;}
 export function button(label,action,id='',kind='secondary',extra=''){return `<button class="btn ${kind}" type="button" data-action="${attr(action)}"${id!==''?` data-id="${attr(id)}"`:''} ${extra}>${label}</button>`;}
 export function pageHead(eyebrow,title,textLine,action=''){return `<section class="page-head"><div><span class="section-label">${esc(eyebrow)}</span><h2>${esc(title)}</h2><p>${esc(textLine)}</p></div>${action}</section>`;}
-export function field(label,name,value='',type='text',extra=''){return `<label>${esc(label)}<input name="${attr(name)}" type="${attr(type)}" value="${attr(value)}" ${extra}></label>`;}
+export function field(label,name,value='',type='text',extra=''){
+  const isPhone=['phone','company_whatsapp'].includes(String(name)),shown=isPhone?formatPhone(value):value,phoneExtra=isPhone?'inputmode="tel" maxlength="15" autocomplete="tel" data-phone-mask':'';
+  return `<label>${esc(label)}<input name="${attr(name)}" type="${attr(type)}" value="${attr(shown)}" ${phoneExtra} ${extra}></label>`;
+}
 export function selectField(label,name,optionsHtml,extra=''){return `<label>${esc(label)}<select name="${attr(name)}" ${extra}>${optionsHtml}</select></label>`;}
 export function textareaField(label,name,value='',extra=''){return `<label class="span-2">${esc(label)}<textarea name="${attr(name)}" ${extra}>${esc(value)}</textarea></label>`;}
 export function loginTemplate(configured=true,message=''){

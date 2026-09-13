@@ -87,6 +87,26 @@ export function overdueInvoice(invoice = {}, today = new Date().toISOString().sl
   return openInvoice(invoice) && Boolean(text(invoice.due_date).slice(0, 10)) && text(invoice.due_date).slice(0, 10) < today;
 }
 
+export function lateFeeRules(settings = {}) {
+  const enabled = settings?.late_fee_enabled === true || String(settings?.late_fee_enabled).toLowerCase() === 'true';
+  const finePercent = Math.max(0, Math.min(20, Number(settings?.late_fine_percent ?? 2) || 0));
+  const dailyInterestPercent = Math.max(0, Math.min(1, Number(settings?.late_interest_daily_percent ?? 0.033) || 0));
+  const startAfterDays = Math.max(1, Math.min(30, Math.floor(Number(settings?.late_charge_after_days) || 1)));
+  return { enabled, finePercent, dailyInterestPercent, startAfterDays };
+}
+
+export function invoiceLateBreakdown(invoice = {}, settings = {}, today = new Date().toISOString().slice(0, 10)) {
+  const baseCents = invoiceCents(invoice), rules = lateFeeRules(settings), dueKey = text(invoice?.due_date || invoice?.dueDate).slice(0, 10);
+  if (!rules.enabled || !openInvoice(invoice) || !baseCents || !/^\d{4}-\d{2}-\d{2}$/.test(dueKey) || dueKey >= today) {
+    return { ...rules, baseCents, overdueDays: 0, chargeDays: 0, fineCents: 0, interestCents: 0, feesCents: 0, totalCents: baseCents };
+  }
+  const due = new Date(`${dueKey}T12:00:00Z`), now = new Date(`${today}T12:00:00Z`);
+  const overdueDays = Math.max(0, Math.floor((now - due) / 86400000)), chargeDays = overdueDays >= rules.startAfterDays ? overdueDays - rules.startAfterDays + 1 : 0;
+  if (!chargeDays) return { ...rules, baseCents, overdueDays, chargeDays, fineCents: 0, interestCents: 0, feesCents: 0, totalCents: baseCents };
+  const fineCents = Math.round(baseCents * rules.finePercent / 100), interestCents = Math.round(baseCents * rules.dailyInterestPercent / 100 * chargeDays), feesCents = fineCents + interestCents;
+  return { ...rules, baseCents, overdueDays, chargeDays, fineCents, interestCents, feesCents, totalCents: baseCents + feesCents };
+}
+
 export function statusKind(value) {
   const normalizedValue = normalized(value);
   if (/pago|paid|online|ativo|conectado|success|conclu|resolvido|liberado|sincronizado/.test(normalizedValue)) return 'success';

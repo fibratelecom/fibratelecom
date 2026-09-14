@@ -263,7 +263,7 @@ async function auditedBaseFetch(request,env,ctx){
   let body={};try{body=await request.clone().json()}catch{}const action=text(body?.action),path=new URL(request.url).pathname;
   const remapped=await remapAdditionalContractLogin(request,env,body,action,path);request=remapped.request;body=remapped.body;
   if(path===PORTAL_PATH&&action==='plan-request')return handlePlanRequest(request,env,body);
-  const definition=portalAuditDefinition(path,action),baseResponse=await baseWorker.fetch(request,env,ctx);let response=path===PORTAL_PATH&&['login','refresh'].includes(action)?await augmentPortalPlanContext(baseResponse,env):baseResponse;if(path===PORTAL_PATH)response=await augmentPortalContractContext(response,env,body,action);if(!definition||!response.ok||!env.DATABASE_URL)return response;
+  const definition=portalAuditDefinition(path,action),baseResponse=await baseWorker.fetch(request,env,ctx);let response=path===PORTAL_PATH&&action==='refresh'?await augmentPortalPlanContext(baseResponse,env):baseResponse;if(path===PORTAL_PATH)response=await augmentPortalContractContext(response,env,body,action);if(!definition||!response.ok||!env.DATABASE_URL)return response;
   try{const protocol=await recordAuditProtocol(body,action,definition,response,env);return augmentResponseWithProtocol(response,protocol)}catch(error){console.error('Provedor Plus: ação da Área do Cliente concluída, mas o protocolo não pôde ser registrado.',error);return response}
 }
 

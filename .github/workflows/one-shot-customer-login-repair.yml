@@ -1,0 +1,45 @@
+name: One-shot customer login repair
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Apply targeted login repair
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('customer-service-worker.js')
+          text = path.read_text(encoding='utf-8')
+          old = "path===PORTAL_PATH&&['login','refresh'].includes(action)?await augmentPortalPlanContext(baseResponse,env):baseResponse;"
+          new = "path===PORTAL_PATH&&action==='refresh'?await augmentPortalPlanContext(baseResponse,env):baseResponse;"
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected one backend login augmentation target, found {count}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
+      - name: Commit final repair and remove one-shot workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/one-shot-customer-login-repair.yml
+          git add customer-service-worker.js
+          git commit -m "Acelera login da Área do Cliente"
+          git push origin HEAD:main

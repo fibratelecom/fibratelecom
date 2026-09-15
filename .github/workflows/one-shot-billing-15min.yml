@@ -1,0 +1,53 @@
+name: one-shot-billing-15min
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/one-shot-billing-15min.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Aplicar faturamento no cron de 15 minutos
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'trust-release-worker.js';
+          let source = fs.readFileSync(path, 'utf8');
+          const oldText = "if(controller?.cron==='5 6 * * *')await runBillingCron(env)";
+          const newText = "if(['*/15 * * * *','5 6 * * *'].includes(text(controller?.cron)))await runBillingCron(env)";
+          const matches = source.split(oldText).length - 1;
+          if (matches !== 1) {
+            console.error(`Esperava 1 ocorrência do agendamento atual; encontrei ${matches}.`);
+            process.exit(11);
+          }
+          source = source.replace(oldText, newText);
+          if (source.includes(oldText)) process.exit(12);
+          if ((source.match(/runBillingCron\(env\)/g) || []).length !== 1) {
+            console.error('Quantidade inesperada de chamadas runBillingCron(env).');
+            process.exit(13);
+          }
+          fs.writeFileSync(path, source);
+          NODE
+          node --check trust-release-worker.js
+          node --check billing-cron.js
+          git diff --check
+          git diff -- trust-release-worker.js
+          git rm .github/workflows/one-shot-billing-15min.yml
+      - name: Publicar correção e remover workflow temporário
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Executa faturamento automático a cada 15 minutos'
+          git push origin HEAD:main

@@ -188,8 +188,10 @@ async function stateMutationRequest(request,path){
 }
 async function acquireStateWriteLock(env,maxWaitMs=20000){
   if(!env?.DATABASE_URL)return null;
-  const sql=neon(env.DATABASE_URL),token=crypto.randomUUID(),deadline=Date.now()+Math.max(1000,Number(maxWaitMs)||20000);
-  while(Date.now()<deadline){
+  const totalWaitMs=Math.max(1000,Number(maxWaitMs)||20000),sql=neon(env.DATABASE_URL),token=crypto.randomUUID(),deadline=Date.now()+totalWaitMs,maxAttempts=8,lockPollMs=Math.max(1000,Math.ceil(totalWaitMs/maxAttempts));
+  let attempts=0;
+  while(Date.now()<deadline&&attempts<maxAttempts){
+    attempts++;
     const expiresAt=new Date(Date.now()+STATE_WRITE_LOCK_TTL_MS).toISOString(),raw=JSON.stringify({token,expires_at:expiresAt});
     const rows=await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${STATE_WRITE_LOCK_KEY},${raw}::jsonb,now()) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at WHERE COALESCE(NULLIF(pp_settings.value->>'expires_at','')::timestamptz,to_timestamp(0))<=now() RETURNING value`;
     if(text(rows?.[0]?.value?.token)===token){
@@ -202,7 +204,8 @@ async function acquireStateWriteLock(env,maxWaitMs=20000){
       renewTimer=setTimeout(renew,20000);
       return async()=>{stopped=true;if(renewTimer)clearTimeout(renewTimer);try{await sql`DELETE FROM pp_settings WHERE key=${STATE_WRITE_LOCK_KEY} AND value->>'token'=${token}`}catch(error){console.error('Provedor Plus: não foi possível liberar a trava de estado.',error)}};
     }
-    await wait(120+Math.floor(Math.random()*160));
+    const remaining=deadline-Date.now();
+    if(remaining>0)await wait(Math.min(lockPollMs,remaining));
   }
   throw Object.assign(new Error('O Provedor Plus está concluindo outra atualização de dados. Tente novamente em alguns segundos.'),{statusCode:409});
 }

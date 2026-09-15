@@ -1,0 +1,78 @@
+name: one-shot-invoice-issued-at
+on:
+  push:
+    paths:
+      - '.github/workflows/one-shot-invoice-issued-at.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Registrar e mostrar data de emissão
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # Tela de mensalidades
+          p = Path('src/panel-views.js')
+          s = p.read_text()
+          old = "  const invoiceStatusLabel=(row)=>paidInvoice(row)?'Pago':overdueInvoice(row)?'Vencida':'Pendente';\n"
+          new = old + "  const invoiceIssuedAt=(row)=>text(row?.bank_issued_at)||((row?.bank_charge_id||row?.bank_payment_id||row?.bank_order_id||row?.bank_ticket_url||row?.bank_pdf_url)?text(row?.created_at):'');\n"
+          if old not in s:
+              raise SystemExit('invoiceStatusLabel não encontrado')
+          s = s.replace(old, new, 1)
+          old = "table(['Ref.','Cliente','Vencimento','Valor','Banco','Status','Ações']"
+          new = "table(['Ref.','Cliente','Vencimento','Emissão','Valor','Banco','Status','Ações']"
+          if old not in s:
+              raise SystemExit('cabeçalho da tabela de mensalidades não encontrado')
+          s = s.replace(old, new, 1)
+          old = "</td><td>${esc(clientLabel(x))}</td><td>${dateLabel(x.due_date)}</td><td>${value}</td><td>${esc(x.bank_provider==='mercadoPago'?'Mercado Pago':x.bank_provider==='efi'?'Efí':x.bank_provider||'—')}</td>"
+          new = "</td><td>${esc(clientLabel(x))}</td><td>${dateLabel(x.due_date)}</td><td>${invoiceIssuedAt(x)?dateLabel(invoiceIssuedAt(x),true):'—'}</td><td>${value}</td><td>${esc(x.bank_provider==='mercadoPago'?'Mercado Pago':x.bank_provider==='efi'?'Efí':x.bank_provider||'—')}</td>"
+          if old not in s:
+              raise SystemExit('linha da tabela de mensalidades não encontrada')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          # Detalhes da cobrança
+          p = Path('src/ui.js')
+          s = p.read_text()
+          old = "['Valor',value],['Vencimento',x.due_date],['Status',x.status]"
+          new = "['Valor',value],['Vencimento',x.due_date],['Emissão',(x.bank_issued_at||(x.bank_charge_id||x.bank_payment_id||x.bank_order_id||x.bank_ticket_url||x.bank_pdf_url?x.created_at:''))?dateTimeLabel(x.bank_issued_at||x.created_at):'—'],['Status',x.status]"
+          if old not in s:
+              raise SystemExit('detalhes da cobrança não encontrados')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          # Registrar o instante real nas novas emissões bancárias
+          p = Path('worker-bank-native.js')
+          s = p.read_text()
+          old = "else if(action==='issue'){const invoice=body.invoice,client=body.client;if(body.provider==='efi')data=invoice.billing_type==='Pix com vencimento'?await issueEfi(invoice,client,efi,'efi_bolix_pix'):invoice.billing_type==='Pix Automático'?await issuePixAuto(invoice,client,efi,body.pixAutoRecord):await issueEfi(invoice,client,efi);else if(body.provider==='mercadoPago')data=await issueMp(invoice,client,mp);else throw new Error('Banco emissor inválido.')}else if(action==='issue-carnet')data=await issueEfiCarnet(body.invoices,body.client,efi,body.description);"
+          new = "else if(action==='issue'){const invoice=body.invoice,client=body.client;if(body.provider==='efi')data=invoice.billing_type==='Pix com vencimento'?await issueEfi(invoice,client,efi,'efi_bolix_pix'):invoice.billing_type==='Pix Automático'?await issuePixAuto(invoice,client,efi,body.pixAutoRecord):await issueEfi(invoice,client,efi);else if(body.provider==='mercadoPago')data=await issueMp(invoice,client,mp);else throw new Error('Banco emissor inválido.');if(data&&typeof data==='object'&&!Array.isArray(data))data={...data,bank_issued_at:new Date().toISOString()}}else if(action==='issue-carnet'){data=await issueEfiCarnet(body.invoices,body.client,efi,body.description);const bankIssuedAt=new Date().toISOString();data={...(data||{}),items:(Array.isArray(data?.items)?data.items:[]).map(item=>({...item,bank_issued_at:bankIssuedAt}))}};"
+          if old not in s:
+              raise SystemExit('handler de emissão bancária não encontrado')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+      - name: Validar alteração
+        run: |
+          node --check src/panel-views.js
+          node --check src/ui.js
+          node --check worker-bank-native.js
+          git diff --check
+          git diff -- src/panel-views.js src/ui.js worker-bank-native.js
+      - name: Publicar nas duas branches e limpar workflow temporário
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/panel-views.js src/ui.js worker-bank-native.js
+          git commit -m 'Mostra data de emissão das cobranças'
+          git push origin HEAD:main
+          git push origin HEAD:cloudflare-provedor-plus
+          git rm .github/workflows/one-shot-invoice-issued-at.yml
+          git commit -m 'Remove workflow temporário da data de emissão'
+          git push origin HEAD:main
+          git push origin HEAD:cloudflare-provedor-plus

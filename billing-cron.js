@@ -243,7 +243,7 @@ function currentDueCandidate(client,today,daysBefore){
     if(dateFromKey(due)?.getTime()<=installation.getTime())due=addMonthsDue(due,1,client.due_day);
   }
   const diff=daysBetween(today,due);
-  if(diff<1||diff>daysBefore)return null;
+  if(diff<0||diff>daysBefore)return null;
   return due;
 }
 

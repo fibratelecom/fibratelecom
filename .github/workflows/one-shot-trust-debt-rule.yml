@@ -1,0 +1,52 @@
+name: one-shot-trust-debt-rule
+on:
+  push:
+    paths:
+      - '.github/workflows/one-shot-trust-debt-rule.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Aplicar regra sem alterar outros fluxos
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('trust-release-worker.js')
+          s=p.read_text()
+          old="function hasOverdue(state,clientId){return overdueRows(state,clientId).length>0}\nfunction maxOverdueDays"
+          new="function hasOverdue(state,clientId){return overdueRows(state,clientId).length>0}\nfunction unresolvedTrustDebtRows(local,state,clientId){const rows=overdueRows(state,clientId),ids=new Set((Array.isArray(local?.trust_release_invoice_ids)?local.trust_release_invoice_ids:[]).map(String));if(ids.size)return rows.filter(row=>ids.has(String(row?.id)));const released=text(local?.trust_release_at).slice(0,10);return released?rows.filter(row=>text(row?.due_date||row?.dueDate).slice(0,10)<=released):[]}\nfunction maxOverdueDays"
+          if old not in s: raise SystemExit('ponto 1 não encontrado')
+          s=s.replace(old,new,1)
+          old="function trustInfo(remote,local,state){const merged={...(local||{}),...(remote||{})},untilRaw=text(local?.trust_release_until),active=trustActive(local),usedMonth=text(local?.trust_release_used_month)||text(local?.trust_release_at).slice(0,7),usedThisMonth=usedMonth===monthKey(),status=normalize(merged.status),nextAvailableAt=usedThisMonth?nextMonthIso():'';let eligible=false,reasonCode='eligible',message='Você pode liberar sua conexão por 48 horas. Este benefício pode ser usado somente uma vez por mês.';if(active){reasonCode='active';message=`Sua liberação em confiança já está ativa até ${portalDate(untilRaw)}.`}else if(usedThisMonth){reasonCode='used_month';message=`A liberação em confiança já foi utilizada neste mês. Ela ficará disponível novamente em ${portalDate(nextAvailableAt)}.`}else if(status!=='bloqueado')"
+          new="function trustInfo(remote,local,state){const merged={...(local||{}),...(remote||{})},untilRaw=text(local?.trust_release_until),active=trustActive(local),usedMonth=text(local?.trust_release_used_month)||text(local?.trust_release_at).slice(0,7),usedThisMonth=usedMonth===monthKey(),status=normalize(merged.status),nextAvailableAt=usedThisMonth?nextMonthIso():'',unresolvedPreviousDebt=unresolvedTrustDebtRows(local,state,merged.id);let eligible=false,reasonCode='eligible',message='Você pode liberar sua conexão por 48 horas. Este benefício pode ser usado somente uma vez por mês.';if(active){reasonCode='active';message=`Sua liberação em confiança já está ativa até ${portalDate(untilRaw)}.`}else if(unresolvedPreviousDebt.length){reasonCode='previous_debt_unpaid';message='Para usar uma nova liberação em confiança, regularize primeiro as faturas que originaram a liberação anterior.'}else if(usedThisMonth){reasonCode='used_month';message=`A liberação em confiança já foi utilizada neste mês. Ela ficará disponível novamente em ${portalDate(nextAvailableAt)}.`}else if(status!=='bloqueado')"
+          if old not in s: raise SystemExit('ponto 2 não encontrado')
+          s=s.replace(old,new,1)
+          old="const before=JSON.parse(JSON.stringify(state)),merged={...state.clients[i],...remote},at=new Date(),until=new Date(at.getTime()+48*3600000),releaseMonth=monthKey(at),nextStatus=hasOverdue(state,remote.id)?'Em atraso':'Ativo';let unblocked=false;"
+          new="const before=JSON.parse(JSON.stringify(state)),merged={...state.clients[i],...remote},at=new Date(),until=new Date(at.getTime()+48*3600000),releaseMonth=monthKey(at),trustInvoiceIds=overdueRows(state,remote.id).map(row=>row?.id).filter(id=>id!==undefined&&id!==null),nextStatus=hasOverdue(state,remote.id)?'Em atraso':'Ativo';let unblocked=false;"
+          if old not in s: raise SystemExit('ponto 3 não encontrado')
+          s=s.replace(old,new,1)
+          old="patch:{trust_release_used_month:releaseMonth,trust_release_at:at.toISOString(),trust_release_until:until.toISOString(),trust_release_source:'area-cliente',access_history:"
+          new="patch:{trust_release_used_month:releaseMonth,trust_release_at:at.toISOString(),trust_release_until:until.toISOString(),trust_release_invoice_ids:trustInvoiceIds,trust_release_source:'area-cliente',access_history:"
+          if old not in s: raise SystemExit('ponto 4 não encontrado')
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          PY
+          node --check trust-release-worker.js
+          git diff --check
+          git diff -- trust-release-worker.js
+      - name: Publicar e remover workflow temporário
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm .github/workflows/one-shot-trust-debt-rule.yml
+          git add trust-release-worker.js .github/workflows/one-shot-trust-debt-rule.yml
+          git commit -m 'Impede nova confiança enquanto dívida anterior estiver aberta'
+          git push origin HEAD:main

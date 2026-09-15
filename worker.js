@@ -1,6 +1,6 @@
 // pp-build: 20260914-portal-billing-details1
 import { neon } from '@neondatabase/serverless';
-import { handleNativeAuth,handleNativeCloudState,handleNativeCloudData,resolveRouterForService,recordTrafficForService } from './worker-native-api.js';
+import { handleNativeAuth,handleNativeCloudState,handleNativeCloudData,resolveRouterForService,recordTrafficForService,finalizePaidNegotiations } from './worker-native-api.js';
 import { handleBankProxy } from './worker-bank-native.js';
 import { handleMikrotikProxy } from './worker-mikrotik-native.js';
 
@@ -396,6 +396,7 @@ async function loadState(sql){
 }
 
 async function saveState(sql,state){
+  finalizePaidNegotiations(state);
   const raw=JSON.stringify(state||{}),updatedAt=new Date().toISOString();
   await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${STATE_KEY},${raw}::jsonb,${updatedAt}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at`;
   return {state,updated_at:updatedAt};

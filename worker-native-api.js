@@ -34,7 +34,25 @@ const profileKey=id=>`${PROFILE_PREFIX}${Number(id)}`;
 const safeUser=user=>user?{id:Number(user.id),email:text(user.email),name:text(user.name),role:normalizeRole(user.role),created_at:user.created_at||null}:null;
 
 async function getSetting(sql,key){const rows=await sql`SELECT value,updated_at FROM pp_settings WHERE key=${key} LIMIT 1`;return Array.isArray(rows)?rows[0]||null:null;}
-async function setSetting(sql,key,value){const updatedAt=new Date().toISOString(),raw=JSON.stringify(value??null);const rows=await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${key},${raw}::jsonb,${updatedAt}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at RETURNING value,updated_at`;return Array.isArray(rows)?rows[0]||null:null;}
+export function finalizePaidNegotiations(state){
+  if(!state||typeof state!=='object'||Array.isArray(state))return state;
+  const invoices=Array.isArray(state.invoices)?state.invoices:[],agreements=Array.isArray(state.negotiations)?state.negotiations:[];
+  for(const agreement of agreements){
+    const id=text(agreement?.id);if(!id)continue;
+    const current=text(agreement?.status).toLowerCase();if(current.includes('cancel')||current.includes('falh'))continue;
+    const wanted=new Set((Array.isArray(agreement?.new_invoice_ids)?agreement.new_invoice_ids:[]).map(String));
+    const related=invoices.filter(invoice=>wanted.size?wanted.has(String(invoice?.id)):text(invoice?.negotiation_id)===id&&!text(invoice?.status).toLowerCase().includes('renegociado'));
+    if(!related.length)continue;
+    const allPaid=related.every(invoice=>{const status=text(invoice?.status).toLowerCase();return ['pago','paga','paid','baixado','recebido','recebida','quitado','quitada'].some(value=>status.includes(value))});
+    if(!allPaid)continue;
+    const paidTimes=related.map(invoice=>new Date(text(invoice?.paid_at)).getTime()).filter(Number.isFinite),completedAt=paidTimes.length?new Date(Math.max(...paidTimes)).toISOString():new Date().toISOString();
+    if(!current.includes('conclu')&&!current.includes('quitad'))agreement.status='Concluído';
+    if(!text(agreement?.completed_at))agreement.completed_at=completedAt;
+    agreement.updated_at=completedAt;
+  }
+  return state;
+}
+async function setSetting(sql,key,value){if(key===STATE_KEY)value=finalizePaidNegotiations(value);const updatedAt=new Date().toISOString(),raw=JSON.stringify(value??null);const rows=await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${key},${raw}::jsonb,${updatedAt}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at RETURNING value,updated_at`;return Array.isArray(rows)?rows[0]||null:null;}
 async function deleteSetting(sql,key){await sql`DELETE FROM pp_settings WHERE key=${key}`;}
 async function getProfile(sql,id,role){const row=await getSetting(sql,profileKey(id)),value=row?.value&&typeof row.value==='object'?row.value:{};return {active:value?.active!==false,phone:text(value?.phone),permissions:normalizePermissions(value?.permissions,role)};}
 async function saveProfile(sql,id,profile){return setSetting(sql,profileKey(id),profile);}

@@ -14,46 +14,35 @@ jobs:
           fetch-depth: 0
       - name: Agrupar inadimplentes por cliente
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          p = Path('src/panel-views.js')
-          s = p.read_text()
-
-          pattern = re.compile(r"    const overdueRows=overdue\.map\(\(x\)=>\{.*?\}\)\.join\(''\);\n    const overdueByClient=", re.S)
-          replacement = '''    const overdueGroups=new Map();
-    for(const x of overdue){
-      const key=String(Number(x.client_id)||text(x.client_name_snapshot)||x.id),group=overdueGroups.get(key)||{clientId:Number(x.client_id)||0,items:[]};
-      group.items.push(x);overdueGroups.set(key,group);
-    }
-    const overdueRows=[...overdueGroups.values()].map((group)=>{
-      const invoices=[...group.items].sort((a,b)=>text(a.due_date).localeCompare(text(b.due_date))),oldest=invoices[0],c=clients.find((item)=>Number(item.id)===Number(group.clientId))||{},name=text(c.name||oldest?.client_name_snapshot)||'Cliente não identificado',login=text(c.pppoe_username||c.pppoe_user||c.contract_number)||'—',phone=phoneLabel(c.phone||c.whatsapp)||'—',address=[c.address||c.street,c.address_number,c.neighborhood,c.city,c.state].map(text).filter(Boolean).join(', ')||'—',blocked=/bloque|suspens/i.test(`${text(c.status)} ${text(c.mikrotik_status)}`),total=invoices.reduce((sum,x)=>sum+invoiceLateBreakdown(x,settings,todayKey).totalCents,0),maxDays=daysOverdue(oldest),financialStatus=actions([status('Vencido'),'<span class="status danger"><i></i>Inadimplente</span>',blocked?status('Bloqueado'):'']);
-      const details=invoices.map((x)=>{const issued=text(x.bank_issued_at||x.issued_at||x.created_at||x.createdAt),discount=Math.max(0,Math.round(Number(x.discount_cents)||0)),days=daysOverdue(x),charge=invoiceLateBreakdown(x,settings,todayKey),reference=text(x.reference||x.competency||x.id),contract=text(x.contract_number),chargeNote=charge.feesCents?` · Base ${money(charge.baseCents,true)} · multa ${money(charge.fineCents,true)} · juros ${money(charge.interestCents,true)}`:'';return `<div data-overdue-row data-client-key="${esc(String(group.clientId||name))}" data-login="${esc(login)}" data-client="${esc(name)}" data-phone="${esc(phone)}" data-address="${esc(address)}" data-days="${esc(days)}" data-due="${esc(text(x.due_date))}" data-issued="${esc(issued)}" data-discount-cents="${esc(discount)}" data-late-fee-cents="${esc(charge.feesCents)}" data-value-cents="${esc(charge.totalCents)}"><strong>${esc(reference)}${contract?` · Contrato ${esc(contract)}`:''}</strong><small class="cell-note">Vencimento ${dateLabel(x.due_date)} · Emissão ${dateLabel(issued,true)} · ${days} dia${days===1?'':'s'} em atraso</small><small class="cell-note">Desconto ${money(discount,true)} · Atualizado ${money(charge.totalCents,true)}${chargeNote}</small></div>`;}).join('');
-      const count=invoices.length,detailLabel=`Ver ${count} fatura${count===1?'':'s'}`;
-      return `<tr data-search="${esc([name,c.contract_number,login,phone,address,'Inadimplente','Vencido',blocked?'Bloqueado':'',...invoices.map(x=>`${x.reference||x.competency||x.id} ${x.due_date||''}`)].filter(Boolean).join(' '))}"><td><strong>${esc(name)}</strong><small class="cell-note">Login: ${esc(login)}</small><small class="cell-note">${esc(address)}</small></td><td><div class="row-actions"><strong>${esc(phone)}</strong>${phone!=='—'?`<button class="btn success" type="button" data-whatsapp-number="${esc(phone)}">WhatsApp</button>`:''}</div></td><td><strong>${count}</strong><details><summary class="btn secondary">${esc(detailLabel)}</summary><div class="timeline-list">${details}</div></details></td><td><strong>${esc(maxDays)}</strong></td><td>${dateLabel(oldest?.due_date)}</td><td><strong>${money(total,true)}</strong><small class="cell-note danger-text">Total atualizado das ${count} fatura${count===1?'':'s'}</small></td><td>${financialStatus}</td></tr>`;
-    }).join('');
-    const overdueByClient='''
-
-          s2, n = pattern.subn(replacement, s, count=1)
-          if n != 1:
-              raise SystemExit(f'bloco overdueRows não encontrado ou ambíguo: {n}')
-          s = s2
-
-          old = "table(['Cliente / login','Telefone','Dias','Vencimento','Emissão','Desconto','Valor atualizado','Status'],overdueRows)"
-          new = "table(['Cliente / login','Telefone','Faturas','Maior atraso','Mais antiga','Valor atualizado','Status'],overdueRows)"
-          if old not in s:
-              raise SystemExit('cabeçalho da lista de inadimplentes não encontrado')
-          s = s.replace(old, new, 1)
-          p.write_text(s)
-          PY
+          node <<'NODE'
+          const fs=require('fs');
+          const path='src/panel-views.js';
+          let s=fs.readFileSync(path,'utf8');
+          const start=s.indexOf('    const overdueRows=overdue.map((x)=>{');
+          const end=s.indexOf('    const overdueByClient=',start);
+          if(start<0||end<0)throw new Error('Bloco atual de inadimplentes não encontrado.');
+          const replacement=`    const overdueGroups=new Map();
+              for(const x of overdue){const key=String(Number(x.client_id)||text(x.client_name_snapshot)||x.id),group=overdueGroups.get(key)||{clientId:Number(x.client_id)||0,items:[]};group.items.push(x);overdueGroups.set(key,group);}
+              const overdueRows=[...overdueGroups.values()].map((group)=>{
+                const invoices=[...group.items].sort((a,b)=>text(a.due_date).localeCompare(text(b.due_date))),oldest=invoices[0],c=clients.find((item)=>Number(item.id)===Number(group.clientId))||{},name=text(c.name||oldest?.client_name_snapshot)||'Cliente não identificado',login=text(c.pppoe_username||c.pppoe_user||c.contract_number)||'—',phone=phoneLabel(c.phone||c.whatsapp)||'—',address=[c.address||c.street,c.address_number,c.neighborhood,c.city,c.state].map(text).filter(Boolean).join(', ')||'—',blocked=/bloque|suspens/i.test(\`${'${text(c.status)}'} ${'${text(c.mikrotik_status)}'}\`),total=invoices.reduce((sum,x)=>sum+invoiceLateBreakdown(x,settings,todayKey).totalCents,0),maxDays=daysOverdue(oldest),financialStatus=actions([status('Vencido'),'<span class="status danger"><i></i>Inadimplente</span>',blocked?status('Bloqueado'):'']);
+                const details=invoices.map((x)=>{const issued=text(x.bank_issued_at||x.issued_at||x.created_at||x.createdAt),discount=Math.max(0,Math.round(Number(x.discount_cents)||0)),days=daysOverdue(x),charge=invoiceLateBreakdown(x,settings,todayKey),reference=text(x.reference||x.competency||x.id),contract=text(x.contract_number),chargeNote=charge.feesCents?\` · Base ${'${money(charge.baseCents,true)}'} · multa ${'${money(charge.fineCents,true)}'} · juros ${'${money(charge.interestCents,true)}'}\`:'';return \`<div data-overdue-row data-client-key="${'${esc(String(group.clientId||name))}'}" data-login="${'${esc(login)}'}" data-client="${'${esc(name)}'}" data-phone="${'${esc(phone)}'}" data-address="${'${esc(address)}'}" data-days="${'${esc(days)}'}" data-due="${'${esc(text(x.due_date))}'}" data-issued="${'${esc(issued)}'}" data-discount-cents="${'${esc(discount)}'}" data-late-fee-cents="${'${esc(charge.feesCents)}'}" data-value-cents="${'${esc(charge.totalCents)}'}"><strong>${'${esc(reference)}'}${'${contract?` · Contrato ${esc(contract)}`:``}'}</strong><small class="cell-note">Vencimento ${'${dateLabel(x.due_date)}'} · Emissão ${'${dateLabel(issued,true)}'} · ${'${days}'} dia${'${days===1?``:`s`}'} em atraso</small><small class="cell-note">Desconto ${'${money(discount,true)}'} · Atualizado ${'${money(charge.totalCents,true)}'}${'${chargeNote}'}</small></div>\`;}).join('');
+                const count=invoices.length,detailLabel=\`Ver ${'${count}'} fatura${'${count===1?``:`s`}'}\`;
+                return \`<tr data-search="${'${esc([name,c.contract_number,login,phone,address,`Inadimplente`,`Vencido`,blocked?`Bloqueado`:``,...invoices.map(x=>`${x.reference||x.competency||x.id} ${x.due_date||``}`)].filter(Boolean).join(` `))}'}"><td><strong>${'${esc(name)}'}</strong><small class="cell-note">Login: ${'${esc(login)}'}</small><small class="cell-note">${'${esc(address)}'}</small></td><td><div class="row-actions"><strong>${'${esc(phone)}'}</strong>${'${phone!==`—`?`<button class="btn success" type="button" data-whatsapp-number="${esc(phone)}">WhatsApp</button>`:``}'}</div></td><td><strong>${'${count}'}</strong><details><summary class="btn secondary">${'${esc(detailLabel)}'}</summary><div class="timeline-list">${'${details}'}</div></details></td><td><strong>${'${esc(maxDays)}'}</strong></td><td>${'${dateLabel(oldest?.due_date)}'}</td><td><strong>${'${money(total,true)}'}</strong><small class="cell-note danger-text">Total atualizado das ${'${count}'} fatura${'${count===1?``:`s`}'}</small></td><td>${'${financialStatus}'}</td></tr>\`;
+              }).join('');
+              `;
+          s=s.slice(0,start)+replacement+s.slice(end);
+          const oldHeader="table(['Cliente / login','Telefone','Dias','Vencimento','Emissão','Desconto','Valor atualizado','Status'],overdueRows)";
+          const newHeader="table(['Cliente / login','Telefone','Faturas','Maior atraso','Mais antiga','Valor atualizado','Status'],overdueRows)";
+          if(!s.includes(oldHeader))throw new Error('Cabeçalho da lista de inadimplentes não encontrado.');
+          s=s.replace(oldHeader,newHeader);
+          fs.writeFileSync(path,s);
+          NODE
       - name: Validar alteração
         run: |
           node --check src/panel-views.js
           git diff --check
           git diff -- src/panel-views.js
           test "$(git diff --name-only | tr '\n' ' ')" = "src/panel-views.js "
-          ! git diff --name-only | grep -E '(^|/)(packed|parts)(/|$)|(-v2|-v3|-fix|-novo|-final|-old|-backup)'
       - name: Publicar nas duas branches e limpar workflow temporário
         run: |
           git config user.name 'github-actions[bot]'

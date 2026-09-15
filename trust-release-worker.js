@@ -49,5 +49,5 @@ function normalizedConnection(client){return normalize(client?.connection_type||
 
 export default {
  fetch(request,env,ctx){const url=new URL(request.url);if(url.pathname===TRUST_PATH)return handleTrust(request,env);return billingWorker.fetch(request,env,ctx)},
- scheduled(controller,env,ctx){const task=(async()=>{await processExpiredTrust(env);await processAutomaticDelinquency(env);if(controller?.cron==='5 6 * * *')await runBillingCron(env)})();ctx.waitUntil(task.catch(error=>console.error('Provedor Plus: falha na rotina agendada.',error)))}
+ scheduled(controller,env,ctx){const task=(async()=>{await processExpiredTrust(env);await processAutomaticDelinquency(env);if(['*/15 * * * *','5 6 * * *'].includes(text(controller?.cron)))await runBillingCron(env)})();ctx.waitUntil(task.catch(error=>console.error('Provedor Plus: falha na rotina agendada.',error)))}
 };

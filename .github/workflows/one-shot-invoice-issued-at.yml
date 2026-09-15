@@ -17,7 +17,6 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          # Tela de mensalidades
           p = Path('src/panel-views.js')
           s = p.read_text()
           old = "  const invoiceStatusLabel=(row)=>paidInvoice(row)?'Pago':overdueInvoice(row)?'Vencida':'Pendente';\n"
@@ -37,7 +36,6 @@ jobs:
           s = s.replace(old, new, 1)
           p.write_text(s)
 
-          # Detalhes da cobrança
           p = Path('src/ui.js')
           s = p.read_text()
           old = "['Valor',value],['Vencimento',x.due_date],['Status',x.status]"
@@ -47,14 +45,14 @@ jobs:
           s = s.replace(old, new, 1)
           p.write_text(s)
 
-          # Registrar o instante real nas novas emissões bancárias
           p = Path('worker-bank-native.js')
           s = p.read_text()
           old = "else if(action==='issue'){const invoice=body.invoice,client=body.client;if(body.provider==='efi')data=invoice.billing_type==='Pix com vencimento'?await issueEfi(invoice,client,efi,'efi_bolix_pix'):invoice.billing_type==='Pix Automático'?await issuePixAuto(invoice,client,efi,body.pixAutoRecord):await issueEfi(invoice,client,efi);else if(body.provider==='mercadoPago')data=await issueMp(invoice,client,mp);else throw new Error('Banco emissor inválido.')}else if(action==='issue-carnet')data=await issueEfiCarnet(body.invoices,body.client,efi,body.description);"
-          new = "else if(action==='issue'){const invoice=body.invoice,client=body.client;if(body.provider==='efi')data=invoice.billing_type==='Pix com vencimento'?await issueEfi(invoice,client,efi,'efi_bolix_pix'):invoice.billing_type==='Pix Automático'?await issuePixAuto(invoice,client,efi,body.pixAutoRecord):await issueEfi(invoice,client,efi);else if(body.provider==='mercadoPago')data=await issueMp(invoice,client,mp);else throw new Error('Banco emissor inválido.');if(data&&typeof data==='object'&&!Array.isArray(data))data={...data,bank_issued_at:new Date().toISOString()}}else if(action==='issue-carnet'){data=await issueEfiCarnet(body.invoices,body.client,efi,body.description);const bankIssuedAt=new Date().toISOString();data={...(data||{}),items:(Array.isArray(data?.items)?data.items:[]).map(item=>({...item,bank_issued_at:bankIssuedAt}))}};"
-          if old not in s:
+          new = "else if(action==='issue'){const invoice=body.invoice,client=body.client;if(body.provider==='efi')data=invoice.billing_type==='Pix com vencimento'?await issueEfi(invoice,client,efi,'efi_bolix_pix'):invoice.billing_type==='Pix Automático'?await issuePixAuto(invoice,client,efi,body.pixAutoRecord):await issueEfi(invoice,client,efi);else if(body.provider==='mercadoPago')data=await issueMp(invoice,client,mp);else throw new Error('Banco emissor inválido.');if(data&&typeof data==='object'&&!Array.isArray(data))data={...data,bank_issued_at:new Date().toISOString()}}else if(action==='issue-carnet'){data=await issueEfiCarnet(body.invoices,body.client,efi,body.description);const bankIssuedAt=new Date().toISOString();data={...(data||{}),items:(Array.isArray(data?.items)?data.items:[]).map(item=>({...item,bank_issued_at:bankIssuedAt}))}}else if(action==='sync')data=await syncInvoice(body.invoice,efi,mp);"
+          target = "else if(action==='issue'){const invoice=body.invoice,client=body.client;if(body.provider==='efi')data=invoice.billing_type==='Pix com vencimento'?await issueEfi(invoice,client,efi,'efi_bolix_pix'):invoice.billing_type==='Pix Automático'?await issuePixAuto(invoice,client,efi,body.pixAutoRecord):await issueEfi(invoice,client,efi);else if(body.provider==='mercadoPago')data=await issueMp(invoice,client,mp);else throw new Error('Banco emissor inválido.')}else if(action==='issue-carnet')data=await issueEfiCarnet(body.invoices,body.client,efi,body.description);else if(action==='sync')data=await syncInvoice(body.invoice,efi,mp);"
+          if target not in s:
               raise SystemExit('handler de emissão bancária não encontrado')
-          s = s.replace(old, new, 1)
+          s = s.replace(target, new, 1)
           p.write_text(s)
           PY
       - name: Validar alteração

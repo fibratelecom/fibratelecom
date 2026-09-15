@@ -43,6 +43,6 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add billing-cron.js .github/workflows/one-shot-billing-recovery.yml
+          git add -A
           git commit -m 'Recupera mensalidades pendentes a cada ciclo'
           git push origin HEAD:main

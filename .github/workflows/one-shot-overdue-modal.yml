@@ -1,0 +1,69 @@
+name: one-shot-overdue-modal
+on:
+  push:
+    paths:
+      - '.github/workflows/one-shot-overdue-modal.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Trocar detalhe embutido por modal
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/panel-views.js')
+          s = p.read_text()
+          old = '''<td><strong>${count}</strong><details><summary class="btn secondary">${esc(detailLabel)}</summary><div class="timeline-list">${details}</div></details></td>'''
+          new = '''<td><strong>${count}</strong><div class="row-actions">${group.clientId?`<button class="btn secondary" type="button" data-action="overdue-client-invoices" data-id="${esc(group.clientId)}">${esc(detailLabel)}</button>`:''}</div></td>'''
+          if old not in s:
+              raise SystemExit('detalhe embutido da inadimplência não encontrado')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          p = Path('src/ui.js')
+          s = p.read_text()
+          marker = " function details(x){"
+          if marker not in s:
+              raise SystemExit('função details não encontrada')
+          helper = r''' function overdueClientInvoicesModal(id){
+  const c=client(id);if(!c)return toast('Cliente não encontrado.','error');
+  const today=brazilDateKey(),items=data().invoices.filter(x=>Number(x.client_id)===Number(id)&&openInvoice(x)&&text(x.due_date||x.dueDate).slice(0,10)<today).sort((a,b)=>text(a.due_date||a.dueDate).localeCompare(text(b.due_date||b.dueDate)));
+  if(!items.length)return toast('Nenhuma fatura vencida para este cliente.','error');
+  const dateOnly=value=>{const key=text(value).slice(0,10);return /^\d{4}-\d{2}-\d{2}$/.test(key)?key.split('-').reverse().join('/'):'—'},todayDate=new Date(`${today}T12:00:00-03:00`),total=items.reduce((sum,x)=>sum+invoiceLateBreakdown(x,state.settings||{},today).totalCents,0);
+  const rows=items.map(x=>{const late=invoiceLateBreakdown(x,state.settings||{},today),dueKey=text(x.due_date||x.dueDate).slice(0,10),dueDate=/^\d{4}-\d{2}-\d{2}$/.test(dueKey)?new Date(`${dueKey}T12:00:00-03:00`):null,days=dueDate&&!Number.isNaN(dueDate.getTime())?Math.max(0,Math.floor((todayDate-dueDate)/86400000)):0,issued=text(x.bank_issued_at||x.issued_at||x.created_at||x.createdAt),reference=text(x.reference||x.competency||x.id);return `<tr><td><strong>${esc(reference)}</strong><small class="cell-note">${esc(x.billing_type||x.description||'Mensalidade')}</small></td><td>${esc(dateOnly(dueKey))}</td><td><strong>${days}</strong></td><td>${esc(issued?dateTimeLabel(issued):'—')}</td><td>${money(late.baseCents,true)}</td><td><span class="danger-text">Multa ${money(late.fineCents,true)}</span><small class="cell-note danger-text">Juros ${money(late.interestCents,true)}</small></td><td><strong>${money(late.totalCents,true)}</strong></td></tr>`}).join('');
+  return modal(`${c.name} · ${items.length} fatura${items.length===1?'':'s'} vencida${items.length===1?'':'s'}`,`<section class="summary-bar"><div><span>Inadimplência</span><strong>Total atualizado ${money(total,true)}</strong><small class="cell-note">${items.length} fatura${items.length===1?'':'s'} vencida${items.length===1?'':'s'} · cobrança continua separada no financeiro</small></div></section><div class="table-wrap"><table><thead><tr><th>Referência</th><th>Vencimento</th><th>Dias</th><th>Emissão</th><th>Base</th><th>Multa / juros</th><th>Atualizado</th></tr></thead><tbody>${rows}</tbody></table></div>`,true)
+ }
+'''
+          s = s.replace(marker, helper + marker, 1)
+          old = " if(a==='invoice-details')return modal('Detalhes da cobrança',details(invoice(id)),true);"
+          new = " if(a==='overdue-client-invoices')return overdueClientInvoicesModal(id);\n" + old
+          if old not in s:
+              raise SystemExit('handler invoice-details não encontrado')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+      - name: Validar alteração
+        run: |
+          node --check src/panel-views.js
+          node --check src/ui.js
+          git diff --check
+          changed="$(git diff --name-only | sort | tr '\n' ' ')"
+          test "$changed" = "src/panel-views.js src/ui.js "
+      - name: Publicar e limpar workflow temporário
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/panel-views.js src/ui.js
+          git commit -m 'Abre faturas vencidas em janela'
+          git push origin HEAD:main
+          git push origin HEAD:cloudflare-provedor-plus
+          git rm .github/workflows/one-shot-overdue-modal.yml
+          git commit -m 'Remove workflow temporário do modal de inadimplência'
+          git push origin HEAD:main
+          git push origin HEAD:cloudflare-provedor-plus

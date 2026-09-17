@@ -1,6 +1,8 @@
 import baseWorker from './operations-entry-worker.js';
 import {neon} from '@neondatabase/serverless';
 import {buildPushHTTPRequest} from '@pushforge/builder';
+import {resolveRouterForService,recordTrafficForService} from './worker-native-api.js';
+import {handleMikrotikProxy} from './worker-mikrotik-native.js';
 
 const CLIENT_PUSH_PATH='/api/customer-push';
 const ADMIN_PUSH_PATH='/api/push-admin';
@@ -27,6 +29,37 @@ function json(data,status=200,headers={}){return new Response(JSON.stringify(dat
 function clientCors(request){const origin=text(request.headers.get('origin')),headers={'Vary':'Origin','Access-Control-Allow-Methods':'POST,OPTIONS','Access-Control-Allow-Headers':'Content-Type','Access-Control-Max-Age':'86400'};if(CLIENT_ORIGINS.has(origin))headers['Access-Control-Allow-Origin']=origin;return headers}
 function parseState(value){if(value&&typeof value==='object'&&!Array.isArray(value))return value;if(typeof value==='string')try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{}return {}}
 async function loadState(sql){const rows=await sql`SELECT value FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`;return parseState(rows?.[0]?.value)}
+function trafficService(row,scope='primary'){
+  const clientId=Number(row?.client_id??row?.id)||0,routerId=Number(row?.router_id)||0,username=text(row?.pppoe_username||row?.pppoe_user),connectionType=normalize(row?.connection_type),normalizedScope=text(scope)||'primary';
+  if(!clientId||!routerId||!username||(connectionType&&connectionType!=='pppoe'))return null;
+  return {clientId,routerId,username,scope:normalizedScope};
+}
+async function collectCustomerTraffic(env){
+  if(!env?.DATABASE_URL)return {routers:0,routerErrors:0,sessions:0,recorded:0,failed:0};
+  const sql=neon(env.DATABASE_URL),[clients,state]=await Promise.all([
+    sql`SELECT id,router_id,connection_type,pppoe_username,pppoe_user FROM pp_clients WHERE router_id IS NOT NULL AND COALESCE(NULLIF(pppoe_username,''),NULLIF(pppoe_user,'')) IS NOT NULL`,
+    loadState(sql)
+  ]),services=[],known=new Set();
+  for(const client of clients||[]){const service=trafficService(client,'primary'),key=service?`${service.clientId}|${service.scope}`:'';if(service&&!known.has(key)){known.add(key);services.push(service)}}
+  for(const contract of Array.isArray(state?.client_contracts)?state.client_contracts:[]){const scope=text(contract?.id);if(!scope)continue;const service=trafficService(contract,scope),key=service?`${service.clientId}|${service.scope}`:'';if(service&&!known.has(key)){known.add(key);services.push(service)}}
+  const byRouter=new Map();for(const service of services){const list=byRouter.get(service.routerId)||[];list.push(service);byRouter.set(service.routerId,list)}
+  const summary={routers:byRouter.size,routerErrors:0,sessions:0,recorded:0,failed:0};
+  for(const [routerId,routerServices] of byRouter){
+    try{
+      const router=await resolveRouterForService(env,routerId),request=new Request('https://painel.fibramais.workers.dev/api/mikrotik-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'router.sync',router})}),response=await handleMikrotikProxy(request);let body={};try{body=await response.json()}catch{}
+      if(!response.ok||!body?.ok)throw new Error(text(body?.error)||`Falha ao consultar o MikroTik (HTTP ${response.status}).`);
+      const active=Array.isArray(body?.data?.pppActive)?body.data.pppActive:[],sessions=new Map();summary.sessions+=active.length;
+      for(const row of active){const username=text(row?.name);if(username&&!sessions.has(username))sessions.set(username,row)}
+      const captures=[];
+      for(const service of routerServices){
+        const row=sessions.get(service.username);if(!row)continue;const sessionId=text(row?.['session-id']||row?.['.id']);if(!sessionId)continue;
+        captures.push({service,live:{online:true,sessionId,downloadBytes:Math.max(0,Number(row?.downloadBytes)||0),uploadBytes:Math.max(0,Number(row?.uploadBytes)||0),checkedAt:new Date().toISOString()}});
+      }
+      for(let start=0;start<captures.length;start+=20){const results=await Promise.allSettled(captures.slice(start,start+20).map(item=>recordTrafficForService(env,item.service.clientId,item.live,item.service.scope)));for(const result of results)result.status==='fulfilled'?summary.recorded++:summary.failed++}
+    }catch(error){summary.routerErrors++;console.error(`Provedor Plus: falha ao acumular tráfego PPPoE do MikroTik ${routerId}.`,error)}
+  }
+  return summary;
+}
 function normalize(value){return text(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')}
 function paidStatus(value){const status=normalize(value);return ['pago','paga','paid','baixado','recebido','recebida','quitado','quitada'].some(item=>status.includes(item))}
 function inactiveStatus(value){const status=normalize(value);return ['cancelado','canceled','renegociado','renegotiated','substituido','substituida'].some(item=>status.includes(item))}
@@ -463,7 +496,13 @@ export default {
   },
   async scheduled(controller,env,ctx){
     const cron=text(controller?.cron);
-    if(cron==='* * * * *'){if(env?.DATABASE_URL&&typeof ctx?.waitUntil==='function')ctx.waitUntil(processDueSchedules(env).catch(error=>console.error('Provedor Plus: falha nos agendamentos de notificações.',error)));return}
+    if(cron==='* * * * *'){
+      if(env?.DATABASE_URL&&typeof ctx?.waitUntil==='function'){
+        ctx.waitUntil(processDueSchedules(env).catch(error=>console.error('Provedor Plus: falha nos agendamentos de notificações.',error)));
+        ctx.waitUntil(collectCustomerTraffic(env).catch(error=>console.error('Provedor Plus: falha na coleta automática do consumo PPPoE.',error)));
+      }
+      return;
+    }
     try{
       await withStateWriteLock(env,async()=>{
         const tasks=[],lockedCtx=scheduledLockContext(ctx,tasks),result=baseWorker.scheduled(controller,env,lockedCtx);

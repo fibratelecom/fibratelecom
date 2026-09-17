@@ -1,6 +1,6 @@
 // pp-build: 20260914-portal-billing-details1
 import { neon } from '@neondatabase/serverless';
-import { handleNativeAuth,handleNativeCloudState,handleNativeCloudData,resolveRouterForService,recordTrafficForService,finalizePaidNegotiations } from './worker-native-api.js';
+import { handleNativeAuth,handleNativeCloudState,handleNativeCloudData,resolveRouterForService,recordTrafficForService,readTrafficForService,finalizePaidNegotiations } from './worker-native-api.js';
 import { handleBankProxy } from './worker-bank-native.js';
 import { handleMikrotikProxy } from './worker-mikrotik-native.js';
 
@@ -577,6 +577,7 @@ function portalDateLabel(value){
   const date=new Date(iso);if(Number.isNaN(date.getTime()))return text(value);
   try{return new Intl.DateTimeFormat('pt-BR',{dateStyle:'short',timeStyle:'medium',timeZone:'America/Maceio'}).format(date)}catch{return iso}
 }
+function portalTrafficFields(traffic={}){const current=traffic?.current||{},today=traffic?.today||{},daily=Array.isArray(traffic?.daily)?traffic.daily:[],history=Array.isArray(traffic?.history)?traffic.history:[];const monthDownloadBytes=Math.max(0,Number(current.download_bytes)||0),monthUploadBytes=Math.max(0,Number(current.upload_bytes)||0),todayDownloadBytes=Math.max(0,Number(today.download_bytes)||0),todayUploadBytes=Math.max(0,Number(today.upload_bytes)||0);return {trafficMonth:text(current.month),monthDownloadBytes,monthUploadBytes,monthTotalBytes:monthDownloadBytes+monthUploadBytes,todayDownloadBytes,todayUploadBytes,todayTotalBytes:todayDownloadBytes+todayUploadBytes,dailyUsage:daily.slice(-31),monthlyUsage:history.slice(0,12)}}
 async function portalConnectionContext(env,data){
   if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão nativa com o Neon não configurada na Cloudflare.'),{statusCode:503});
   const session=await verifyPortalSession(data?.session,env),sql=neon(env.DATABASE_URL),client=await portalClientById(sql,session.clientId);
@@ -584,11 +585,12 @@ async function portalConnectionContext(env,data){
   const state=await loadState(sql);if(repairLegacyPendingCashback(state,client))await saveState(sql,state);return {session,sql,client,state};
 }
 async function portalLiveConnection(env,sql,client){
-  const checkedFallback=normalizePortalDate(client?.mikrotik_last_sync),storedStatus=text(client?.mikrotik_status||client?.status),storedIp=text(client?.ip);
+  const checkedFallback=normalizePortalDate(client?.mikrotik_last_sync),storedStatus=text(client?.mikrotik_status||client?.status),storedIp=text(client?.ip);let storedTraffic=null;
+  try{storedTraffic=await readTrafficForService(env,client.id,'primary')}catch{}
   const fallback={
     status:storedStatus||'Aguardando dados',pppoeStatus:client?.connection_type==='PPPoE'?'Aguardando confirmação':'Não se aplica',pppoeConnected:null,online:null,
     ip:storedIp||'Aguardando dados',uptime:'',downloadBps:null,uploadBps:null,liveRatesAvailable:false,latencyMs:null,packetLoss:null,availability30Days:null,
-    quality:'Aguardando dados',checkedAt:checkedFallback,lastConnection:portalDateLabel(checkedFallback)||'Aguardando dados',lastConnectionIso:checkedFallback,lastConnectionLabel:portalDateLabel(checkedFallback),diagnosticStatus:'idle',diagnosticMessage:'Pronto para verificar sua conexão.',checking:false,isChecking:false,source:'stored',connectionError:''
+    quality:'Aguardando dados',checkedAt:checkedFallback,lastConnection:portalDateLabel(checkedFallback)||'Aguardando dados',lastConnectionIso:checkedFallback,lastConnectionLabel:portalDateLabel(checkedFallback),diagnosticStatus:'idle',diagnosticMessage:'Pronto para verificar sua conexão.',checking:false,isChecking:false,source:'stored',connectionError:'',...portalTrafficFields(storedTraffic)
   };
   if(client?.connection_type!=='PPPoE')return {...fallback,status:storedStatus||'Não se aplica',pppoeStatus:'Não se aplica',quality:'Não se aplica',source:'not-pppoe'};
   if(!Number(client?.router_id)||!text(client?.pppoe_username))return {...fallback,status:'Aguardando configuração',connectionError:'Cliente sem MikroTik ou usuário PPPoE vinculado.',source:'configuration'};
@@ -596,16 +598,15 @@ async function portalLiveConnection(env,sql,client){
     const router=await resolveRouterForService(env,client.router_id),response=await handleMikrotikProxy(new Request('https://painel.fibramais.workers.dev/api/mikrotik-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'client.status',router,data:client})}));
     let body={};try{body=await response.json()}catch{}
     if(!response.ok||!body.ok)throw new Error(text(body?.error)||`Falha no diagnóstico MikroTik (HTTP ${response.status}).`);
-    const live=body.data||{},checkedAt=normalizePortalDate(live.checkedAt)||new Date().toISOString();let traffic=null;
-    try{traffic=await recordTrafficForService(env,client.id,live)}catch{}
+    const live=body.data||{},checkedAt=normalizePortalDate(live.checkedAt)||new Date().toISOString();let traffic=storedTraffic;
+    try{traffic=await recordTrafficForService(env,client.id,live,'primary')}catch{}
     const liveDown=Number(live.downloadBps),liveUp=Number(live.uploadBps),trafficDown=Number(traffic?.downloadBps),trafficUp=Number(traffic?.uploadBps);
     const downloadBps=Number.isFinite(liveDown)?Math.max(0,liveDown):(Number.isFinite(trafficDown)?Math.max(0,trafficDown):null),uploadBps=Number.isFinite(liveUp)?Math.max(0,liveUp):(Number.isFinite(trafficUp)?Math.max(0,trafficUp):null);
     const latency=live.qualityAvailable&&Number.isFinite(Number(live.latencyMs))?Math.max(0,Math.round(Number(live.latencyMs))):null,loss=live.packetLoss===null||live.packetLoss===undefined||!Number.isFinite(Number(live.packetLoss))?null:Math.max(0,Math.min(100,Math.round(Number(live.packetLoss))));
     const connection={
       status:live.online?'Online':'Offline',pppoeStatus:live.online?'Conectado':'Desconectado',pppoeConnected:Boolean(live.online),online:Boolean(live.online),ip:text(live.ip)||storedIp||'Aguardando dados',uptime:text(live.uptime),
       downloadBps,uploadBps,liveRatesAvailable:Boolean(live.liveRatesAvailable)||(Number(downloadBps)>0)||(Number(uploadBps)>0),latencyMs:latency,packetLoss:loss,availability30Days:null,
-      quality:text(live.quality)||(live.online?'Boa':'Sem conexão'),qualityAvailable:Boolean(live.qualityAvailable),checkedAt,lastConnection:portalDateLabel(checkedAt),lastConnectionIso:checkedAt,lastConnectionLabel:portalDateLabel(checkedAt),diagnosticStatus:'complete',diagnosticMessage:'Diagnóstico concluído.',checking:false,isChecking:false,source:'mikrotik-live',connectionError:'',
-      trafficMonth:text(traffic?.current?.month),monthDownloadBytes:Number(traffic?.current?.download_bytes)||0,monthUploadBytes:Number(traffic?.current?.upload_bytes)||0
+      quality:text(live.quality)||(live.online?'Boa':'Sem conexão'),qualityAvailable:Boolean(live.qualityAvailable),checkedAt,lastConnection:portalDateLabel(checkedAt),lastConnectionIso:checkedAt,lastConnectionLabel:portalDateLabel(checkedAt),diagnosticStatus:'complete',diagnosticMessage:'Diagnóstico concluído.',checking:false,isChecking:false,source:'mikrotik-live',connectionError:'',...portalTrafficFields(traffic)
     };
     try{await sql`UPDATE pp_clients SET ip=COALESCE(NULLIF(${text(live.ip)},''),ip),mikrotik_status=${live.online?'Online':'Offline'},mikrotik_last_sync=${checkedAt},updated_at=${checkedAt} WHERE id=${Number(client.id)}`;}catch{}
     return connection;
@@ -614,6 +615,7 @@ async function portalLiveConnection(env,sql,client){
     return {...fallback,status:'Indisponível',quality:'Indisponível',checkedAt,lastConnection:portalDateLabel(checkedFallback||checkedAt),lastConnectionIso:checkedFallback||checkedAt,lastConnectionLabel:portalDateLabel(checkedFallback||checkedAt),diagnosticStatus:'error',diagnosticMessage:message,checking:false,isChecking:false,source:'mikrotik-error',connectionError:message};
   }
 }
+
 async function portalSnapshot(client,state,env,sessionToken='',connectionOverride=null,{includeProtocols=true}={}){
   const invoices=(Array.isArray(state.invoices)?state.invoices:[])
     .filter(row=>Number(row?.client_id)===Number(client.id))
@@ -634,7 +636,7 @@ async function portalSnapshot(client,state,env,sessionToken='',connectionOverrid
   if(includeProtocols)try{if(env.DATABASE_URL)protocols=await listProtocolRecords(neon(env.DATABASE_URL),client.id,20)}catch{}
   return {
     session:sessionToken||await portalSession(client,env),
-    client:portalClientData(client),
+    client:{...portalClientData(client),planSpeed:text((Array.isArray(state?.plans)?state.plans:[]).find(plan=>Number(plan?.id)===Number(client.plan_id))?.speed)},
     cashback:cashbackPortalData(state,client),
     invoice:current,
     invoices,

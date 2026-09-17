@@ -347,6 +347,7 @@ async function verifyBlocked(router,username){const [secret,active]=await Promis
 async function verifyUnblocked(router,username){const secret=await findSecret(router,username);if(!secret)throw Error('Acesso PPPoE não encontrado no MikroTik.');if(isDisabled(secret.disabled))throw Error('O MikroTik não confirmou a liberação do acesso PPPoE.');return true}
 async function blockClient(router,data){const username=text(data?.pppoe_username);if(!username)throw Error('Este cliente não possui usuário PPPoE.');let found=await findSecret(router,username);if(!found){await savePppoe(router,{...data,status:'Ativo'});found=await findSecret(router,username)}const id=text(found?.['.id']);if(!id)throw Error('Acesso PPPoE não encontrado no MikroTik.');await request(router,`ppp/secret/${encodeURIComponent(id)}`,{method:'PATCH',body:{disabled:'true',comment:`Provedor Plus - BLOQUEADO - INADIMPLÊNCIA - ${text(data?.name)||username}`}});await disconnect(router,username);await verifyBlocked(router,username);return {action:'blocked',secretId:id,username,verified:true}}
 async function unblockClient(router,data){const username=text(data?.pppoe_username);if(!username)throw Error('Este cliente não possui usuário PPPoE.');const found=await findSecret(router,username);if(!found)throw Error('Acesso PPPoE não encontrado no MikroTik.');const id=text(found['.id']),profile=text(data?.mikrotik_profile)||text(found.profile)||'default';await request(router,`ppp/secret/${encodeURIComponent(id)}`,{method:'PATCH',body:{disabled:'false',profile,comment:`Provedor Plus - ${text(data?.name)||username}`}});await verifyUnblocked(router,username);return {action:'unblocked',secretId:id,username,profile,verified:true}}
+async function reconnectClient(router,data){const username=text(data?.pppoe_username||data?.pppoe_user);if(!username)throw Error('Este cliente não possui usuário PPPoE.');const secret=await findSecret(router,username);if(!secret)throw Error('Acesso PPPoE não encontrado no MikroTik.');if(isDisabled(secret.disabled))throw Error('Este acesso PPPoE está bloqueado e não pode ser reiniciado.');const disconnected=await disconnect(router,username);return {action:'reconnected',username,disconnectedSessions:disconnected,secretId:text(secret?.['.id']),verified:true,checkedAt:new Date().toISOString()}}
 async function remoteInfo(router){const resource=await request(router,'system/resource');let cloud={};try{const r=await request(router,'ip/cloud/print',{method:'POST',body:{'.proplist':['dns-name','ddns-enabled','status','public-address']}});cloud=Array.isArray(r)?r[0]||{}:r||{}}catch{}return {enabled:true,status:'REST HTTPS',dnsName:text(cloud['dns-name'])||router.host,apiPrepared:true,architecture:text(resource?.['architecture-name']),version:text(resource?.version),routerHost:router.host,mode:'cloud-rest',clientConfig:''}}
 
 function response(status,data){return new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store, max-age=0','x-provedor-plus-edge':'cloudflare-mikrotik'}})}
@@ -355,7 +356,7 @@ export async function handleMikrotikProxy(request){
   if(request.method!=='POST')return response(405,{ok:false,error:'Método não permitido.'});
   try{
     let body={};try{body=await request.json()}catch{}
-    const action=text(body.action);const allowed=new Set(['router.test','router.sync','router.metrics','router.profiles','router.remote','pppoe.save','pppoe.delete','client.status','client.block','client.unblock']);
+    const action=text(body.action);const allowed=new Set(['router.test','router.sync','router.metrics','router.profiles','router.remote','pppoe.save','pppoe.delete','client.status','client.reconnect','client.block','client.unblock']);
     if(!allowed.has(action))throw Error('Ação MikroTik inválida.');
     const router=await normalizeRouter(body.router||{});let data;
     if(action==='router.test'||action==='router.sync')data=await snapshot(router);
@@ -365,6 +366,7 @@ export async function handleMikrotikProxy(request){
     else if(action==='pppoe.save')data=await savePppoe(router,body.data||{});
     else if(action==='pppoe.delete')data=await deletePppoe(router,body.data||{});
     else if(action==='client.status')data=await clientStatus(router,body.data||{});
+    else if(action==='client.reconnect')data=await reconnectClient(router,body.data||{});
     else if(action==='client.block')data=await blockClient(router,body.data||{});
     else if(action==='client.unblock')data=await unblockClient(router,body.data||{});
     return response(200,{ok:true,data});

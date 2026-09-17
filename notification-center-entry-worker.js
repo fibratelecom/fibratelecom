@@ -46,7 +46,7 @@ async function collectCustomerTraffic(env){
   const summary={routers:byRouter.size,routerErrors:0,sessions:0,recorded:0,failed:0};
   for(const [routerId,routerServices] of byRouter){
     try{
-      const router=await resolveRouterForService(env,routerId),request=new Request('https://painel.fibramais.workers.dev/api/mikrotik-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'router.sync',router})}),response=await handleMikrotikProxy(request);let body={};try{body=await response.json()}catch{}
+      const router=await resolveRouterForService(env,routerId),request=new Request('https://painel.fibramais.workers.dev/api/mikrotik-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'router.ppp-active',router})}),response=await handleMikrotikProxy(request);let body={};try{body=await response.json()}catch{}
       if(!response.ok||!body?.ok)throw new Error(text(body?.error)||`Falha ao consultar o MikroTik (HTTP ${response.status}).`);
       const active=Array.isArray(body?.data?.pppActive)?body.data.pppActive:[],sessions=new Map();summary.sessions+=active.length;
       for(const row of active){const username=text(row?.name);if(username&&!sessions.has(username))sessions.set(username,row)}

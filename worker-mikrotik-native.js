@@ -356,13 +356,14 @@ export async function handleMikrotikProxy(request){
   if(request.method!=='POST')return response(405,{ok:false,error:'Método não permitido.'});
   try{
     let body={};try{body=await request.json()}catch{}
-    const action=text(body.action);const allowed=new Set(['router.test','router.sync','router.metrics','router.profiles','router.remote','pppoe.save','pppoe.delete','client.status','client.reconnect','client.block','client.unblock']);
+    const action=text(body.action);const allowed=new Set(['router.test','router.sync','router.metrics','router.profiles','router.remote','router.ppp-active','pppoe.save','pppoe.delete','client.status','client.reconnect','client.block','client.unblock']);
     if(!allowed.has(action))throw Error('Ação MikroTik inválida.');
     const router=await normalizeRouter(body.router||{});let data;
     if(action==='router.test'||action==='router.sync')data=await snapshot(router);
     else if(action==='router.metrics')data=await dashboardMetrics(router);
     else if(action==='router.profiles')data=await profiles(router);
     else if(action==='router.remote')data=await remoteInfo(router);
+    else if(action==='router.ppp-active')data={pppActive:await activeSessions(router),lastSync:new Date().toISOString()};
     else if(action==='pppoe.save')data=await savePppoe(router,body.data||{});
     else if(action==='pppoe.delete')data=await deletePppoe(router,body.data||{});
     else if(action==='client.status')data=await clientStatus(router,body.data||{});

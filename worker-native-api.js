@@ -268,7 +268,7 @@ export async function resolveRouterForService(env,routerId){
 }
 export async function recordTrafficForService(env,clientId,live,scope='primary'){return trafficRecord(sqlFor(env),{clientId,live,scope});}
 export async function readTrafficForService(env,clientId,scope='primary'){return trafficRead(sqlFor(env),clientId,scope);}
-function trafficDateKey(date=new Date()){const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(date),map={};for(const part of parts)map[part.type]=part.value;return `${map.year}-${map.month}-${map.day}`}
+function trafficDateKey(date=new Date()){const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/Manaus',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(date),map={};for(const part of parts)map[part.type]=part.value;return `${map.year}-${map.month}-${map.day}`}
 function currentMonth(value=''){const month=text(value);return /^\d{4}-\d{2}$/.test(month)?month:trafficDateKey().slice(0,7)}
 function trafficScope(value='primary'){const raw=text(value)||'primary';return raw==='primary'?'primary':(raw.replace(/[^A-Za-z0-9_-]/g,'_').slice(0,80)||'primary')}
 function trafficKey(clientId,scope='primary'){const normalized=trafficScope(scope);return normalized==='primary'?`client_traffic_v1_${clientId}`:`client_traffic_v1_${clientId}_${normalized}`}

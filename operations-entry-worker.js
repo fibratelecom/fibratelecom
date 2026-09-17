@@ -119,7 +119,7 @@ async function sendOne(sql,row,vapid,payload){
 async function sendRows(sql,rows,vapid,payload){let sent=0,failed=0;for(let start=0;start<rows.length;start+=10){const results=await Promise.all(rows.slice(start,start+10).map(row=>sendOne(sql,row,vapid,payload)));for(const result of results)result.ok?sent++:failed++}return {sent,failed,total:rows.length}}
 
 async function attemptEvent(sql,env,row){
-  const claimed=await sql`UPDATE pp_push_events SET attempts=attempts+1,last_attempt_at=now() WHERE id=${Number(row.id)} AND completed=false AND (last_attempt_at IS NULL OR last_attempt_at<now()-interval '2 minutes') RETURNING *`;
+  const claimed=await sql`UPDATE pp_push_events SET attempts=attempts+1,last_attempt_at=now() WHERE id=${Number(row.id)} AND completed=false AND (attempts=0 OR (attempts=1 AND sent_count=0 AND failed_count>0 AND last_attempt_at<now()-interval '2 minutes')) RETURNING *`;
   const event=claimed?.[0];if(!event)return {skipped:true};
   const subscriptions=await sql`SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=${Number(event.client_id)} AND active=true ORDER BY id ASC`;if(!subscriptions.length)return {skipped:true,reason:'no-subscriptions'};
   const vapid=await readVapid(env,sql);if(!vapid?.privateJWK)return {skipped:true,reason:'no-vapid'};
@@ -203,7 +203,7 @@ async function protocolEvents(sql,settings){
 }
 
 async function retryPending(sql,env){
-  const rows=await sql`SELECT * FROM pp_push_events WHERE completed=false AND event_type LIKE 'operational:%' AND created_at>=now()-interval '7 days' AND (last_attempt_at IS NULL OR last_attempt_at<now()-interval '2 minutes') ORDER BY id ASC LIMIT 40`;let sent=0,failed=0;
+  const rows=await sql`SELECT * FROM pp_push_events WHERE completed=false AND event_type LIKE 'operational:%' AND created_at>=now()-interval '7 days' AND attempts=1 AND sent_count=0 AND failed_count>0 AND last_attempt_at<now()-interval '2 minutes' ORDER BY id ASC LIMIT 40`;let sent=0,failed=0;
   for(const row of rows||[]){try{const result=await attemptEvent(sql,env,row);sent+=Number(result?.sent)||0;failed+=Number(result?.failed)||0}catch{failed++}}
   return {sent,failed};
 }

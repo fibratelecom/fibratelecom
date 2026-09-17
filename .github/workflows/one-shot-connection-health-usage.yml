@@ -1,0 +1,200 @@
+name: one-shot-connection-health-usage
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-connection-health-usage.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Implementar backend de conexão e consumo
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new, label):
+              p=Path(path); s=p.read_text()
+              if old not in s: raise SystemExit(f'anchor not found: {label}')
+              p.write_text(s.replace(old,new,1))
+
+          def replace_block(path, start, end, new, label):
+              p=Path(path); s=p.read_text(); a=s.find(start)
+              if a<0: raise SystemExit(f'start not found: {label}')
+              b=s.find(end,a)
+              if b<0: raise SystemExit(f'end not found: {label}')
+              p.write_text(s[:a]+new+s[b:])
+
+          # ---- worker-native-api.js: ampliar armazenamento de tráfego existente, sem criar persistência paralela.
+          p=Path('worker-native-api.js'); s=p.read_text()
+          start="export async function recordTrafficForService(env,clientId,live){return trafficRecord(sqlFor(env),{clientId,live});}"
+          end="\n\nfunction cashbackClient"
+          a=s.find(start); b=s.find(end,a)
+          if a<0 or b<0: raise SystemExit('traffic block not found')
+          traffic_block=r'''export async function recordTrafficForService(env,clientId,live,scope='primary'){return trafficRecord(sqlFor(env),{clientId,live,scope});}
+export async function readTrafficForService(env,clientId,scope='primary'){return trafficRead(sqlFor(env),clientId,scope);}
+function trafficDateKey(date=new Date()){const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(date),map={};for(const part of parts)map[part.type]=part.value;return `${map.year}-${map.month}-${map.day}`}
+function currentMonth(value=''){const month=text(value);return /^\d{4}-\d{2}$/.test(month)?month:trafficDateKey().slice(0,7)}
+function trafficScope(value='primary'){const raw=text(value)||'primary';return raw==='primary'?'primary':(raw.replace(/[^A-Za-z0-9_-]/g,'_').slice(0,80)||'primary')}
+function trafficKey(clientId,scope='primary'){const normalized=trafficScope(scope);return normalized==='primary'?`client_traffic_v1_${clientId}`:`client_traffic_v1_${clientId}_${normalized}`}
+function trafficDaily(value=[]){return (Array.isArray(value)?value:[]).map(item=>({day:text(item?.day).slice(0,10),download_bytes:Math.max(0,Number(item?.download_bytes)||0),upload_bytes:Math.max(0,Number(item?.upload_bytes)||0)})).filter(item=>/^\d{4}-\d{2}-\d{2}$/.test(item.day)).sort((a,b)=>a.day.localeCompare(b.day)).slice(-62)}
+function trafficEmpty(month=currentMonth()){return {month,download_bytes:0,upload_bytes:0,lastSession:'',lastDownload:0,lastUpload:0,lastAt:0,history:[],daily:[]}}
+function trafficNormalized(value={},month=currentMonth()){let x={...trafficEmpty(month),...(value&&typeof value==='object'?value:{})};x.history=Array.isArray(x.history)?x.history:[];x.daily=trafficDaily(x.daily);if(x.month!==month){const history=x.month?[{month:x.month,download_bytes:Math.max(0,Number(x.download_bytes)||0),upload_bytes:Math.max(0,Number(x.upload_bytes)||0)},...x.history].filter((item,index,all)=>item?.month&&all.findIndex(other=>other?.month===item.month)===index).slice(0,12):x.history.slice(0,12);x={...trafficEmpty(month),history,daily:x.daily}}return x}
+function trafficView(x={}){const daily=trafficDaily(x.daily),todayKey=trafficDateKey(),today=daily.find(item=>item.day===todayKey)||{day:todayKey,download_bytes:0,upload_bytes:0};return {current:{month:currentMonth(x.month),download_bytes:Math.max(0,Number(x.download_bytes)||0),upload_bytes:Math.max(0,Number(x.upload_bytes)||0)},today:{...today,total_bytes:(Number(today.download_bytes)||0)+(Number(today.upload_bytes)||0)},daily:daily.map(item=>({...item,total_bytes:(Number(item.download_bytes)||0)+(Number(item.upload_bytes)||0)})),history:(Array.isArray(x.history)?x.history:[]).slice(0,12).map(item=>({month:text(item?.month),download_bytes:Math.max(0,Number(item?.download_bytes)||0),upload_bytes:Math.max(0,Number(item?.upload_bytes)||0),total_bytes:Math.max(0,Number(item?.download_bytes)||0)+Math.max(0,Number(item?.upload_bytes)||0)}))}}
+async function trafficRead(sql,clientId,scope='primary'){const id=num(clientId);if(!id)throw Object.assign(new Error('Cliente inválido para consultar tráfego.'),{statusCode:400});const row=await getSetting(sql,trafficKey(id,scope)),all=row?.value&&typeof row.value==='object'?row.value:trafficEmpty(),x=trafficNormalized(all);return trafficView(x)}
+async function trafficRecord(sql,data={}){const clientId=num(data.clientId);if(!clientId)throw Object.assign(new Error('Cliente inválido para registrar tráfego.'),{statusCode:400});const month=currentMonth(data.month),key=trafficKey(clientId,data.scope),row=await getSetting(sql,key),all=row?.value&&typeof row.value==='object'?row.value:trafficEmpty(month),live=data.live&&typeof data.live==='object'?data.live:{},t=Date.now(),day=trafficDateKey();let x=trafficNormalized(all,month),downloadBps=Number(live.downloadBps)||0,uploadBps=Number(live.uploadBps)||0;if(live.online&&live.sessionId){const d=Math.max(0,Number(live.downloadBytes)||0),u=Math.max(0,Number(live.uploadBytes)||0),same=x.lastSession===String(live.sessionId),dd=same?Math.max(0,d-(Number(x.lastDownload)||0)):d,du=same?Math.max(0,u-(Number(x.lastUpload)||0)):u;if(!downloadBps&&same&&x.lastAt){const seconds=Math.max(.25,(t-Number(x.lastAt))/1000);downloadBps=Math.round(dd*8/seconds);uploadBps=Math.round(du*8/seconds)}x.download_bytes=(Number(x.download_bytes)||0)+dd;x.upload_bytes=(Number(x.upload_bytes)||0)+du;const daily=trafficDaily(x.daily);let item=daily.find(entry=>entry.day===day);if(!item){item={day,download_bytes:0,upload_bytes:0};daily.push(item)}item.download_bytes=(Number(item.download_bytes)||0)+dd;item.upload_bytes=(Number(item.upload_bytes)||0)+du;x.daily=trafficDaily(daily);x.lastSession=String(live.sessionId);x.lastDownload=d;x.lastUpload=u;x.lastAt=t}await setSetting(sql,key,x);return {...trafficView(x),downloadBps,uploadBps}}
+'''
+          p.write_text(s[:a]+traffic_block+s[b:])
+
+          # ---- worker-mikrotik-native.js: reiniciar somente a sessão PPPoE, sem desativar secret.
+          replace_once('worker-mikrotik-native.js',
+            "const action=text(body.action);const allowed=new Set(['router.test','router.sync','router.metrics','router.profiles','router.remote','pppoe.save','pppoe.delete','client.status','client.block','client.unblock']);",
+            "const action=text(body.action);const allowed=new Set(['router.test','router.sync','router.metrics','router.profiles','router.remote','pppoe.save','pppoe.delete','client.status','client.reconnect','client.block','client.unblock']);",
+            'mikrotik allowed reconnect')
+          insert="""async function reconnectClient(router,data){const username=text(data?.pppoe_username||data?.pppoe_user);if(!username)throw Error('Este cliente não possui usuário PPPoE.');const secret=await findSecret(router,username);if(!secret)throw Error('Acesso PPPoE não encontrado no MikroTik.');if(isDisabled(secret.disabled))throw Error('Este acesso PPPoE está bloqueado e não pode ser reiniciado.');const disconnected=await disconnect(router,username);return {action:'reconnected',username,disconnectedSessions:disconnected,secretId:text(secret?.['.id']),verified:true,checkedAt:new Date().toISOString()}}\n"""
+          replace_once('worker-mikrotik-native.js','async function remoteInfo(router){',insert+'async function remoteInfo(router){','insert reconnect function')
+          replace_once('worker-mikrotik-native.js',
+            "else if(action==='client.status')data=await clientStatus(router,body.data||{});\n    else if(action==='client.block')data=await blockClient(router,body.data||{});",
+            "else if(action==='client.status')data=await clientStatus(router,body.data||{});\n    else if(action==='client.reconnect')data=await reconnectClient(router,body.data||{});\n    else if(action==='client.block')data=await blockClient(router,body.data||{});",
+            'route reconnect action')
+
+          # ---- worker.js: expor consumo diário/mensal existente na resposta da Área do Cliente.
+          replace_once('worker.js',
+            "import { handleNativeAuth,handleNativeCloudState,handleNativeCloudData,resolveRouterForService,recordTrafficForService,finalizePaidNegotiations } from './worker-native-api.js';",
+            "import { handleNativeAuth,handleNativeCloudState,handleNativeCloudData,resolveRouterForService,recordTrafficForService,readTrafficForService,finalizePaidNegotiations } from './worker-native-api.js';",
+            'worker traffic import')
+          marker="""function portalDateLabel(value){
+  const iso=normalizePortalDate(value);if(!iso)return '';
+  const date=new Date(iso);if(Number.isNaN(date.getTime()))return text(value);
+  try{return new Intl.DateTimeFormat('pt-BR',{dateStyle:'short',timeStyle:'medium',timeZone:'America/Maceio'}).format(date)}catch{return iso}
+}
+"""
+          helper=marker+"""function portalTrafficFields(traffic={}){const current=traffic?.current||{},today=traffic?.today||{},daily=Array.isArray(traffic?.daily)?traffic.daily:[],history=Array.isArray(traffic?.history)?traffic.history:[];const monthDownloadBytes=Math.max(0,Number(current.download_bytes)||0),monthUploadBytes=Math.max(0,Number(current.upload_bytes)||0),todayDownloadBytes=Math.max(0,Number(today.download_bytes)||0),todayUploadBytes=Math.max(0,Number(today.upload_bytes)||0);return {trafficMonth:text(current.month),monthDownloadBytes,monthUploadBytes,monthTotalBytes:monthDownloadBytes+monthUploadBytes,todayDownloadBytes,todayUploadBytes,todayTotalBytes:todayDownloadBytes+todayUploadBytes,dailyUsage:daily.slice(-31),monthlyUsage:history.slice(0,12)}}
+"""
+          replace_once('worker.js',marker,helper,'portal traffic helper')
+          p=Path('worker.js'); s=p.read_text(); a=s.find('async function portalLiveConnection(env,sql,client){'); b=s.find('\nasync function portalSnapshot',a)
+          if a<0 or b<0: raise SystemExit('portalLiveConnection block not found')
+          live_fn=r'''async function portalLiveConnection(env,sql,client){
+  const checkedFallback=normalizePortalDate(client?.mikrotik_last_sync),storedStatus=text(client?.mikrotik_status||client?.status),storedIp=text(client?.ip);let storedTraffic=null;
+  try{storedTraffic=await readTrafficForService(env,client.id,'primary')}catch{}
+  const fallback={
+    status:storedStatus||'Aguardando dados',pppoeStatus:client?.connection_type==='PPPoE'?'Aguardando confirmação':'Não se aplica',pppoeConnected:null,online:null,
+    ip:storedIp||'Aguardando dados',uptime:'',downloadBps:null,uploadBps:null,liveRatesAvailable:false,latencyMs:null,packetLoss:null,availability30Days:null,
+    quality:'Aguardando dados',checkedAt:checkedFallback,lastConnection:portalDateLabel(checkedFallback)||'Aguardando dados',lastConnectionIso:checkedFallback,lastConnectionLabel:portalDateLabel(checkedFallback),diagnosticStatus:'idle',diagnosticMessage:'Pronto para verificar sua conexão.',checking:false,isChecking:false,source:'stored',connectionError:'',...portalTrafficFields(storedTraffic)
+  };
+  if(client?.connection_type!=='PPPoE')return {...fallback,status:storedStatus||'Não se aplica',pppoeStatus:'Não se aplica',quality:'Não se aplica',source:'not-pppoe'};
+  if(!Number(client?.router_id)||!text(client?.pppoe_username))return {...fallback,status:'Aguardando configuração',connectionError:'Cliente sem MikroTik ou usuário PPPoE vinculado.',source:'configuration'};
+  try{
+    const router=await resolveRouterForService(env,client.router_id),response=await handleMikrotikProxy(new Request('https://painel.fibramais.workers.dev/api/mikrotik-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'client.status',router,data:client})}));
+    let body={};try{body=await response.json()}catch{}
+    if(!response.ok||!body.ok)throw new Error(text(body?.error)||`Falha no diagnóstico MikroTik (HTTP ${response.status}).`);
+    const live=body.data||{},checkedAt=normalizePortalDate(live.checkedAt)||new Date().toISOString();let traffic=storedTraffic;
+    try{traffic=await recordTrafficForService(env,client.id,live,'primary')}catch{}
+    const liveDown=Number(live.downloadBps),liveUp=Number(live.uploadBps),trafficDown=Number(traffic?.downloadBps),trafficUp=Number(traffic?.uploadBps);
+    const downloadBps=Number.isFinite(liveDown)?Math.max(0,liveDown):(Number.isFinite(trafficDown)?Math.max(0,trafficDown):null),uploadBps=Number.isFinite(liveUp)?Math.max(0,liveUp):(Number.isFinite(trafficUp)?Math.max(0,trafficUp):null);
+    const latency=live.qualityAvailable&&Number.isFinite(Number(live.latencyMs))?Math.max(0,Math.round(Number(live.latencyMs))):null,loss=live.packetLoss===null||live.packetLoss===undefined||!Number.isFinite(Number(live.packetLoss))?null:Math.max(0,Math.min(100,Math.round(Number(live.packetLoss))));
+    const connection={
+      status:live.online?'Online':'Offline',pppoeStatus:live.online?'Conectado':'Desconectado',pppoeConnected:Boolean(live.online),online:Boolean(live.online),ip:text(live.ip)||storedIp||'Aguardando dados',uptime:text(live.uptime),
+      downloadBps,uploadBps,liveRatesAvailable:Boolean(live.liveRatesAvailable)||(Number(downloadBps)>0)||(Number(uploadBps)>0),latencyMs:latency,packetLoss:loss,availability30Days:null,
+      quality:text(live.quality)||(live.online?'Boa':'Sem conexão'),qualityAvailable:Boolean(live.qualityAvailable),checkedAt,lastConnection:portalDateLabel(checkedAt),lastConnectionIso:checkedAt,lastConnectionLabel:portalDateLabel(checkedAt),diagnosticStatus:'complete',diagnosticMessage:'Diagnóstico concluído.',checking:false,isChecking:false,source:'mikrotik-live',connectionError:'',...portalTrafficFields(traffic)
+    };
+    try{await sql`UPDATE pp_clients SET ip=COALESCE(NULLIF(${text(live.ip)},''),ip),mikrotik_status=${live.online?'Online':'Offline'},mikrotik_last_sync=${checkedAt},updated_at=${checkedAt} WHERE id=${Number(client.id)}`;}catch{}
+    return connection;
+  }catch(error){
+    const checkedAt=new Date().toISOString(),message=error instanceof Error?error.message:String(error);
+    return {...fallback,status:'Indisponível',quality:'Indisponível',checkedAt,lastConnection:portalDateLabel(checkedFallback||checkedAt),lastConnectionIso:checkedFallback||checkedAt,lastConnectionLabel:portalDateLabel(checkedFallback||checkedAt),diagnosticStatus:'error',diagnosticMessage:message,checking:false,isChecking:false,source:'mikrotik-error',connectionError:message};
+  }
+}
+'''
+          p.write_text(s[:a]+live_fn+s[b:])
+          replace_once('worker.js','    client:portalClientData(client),',"    client:{...portalClientData(client),planSpeed:text((Array.isArray(state?.plans)?state.plans:[]).find(plan=>Number(plan?.id)===Number(client.plan_id))?.speed)},",'portal plan speed')
+
+          # ---- customer-service-worker.js: consumo por contrato adicional e reinício seguro da sessão PPPoE.
+          replace_once('customer-service-worker.js',
+            "import {resolveRouterForService} from './worker-native-api.js';",
+            "import {resolveRouterForService,recordTrafficForService,readTrafficForService} from './worker-native-api.js';",
+            'customer traffic imports')
+          replace_once('customer-service-worker.js',
+            "async function portalClient(sql,id){const rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code FROM pp_clients WHERE id=${Number(id)} LIMIT 1`;return rows?.[0]||null}",
+            "async function portalClient(sql,id){const rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,router_id,connection_type,pppoe_username,ip,mikrotik_status,mikrotik_last_sync FROM pp_clients WHERE id=${Number(id)} LIMIT 1`;return rows?.[0]||null}",
+            'portal client network columns')
+          marker="function contractDateTime(value){if(!value)return '';const date=new Date(value);if(Number.isNaN(date.getTime()))return '';return new Intl.DateTimeFormat('pt-BR',{dateStyle:'short',timeStyle:'short',timeZone:'America/Sao_Paulo'}).format(date)}\n"
+          helper=marker+"function contractTrafficFields(traffic={}){const current=traffic?.current||{},today=traffic?.today||{},daily=Array.isArray(traffic?.daily)?traffic.daily:[],history=Array.isArray(traffic?.history)?traffic.history:[];const monthDownloadBytes=Math.max(0,Number(current.download_bytes)||0),monthUploadBytes=Math.max(0,Number(current.upload_bytes)||0),todayDownloadBytes=Math.max(0,Number(today.download_bytes)||0),todayUploadBytes=Math.max(0,Number(today.upload_bytes)||0);return {trafficMonth:text(current.month),monthDownloadBytes,monthUploadBytes,monthTotalBytes:monthDownloadBytes+monthUploadBytes,todayDownloadBytes,todayUploadBytes,todayTotalBytes:todayDownloadBytes+todayUploadBytes,dailyUsage:daily.slice(-31),monthlyUsage:history.slice(0,12)}}\n"
+          replace_once('customer-service-worker.js',marker,helper,'contract traffic helper')
+          p=Path('customer-service-worker.js'); s=p.read_text(); a=s.find('async function liveContractConnection(env,contract,client,base={}){'); b=s.find('\nfunction isConnectionAction',a)
+          if a<0 or b<0: raise SystemExit('liveContractConnection block not found')
+          live_contract=r'''async function liveContractConnection(env,contract,client,base={}){
+  const scope=text(contract?.id)||'primary',connectionType=normalize(contract?.connection_type);let storedTraffic=null;
+  try{storedTraffic=await readTrafficForService(env,client.id,scope)}catch{}
+  const fallback={...storedContractConnection(contract,base),...contractTrafficFields(storedTraffic)};
+  if(connectionType!=='pppoe'||!Number(contract?.router_id)||!text(contract?.pppoe_username))return fallback;
+  try{
+    const router=await resolveRouterForService(env,contract.router_id),request=new Request('https://painel.fibramais.workers.dev/api/mikrotik-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'client.status',router,data:{...contract,name:text(client?.name),document:text(client?.document)}})}),response=await handleMikrotikProxy(request);let body={};try{body=await response.json()}catch{}if(!response.ok||!body?.ok)throw new Error(body?.error||`Falha ao consultar o MikroTik (HTTP ${response.status}).`);const live=body.data||{},checkedAt=text(live.checkedAt)||new Date().toISOString();let traffic=storedTraffic;try{traffic=await recordTrafficForService(env,client.id,live,scope)}catch{}const latency=live.qualityAvailable&&Number.isFinite(Number(live.latencyMs))?Math.max(0,Math.round(Number(live.latencyMs))):null,loss=live.packetLoss===null||live.packetLoss===undefined||!Number.isFinite(Number(live.packetLoss))?null:Math.max(0,Math.min(100,Math.round(Number(live.packetLoss))));return {...fallback,status:live.online?'Online':'Offline',pppoeStatus:live.online?'Conectado':'Desconectado',pppoeConnected:Boolean(live.online),online:Boolean(live.online),ip:text(live.ip)||text(contract?.ip)||'Aguardando dados',uptime:text(live.uptime),downloadBps:Number.isFinite(Number(live.downloadBps))?Math.max(0,Number(live.downloadBps)):null,uploadBps:Number.isFinite(Number(live.uploadBps))?Math.max(0,Number(live.uploadBps)):null,liveRatesAvailable:Boolean(live.liveRatesAvailable),latencyMs:latency,packetLoss:loss,quality:text(live.quality)||(live.online?'Boa':'Sem conexão'),qualityAvailable:Boolean(live.qualityAvailable),checkedAt,lastConnection:contractDateTime(checkedAt),lastConnectionIso:checkedAt,lastConnectionLabel:contractDateTime(checkedAt),diagnosticStatus:'complete',diagnosticMessage:'Diagnóstico concluído.',checking:false,isChecking:false,source:'mikrotik-contract-live',connectionError:'',...contractTrafficFields(traffic)};
+  }catch(error){const message=error instanceof Error?error.message:String(error),checkedAt=new Date().toISOString();return {...fallback,status:'Indisponível',quality:'Indisponível',checkedAt,lastConnection:contractDateTime(text(contract?.mikrotik_last_sync)||checkedAt),lastConnectionIso:text(contract?.mikrotik_last_sync)||checkedAt,lastConnectionLabel:contractDateTime(text(contract?.mikrotik_last_sync)||checkedAt),diagnosticStatus:'error',diagnosticMessage:message,checking:false,isChecking:false,source:'mikrotik-contract-error',connectionError:message}}
+}
+'''
+          p.write_text(s[:a]+live_contract+s[b:])
+          replace_once('customer-service-worker.js',
+            "const sql=neon(env.DATABASE_URL),client=await portalClient(sql,clientId);if(!client)return response;const state=await loadState(sql),contractId=action==='login'?'primary':text(requestBody?.data?.contractId)||'primary',live=!contractId.startsWith('primary')&&isConnectionAction(action),scoped=await scopePortalToContract(portal,client,state,env,contractId,live),accessBlock=portalAccessBlock(client,state,scoped,contractId),scopedWithBlock={...scoped,accessBlock,client:{...(scoped?.client||{}),accessBlock}};",
+            "const sql=neon(env.DATABASE_URL),client=await portalClient(sql,clientId);if(!client)return response;const state=await loadState(sql),contractId=action==='login'?'primary':text(requestBody?.data?.contractId)||'primary',live=!contractId.startsWith('primary')&&(action==='refresh'||isConnectionAction(action)),scoped=await scopePortalToContract(portal,client,state,env,contractId,live),accessBlock=portalAccessBlock(client,state,scoped,contractId),scopedWithBlock={...scoped,accessBlock,client:{...(scoped?.client||{}),accessBlock}};",
+            'live extra refresh')
+          replace_once('customer-service-worker.js',
+            "client:{...(portal.client||{}),contract:selected.contractNumber,plan:selectedPlan.name,status:selected.status,address:selectedAddress||portal?.client?.address,selectedContractId:selected.id,contractLabel:selected.label,primaryContract:false,dueDay:selected.dueDay}",
+            "client:{...(portal.client||{}),contract:selected.contractNumber,plan:selectedPlan.name,planSpeed:selectedPlan.speed,status:selected.status,address:selectedAddress||portal?.client?.address,selectedContractId:selected.id,contractLabel:selected.label,primaryContract:false,dueDay:selected.dueDay}",
+            'extra contract plan speed')
+
+          restart_fn=r'''
+async function handleConnectionRestart(request,env,body={}){
+  const cors=corsFor(request);
+  try{
+    if(request.method!=='POST')throw Object.assign(new Error('Método não permitido.'),{statusCode:405});
+    const origin=text(request.headers.get('origin'));if(!PORTAL_ORIGINS.has(origin))throw Object.assign(new Error('Origem não autorizada.'),{statusCode:403});
+    if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Provedor Plus não configurada.'),{statusCode:503});
+    const session=await verifySession(body?.data?.session,env),sql=neon(env.DATABASE_URL),client=await portalClient(sql,session.clientId);if(!client)throw Object.assign(new Error('Cliente não encontrado.'),{statusCode:404});
+    const state=await loadState(sql),contractId=text(body?.data?.contractId)||'primary',raw=contractId==='primary'?null:rawContractFor(client,state,contractId);if(contractId!=='primary'&&!raw)throw Object.assign(new Error('Contrato selecionado não foi encontrado.'),{statusCode:404});
+    const service=contractId==='primary'?{...(localClient(state,client.id)||{}),...client}:{...raw,name:text(client.name),document:text(client.document)};
+    if(normalize(service?.connection_type)!=='pppoe')throw Object.assign(new Error('O reinício automático está disponível somente para conexões PPPoE.'),{statusCode:409});
+    if(!Number(service?.router_id)||!text(service?.pppoe_username||service?.pppoe_user))throw Object.assign(new Error('A conexão ainda não possui MikroTik e usuário PPPoE vinculados.'),{statusCode:409});
+    const router=await resolveRouterForService(env,service.router_id),proxyRequest=new Request('https://painel.fibramais.workers.dev/api/mikrotik-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'client.reconnect',router,data:service})}),proxyResponse=await handleMikrotikProxy(proxyRequest);let result={};try{result=await proxyResponse.json()}catch{}if(!proxyResponse.ok||!result?.ok)throw Object.assign(new Error(text(result?.error)||'Não foi possível reiniciar a conexão PPPoE.'),{statusCode:409});
+    return json({ok:true,data:{restarted:true,contractId,disconnectedSessions:Number(result?.data?.disconnectedSessions)||0,message:'Conexão reiniciada. Aguarde alguns segundos para o PPPoE reconectar automaticamente.'}},200,cors);
+  }catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,cors)}
+}
+'''
+          replace_once('customer-service-worker.js','\nfunction portalAuditDefinition(path,action){',restart_fn+'\nfunction portalAuditDefinition(path,action){','insert restart handler')
+          replace_once('customer-service-worker.js',
+            "  if(action==='negotiate')return {category:'Financeiro',subject:'Negociação realizada'};\n  if(isConnectionAction(action))return {category:'Conexão',subject:'Diagnóstico da conexão'};",
+            "  if(action==='negotiate')return {category:'Financeiro',subject:'Negociação realizada'};\n  if(action==='connection-restart')return {category:'Conexão',subject:'Reinício da conexão'};\n  if(isConnectionAction(action))return {category:'Conexão',subject:'Diagnóstico da conexão'};",
+            'restart audit definition')
+          replace_once('customer-service-worker.js',
+            "  if(path===PORTAL_PATH&&action==='plan-request')return handlePlanRequest(request,env,body);\n  const definition=portalAuditDefinition(path,action),baseResponse=await baseWorker.fetch(request,env,ctx);",
+            "  if(path===PORTAL_PATH&&action==='plan-request')return handlePlanRequest(request,env,body);\n  if(path===PORTAL_PATH&&action==='connection-restart'){const response=await handleConnectionRestart(request,env,body),definition=portalAuditDefinition(path,action);if(!definition||!response.ok||!env.DATABASE_URL)return response;try{const protocol=await recordAuditProtocol(body,action,definition,response,env);return augmentResponseWithProtocol(response,protocol)}catch(error){console.error('Provedor Plus: reinício concluído, mas o protocolo não pôde ser registrado.',error);return response}}\n  const definition=portalAuditDefinition(path,action),baseResponse=await baseWorker.fetch(request,env,ctx);",
+            'route restart handler')
+
+          PY
+          node --check worker-native-api.js
+          node --check worker-mikrotik-native.js
+          node --check worker.js
+          node --check customer-service-worker.js
+          git diff --check
+          grep -q "client.reconnect" worker-mikrotik-native.js
+          grep -q "todayTotalBytes" worker.js
+          grep -q "dailyUsage" customer-service-worker.js
+          grep -q "Reinício da conexão" customer-service-worker.js
+          git diff -- worker-native-api.js worker-mikrotik-native.js worker.js customer-service-worker.js
+      - name: Salvar backend e remover workflow temporário
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add worker-native-api.js worker-mikrotik-native.js worker.js customer-service-worker.js
+          git commit -m 'Adiciona saúde da conexão, consumo e reinício PPPoE'
+          git push origin HEAD:main
+          git rm .github/workflows/one-shot-connection-health-usage.yml
+          git commit -m 'Remove workflow temporário da conexão do cliente'
+          git push origin HEAD:main

@@ -9,7 +9,7 @@ workers_dev = true
 command = "node --check app.js && node -e \"Promise.all([import('./src/api.js'),import('./src/ui.js')])\""
 
 [triggers]
-crons = [ "* * * * *", "*/15 * * * *", "5 6 * * *" ]
+crons = [ "* * * * *", "2-59/3 * * * *", "*/15 * * * *", "5 6 * * *" ]
 
 [[mtls_certificates]]
 binding = "EFI_MTLS"

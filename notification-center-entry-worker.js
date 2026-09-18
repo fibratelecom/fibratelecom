@@ -502,7 +502,7 @@ export default {
         ctx.waitUntil(processDueSchedules(env).catch(error=>console.error('Provedor Plus: falha nos agendamentos de notificações.',error)));
         ctx.waitUntil(collectCustomerTraffic(env).catch(error=>console.error('Provedor Plus: falha na coleta automática do consumo PPPoE.',error)));
         const scheduledAt=Number(controller?.scheduledTime)||Date.now();
-        if(new Date(scheduledAt).getUTCMinutes()%15===0)ctx.waitUntil(withStateWriteLock(env,()=>runBillingCron(env),60000).catch(error=>console.error('Provedor Plus: falha na checagem de mensalidades a cada 15 minutos.',error)));
+        ctx.waitUntil(withStateWriteLock(env,async()=>{const state=await loadState(neon(env.DATABASE_URL)),lastAt=Date.parse(text(state?.settings?.billing_cloudflare_last_result?.at)),quarterStart=Math.floor(scheduledAt/(15*60*1000))*(15*60*1000);if(!Number.isFinite(lastAt)||lastAt<quarterStart)await runBillingCron(env)},60000).catch(error=>console.error('Provedor Plus: falha na checagem de mensalidades a cada 15 minutos.',error)));
       }
       return;
     }

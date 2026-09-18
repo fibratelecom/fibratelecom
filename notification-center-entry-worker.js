@@ -1,4 +1,5 @@
 import baseWorker from './operations-entry-worker.js';
+import {runBillingCron} from './billing-cron.js';
 import {neon} from '@neondatabase/serverless';
 import {buildPushHTTPRequest} from '@pushforge/builder';
 import {resolveRouterForService,recordTrafficForService} from './worker-native-api.js';
@@ -500,6 +501,8 @@ export default {
       if(env?.DATABASE_URL&&typeof ctx?.waitUntil==='function'){
         ctx.waitUntil(processDueSchedules(env).catch(error=>console.error('Provedor Plus: falha nos agendamentos de notificações.',error)));
         ctx.waitUntil(collectCustomerTraffic(env).catch(error=>console.error('Provedor Plus: falha na coleta automática do consumo PPPoE.',error)));
+        const scheduledAt=Number(controller?.scheduledTime)||Date.now();
+        if(new Date(scheduledAt).getUTCMinutes()%15===0)ctx.waitUntil(withStateWriteLock(env,()=>runBillingCron(env),60000).catch(error=>console.error('Provedor Plus: falha na checagem de mensalidades a cada 15 minutos.',error)));
       }
       return;
     }

@@ -302,7 +302,9 @@ async function runBillingCron(env,{force=false}={}){
   const enabled=state.settings.billing_auto_enabled!==false&&String(state.settings.billing_auto_enabled)!=='false';
   if(!enabled&&!force)return {enabled:false,generated:0,issued:0,skipped:0,failed:0,errors:[]};
   const todayParts=brazilParts(),today=keyFromParts(todayParts.year,todayParts.month,todayParts.day),daysBefore=Math.max(1,Math.min(30,Math.floor(num(state.settings.billing_auto_days_before)||7)));
-  const vault=await readBankSettings(env,sql),rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code FROM pp_clients ORDER BY id ASC`;
+  let vault={},bankSettingsError='';
+  try{vault=await readBankSettings(env,sql)}catch(error){bankSettingsError=error instanceof Error?error.message:String(error)}
+  const rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code FROM pp_clients ORDER BY id ASC`;
   const primaryClients=(Array.isArray(rows)?rows:[]).map(remote=>mergedClient(remote,state)),owners=new Map(primaryClients.map(item=>[Number(item.id),item])),extraContracts=Array.isArray(state?.client_contracts)?state.client_contracts:[],contractClients=extraContracts.map(item=>{const owner=owners.get(Number(item?.client_id));return owner?mergedContractClient(item,owner,state):null}).filter(Boolean),billable=[...primaryClients,...contractClients];
   let generated=0,issued=0,skipped=0,failed=0;const errors=[];
   for(const client of billable){
@@ -326,6 +328,7 @@ async function runBillingCron(env,{force=false}={}){
       const inactive=['pago','paid','baixado','renegociado','renegotiated','substituido','substituida'].some(value=>normalize(invoice.status).includes(value));
       const mpPixWaiting=text(invoice.bank_status_detail)==='mercado_pago_pix_on_demand'&&(normalize(invoice.payment_mode_override)==='pix_mp'||normalize(client.billing_mode)==='pix_mp');
       if(inactive||text(invoice.bank_charge_id)||mpPixWaiting){skipped++;continue}
+      if(bankSettingsError)throw new Error(`Credenciais bancárias indisponíveis: ${bankSettingsError}`);
       if(existing&&deferredNegotiationInstallment(invoice))prepareCombinedMonthly(invoice,client,plan,dueDate);
       const remoteIssued=await issueAndSave(env,sql,state,invoice,client,vault,Boolean(existing));
       if(remoteIssued)issued++;if(!existing)generated++;

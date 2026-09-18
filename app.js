@@ -275,6 +275,73 @@ root?.addEventListener('input', (event) => {
   });
 });
 
+function normalizeFinancePaymentSearch(value) {
+  return String(value || '')
+    .toLocaleLowerCase('pt-BR')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+}
+
+function applyFinancePaymentPage(scope, requestedPage) {
+  if (!(scope instanceof HTMLElement)) return;
+  const rows = [...scope.querySelectorAll('[data-finance-payment-row]')];
+  const search = scope.querySelector('[data-finance-payment-search]');
+  const query = normalizeFinancePaymentSearch(search?.value);
+  const matched = rows.filter((row) => {
+    const searchable = normalizeFinancePaymentSearch(`${row.dataset.search || ''} ${row.textContent || ''}`);
+    return !query || searchable.includes(query);
+  });
+  const pageSize = 10;
+  const pages = Math.max(1, Math.ceil(matched.length / pageSize));
+  let page = Number(requestedPage ?? scope.dataset.page ?? 1) || 1;
+  page = Math.max(1, Math.min(page, pages));
+  scope.dataset.page = String(page);
+  const start = (page - 1) * pageSize;
+  const end = start + pageSize;
+  rows.forEach((row) => { row.hidden = true; });
+  matched.forEach((row, index) => { row.hidden = !(index >= start && index < end); });
+
+  const prev = scope.querySelector('[data-finance-payment-prev]');
+  const next = scope.querySelector('[data-finance-payment-next]');
+  if (prev) prev.disabled = page <= 1;
+  if (next) next.disabled = page >= pages;
+  scope.querySelectorAll('[data-finance-payment-page]').forEach((button) => {
+    const number = Number(button.dataset.financePaymentPage) || 1;
+    button.hidden = number > pages;
+    button.disabled = number === page;
+    button.classList.toggle('primary', number === page);
+    button.classList.toggle('secondary', number !== page);
+  });
+  const info = scope.querySelector('[data-finance-payment-page-info]');
+  if (info) info.textContent = `Página ${page} de ${pages} · ${matched.length} registro${matched.length === 1 ? '' : 's'}`;
+}
+
+root?.addEventListener('click', (event) => {
+  const button = event.target.closest?.('[data-finance-payment-page],[data-finance-payment-prev],[data-finance-payment-next]');
+  if (!button) return;
+  const scope = button.closest('[data-finance-payments]');
+  if (!scope) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  const current = Number(scope.dataset.page) || 1;
+  if (button.hasAttribute('data-finance-payment-page')) {
+    applyFinancePaymentPage(scope, Number(button.dataset.financePaymentPage) || 1);
+  } else if (button.hasAttribute('data-finance-payment-prev')) {
+    applyFinancePaymentPage(scope, current - 1);
+  } else {
+    applyFinancePaymentPage(scope, current + 1);
+  }
+}, true);
+
+root?.addEventListener('input', (event) => {
+  const input = event.target instanceof HTMLInputElement ? event.target : null;
+  if (!input?.hasAttribute('data-finance-payment-search')) return;
+  const scope = input.closest('[data-finance-payments]');
+  if (!scope) return;
+  applyFinancePaymentPage(scope, 1);
+});
+
 // Este observador roda antes do controlador e comprova que a validação nativa liberou
 // a submissão. Não cancela nem altera o evento.
 root?.addEventListener('submit', (event) => {

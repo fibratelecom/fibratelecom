@@ -69,6 +69,7 @@ function invoiceCents(row){for(const key of ['amount_cents','total_cents','value
 function brl(cents){return new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format((Number(cents)||0)/100)}
 function brDate(value){const match=text(value).slice(0,10).match(/^(\d{4})-(\d{2})-(\d{2})$/);return match?`${match[3]}/${match[2]}/${match[1]}`:'não disponível'}
 function base64UrlBytes(value){const raw=text(value).replace(/-/g,'+').replace(/_/g,'/'),padded=raw+'='.repeat((4-raw.length%4)%4),bin=atob(padded),out=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);return out}
+function base64Url(value){const bytes=value instanceof Uint8Array?value:new Uint8Array(value);let binary='';for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,Math.min(i+0x8000,bytes.length)));return btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
 function normalizeClickUrl(value=''){const raw=text(value);if(!raw)return `${CLIENT_APP_ORIGIN}/`;if(raw.startsWith('/'))return `${CLIENT_APP_ORIGIN}${raw}`;try{const url=new URL(raw);return CLIENT_ORIGINS.has(url.origin)?url.toString():`${CLIENT_APP_ORIGIN}/`}catch{return `${CLIENT_APP_ORIGIN}/`}}
 function notificationPayload(title,body,url,tag='fibra-plus'){return {title:text(title)||'Fibra+',body:text(body),icon:`${CLIENT_APP_ORIGIN}/icons/fibra-app-192.png?v=15`,badge:`${CLIENT_APP_ORIGIN}/icons/fibra-app-192.png?v=15`,tag:text(tag)||'fibra-plus',lang:'pt-BR',data:{url:normalizeClickUrl(url)}}}
 
@@ -305,10 +306,28 @@ async function requireAdmin(request,env,ctx){
   return user||{};
 }
 
-async function portalKey(env){const secret=text(env.PORTAL_SESSION_SECRET)||text(env.DATABASE_URL);if(!secret)throw Object.assign(new Error('Sessão segura do portal não configurada.'),{statusCode:503});return crypto.subtle.importKey('raw',enc.encode(secret),{name:'HMAC',hash:'SHA-256'},false,['verify'])}
+async function portalKey(env){const secret=text(env.PORTAL_SESSION_SECRET)||text(env.DATABASE_URL);if(!secret)throw Object.assign(new Error('Sessão segura do portal não configurada.'),{statusCode:503});return crypto.subtle.importKey('raw',enc.encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign','verify'])}
+async function portalServiceSession(env,clientId){const payload=base64Url(enc.encode(JSON.stringify({clientId:Number(clientId),exp:Date.now()+5*60*1000}))),key=await portalKey(env),signature=new Uint8Array(await crypto.subtle.sign('HMAC',key,enc.encode(payload)));return `${payload}.${base64Url(signature)}`}
 async function verifySession(token,env){
   const parts=text(token).split('.');if(parts.length!==2)throw Object.assign(new Error('Sessão do cliente inválida. Entre novamente.'),{statusCode:401});
   try{const key=await portalKey(env),ok=await crypto.subtle.verify('HMAC',key,base64UrlBytes(parts[1]),enc.encode(parts[0]));if(!ok)throw new Error('assinatura');const payload=JSON.parse(new TextDecoder().decode(base64UrlBytes(parts[0]))),clientId=Number(payload?.clientId)||0,exp=Number(payload?.exp)||0;if(!clientId||exp<=Date.now())throw new Error('expirada');return {clientId}}catch{throw Object.assign(new Error('Sessão do cliente expirada ou inválida. Entre novamente.'),{statusCode:401})}
+}
+async function reconcilePendingPayments(env){
+  if(!env?.DATABASE_URL)return {checked:0,confirmed:0,failed:0};
+  const sql=neon(env.DATABASE_URL),state=await loadState(sql),candidates=(Array.isArray(state?.invoices)?state.invoices:[]).filter(row=>{
+    if(!invoiceOpen(row))return false;
+    const provider=text(row?.bank_provider).toLowerCase(),detail=normalize(row?.bank_status_detail),paymentId=text(row?.bank_payment_id||row?.bank_charge_id);
+    return paymentId&&detail.includes('pix')&&(provider==='mercadopago'||provider==='efi');
+  }).sort((a,b)=>text(a?.bank_last_sync_at).localeCompare(text(b?.bank_last_sync_at))).slice(0,10);
+  let checked=0,confirmed=0,failed=0;
+  for(const invoice of candidates){
+    const clientId=Number(invoice?.client_id)||0,paymentId=text(invoice?.bank_payment_id||invoice?.bank_charge_id);if(!clientId||!paymentId)continue;
+    try{
+      const session=await portalServiceSession(env,clientId),request=new Request('https://painel.fibramais.workers.dev/api/customer-portal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'payment-status',data:{session,invoiceId:invoice.id,paymentId}})}),response=await baseWorker.fetch(request,env,{});let body={};try{body=await response.json()}catch{}
+      checked++;if(!response.ok||!body?.ok){failed++;continue}const status=normalize(body?.data?.status),current=normalize(body?.data?.state);if(['approved','paid','pago','baixado'].includes(status)||paidStatus(current))confirmed++;
+    }catch(error){failed++;console.error(`Provedor Plus: falha ao conciliar automaticamente a fatura ${text(invoice?.id)}.`,error)}
+  }
+  return {checked,confirmed,failed};
 }
 
 async function pushCryptoKey(env){const secret=text(env.BANK_SECRET_KEY)||text(env.PORTAL_SESSION_SECRET)||text(env.DATABASE_URL);if(!secret)throw new Error('Chave de proteção das notificações não configurada.');const raw=await crypto.subtle.digest('SHA-256',enc.encode(`provedor-plus-push-v1|${secret}`));return crypto.subtle.importKey('raw',raw,{name:'AES-GCM'},false,['decrypt'])}
@@ -502,7 +521,7 @@ export default {
         ctx.waitUntil(processDueSchedules(env).catch(error=>console.error('Provedor Plus: falha nos agendamentos de notificações.',error)));
         ctx.waitUntil(collectCustomerTraffic(env).catch(error=>console.error('Provedor Plus: falha na coleta automática do consumo PPPoE.',error)));
         const scheduledAt=Number(controller?.scheduledTime)||Date.now();
-        ctx.waitUntil(withStateWriteLock(env,async()=>{const state=await loadState(neon(env.DATABASE_URL)),lastAt=Date.parse(text(state?.settings?.billing_cloudflare_last_result?.at)),quarterStart=Math.floor(scheduledAt/(15*60*1000))*(15*60*1000);if(!Number.isFinite(lastAt)||lastAt<quarterStart)await runBillingCron(env)},60000).catch(error=>console.error('Provedor Plus: falha na checagem de mensalidades a cada 15 minutos.',error)));
+        ctx.waitUntil(withStateWriteLock(env,async()=>{try{await reconcilePendingPayments(env)}catch(error){console.error('Provedor Plus: falha na conciliação automática de pagamentos pendentes.',error)}const state=await loadState(neon(env.DATABASE_URL)),lastAt=Date.parse(text(state?.settings?.billing_cloudflare_last_result?.at)),quarterStart=Math.floor(scheduledAt/(15*60*1000))*(15*60*1000);if(!Number.isFinite(lastAt)||lastAt<quarterStart)await runBillingCron(env)},60000).catch(error=>console.error('Provedor Plus: falha na checagem protegida de pagamentos e mensalidades.',error)));
       }
       return;
     }

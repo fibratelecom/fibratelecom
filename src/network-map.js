@@ -136,18 +136,24 @@ export function connectionMapStatus(row={},live=null){
   return 'unknown';
 }
 
+function currentLiveState(row,liveByKey){
+  if(/bloque|suspens/.test(normalized(`${row?.status||''} ${row?.mikrotik_status||''}`)))return 'blocked';
+  const live=liveByKey.get(row._serviceKey),state=normalized(live?.state);
+  return state==='online'||state==='offline'?state:'unknown';
+}
+
 export function networkOutageAlerts({state={},clients=[],contracts=[],liveByKey=new Map(),routers=[]}={}){
   const ctos=networkCtos(state),points=servicePoints(clients,contracts),alerts=[],ctoAlerts=[];
   for(const cto of ctos){
-    const rows=points.filter((row)=>text(row?.cto_id)===text(cto.id)),eligible=rows.filter((row)=>connectionMapStatus(row,liveByKey.get(row._serviceKey))!=='blocked'),monitored=eligible.filter((row)=>connectionMapStatus(row,liveByKey.get(row._serviceKey))!=='unknown'),offline=monitored.filter((row)=>connectionMapStatus(row,liveByKey.get(row._serviceKey))==='offline');
+    const rows=points.filter((row)=>text(row?.cto_id)===text(cto.id)),monitored=rows.filter((row)=>['online','offline'].includes(currentLiveState(row,liveByKey))),offline=monitored.filter((row)=>currentLiveState(row,liveByKey)==='offline');
     if(monitored.length>=2&&offline.length>=2&&offline.length/monitored.length>=0.5){
-      const ratio=offline.length/monitored.length,alert={type:'cto',level:ratio>=0.8?'critical':'warning',title:`Possível falha na ${text(cto.name)||'CTO'}`,detail:`${offline.length} de ${monitored.length} clientes monitorados estão offline`,cto,offline:offline.length,monitored:monitored.length};alerts.push(alert);ctoAlerts.push(alert);
+      const ratio=offline.length/monitored.length,alert={type:'cto',level:ratio>=0.8?'critical':'warning',title:`Possível falha na ${text(cto.name)||'CTO'}`,detail:`${offline.length} de ${monitored.length} clientes com leitura atual estão offline`,cto,offline:offline.length,monitored:monitored.length};alerts.push(alert);ctoAlerts.push(alert);
     }
   }
   const routerMap=new Map((Array.isArray(routers)?routers:[]).map((row)=>[Number(row?.id)||0,row]));
   for(const routerId of [...new Set(points.map((row)=>Number(row?.router_id)||0).filter(Boolean))]){
-    const rows=points.filter((row)=>Number(row?.router_id)===routerId),eligible=rows.filter((row)=>connectionMapStatus(row,liveByKey.get(row._serviceKey))!=='blocked'),monitored=eligible.filter((row)=>connectionMapStatus(row,liveByKey.get(row._serviceKey))!=='unknown'),offline=monitored.filter((row)=>connectionMapStatus(row,liveByKey.get(row._serviceKey))==='offline');
-    if(monitored.length>=3&&offline.length>=3&&offline.length/monitored.length>=0.6){const router=routerMap.get(routerId)||{};alerts.push({type:'router',level:offline.length/monitored.length>=0.85?'critical':'warning',title:`Possível falha no ${text(router.name)||'MikroTik'}`,detail:`${offline.length} de ${monitored.length} acessos deste roteador estão offline`,router,offline:offline.length,monitored:monitored.length});}
+    const rows=points.filter((row)=>Number(row?.router_id)===routerId),monitored=rows.filter((row)=>['online','offline'].includes(currentLiveState(row,liveByKey))),offline=monitored.filter((row)=>currentLiveState(row,liveByKey)==='offline');
+    if(monitored.length>=3&&offline.length>=3&&offline.length/monitored.length>=0.6){const router=routerMap.get(routerId)||{};alerts.push({type:'router',level:offline.length/monitored.length>=0.85?'critical':'warning',title:`Possível falha no ${text(router.name)||'MikroTik'}`,detail:`${offline.length} de ${monitored.length} acessos com leitura atual deste roteador estão offline`,router,offline:offline.length,monitored:monitored.length});}
   }
   if(ctoAlerts.length>=2){
     for(let i=0;i<ctoAlerts.length;i++)for(let j=i+1;j<ctoAlerts.length;j++){
@@ -173,7 +179,7 @@ export function createNetworkMap(container,{onMapClick,onMarkerClick}={}){
   function screenPoint(lat,lng){const {w,h}=size(),cx=lngToWorldX(view.lng,view.zoom),cy=latToWorldY(view.lat,view.zoom);return {x:w/2+(lngToWorldX(lng,view.zoom)-cx),y:h/2+(latToWorldY(lat,view.zoom)-cy)};}
   function latLngFromScreen(x,y){const {w,h}=size(),cx=lngToWorldX(view.lng,view.zoom),cy=latToWorldY(view.lat,view.zoom);return {lat:worldYToLat(cy+y-h/2,view.zoom),lng:worldXToLng(cx+x-w/2,view.zoom)};}
   function renderTiles(){
-    const {w,h}=size(),world=TILE_SIZE*2**view.zoom,cx=lngToWorldX(view.lng,view.zoom),cy=latToWorldY(view.lat,view.zoom),left=cx-w/2,top=cy-h/2,minX=Math.floor(left/TILE_SIZE),maxX=Math.floor((left+w)/TILE_SIZE),minY=Math.floor(top/TILE_SIZE),maxY=Math.floor((top+h)/TILE_SIZE),count=2**view.zoom,html=[];
+    const {w,h}=size(),cx=lngToWorldX(view.lng,view.zoom),cy=latToWorldY(view.lat,view.zoom),left=cx-w/2,top=cy-h/2,minX=Math.floor(left/TILE_SIZE),maxX=Math.floor((left+w)/TILE_SIZE),minY=Math.floor(top/TILE_SIZE),maxY=Math.floor((top+h)/TILE_SIZE),count=2**view.zoom,html=[];
     for(let ty=minY;ty<=maxY;ty++){if(ty<0||ty>=count)continue;for(let tx=minX;tx<=maxX;tx++){const wrap=((tx%count)+count)%count,x=tx*TILE_SIZE-left,y=ty*TILE_SIZE-top;html.push(`<img src="https://tile.openstreetmap.org/${view.zoom}/${wrap}/${ty}.png" alt="" draggable="false" style="transform:translate(${Math.round(x)}px,${Math.round(y)}px)">`);}}
     tiles.innerHTML=html.join('');
   }

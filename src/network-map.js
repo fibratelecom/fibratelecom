@@ -15,6 +15,7 @@ export function networkMapState(state={}){
   return {
     ...source,
     ctos:Array.isArray(source.ctos)?source.ctos:[],
+    nodes:Array.isArray(source.nodes)?source.nodes:[],
     segments:Array.isArray(source.segments)?source.segments:[],
     max_distance_m:Math.max(50,Math.min(3000,Math.round(Number(source.max_distance_m)||DEFAULT_MAX_DISTANCE_M)))
   };
@@ -22,6 +23,11 @@ export function networkMapState(state={}){
 
 export function networkCtos(state={}){
   return networkMapState(state).ctos.filter((item)=>item&&text(item.id));
+}
+
+export function networkNodes(state={},type=''){
+  const wanted=text(type).toLowerCase();
+  return networkMapState(state).nodes.filter((item)=>item&&text(item.id)&&(!wanted||text(item.type).toLowerCase()===wanted));
 }
 
 export function networkSegments(state={}){
@@ -189,7 +195,7 @@ export function createNetworkMap(container,{onMapClick,onMarkerClick}={}){
     lines.setAttribute('viewBox',`0 0 ${size().w} ${size().h}`);lines.innerHTML=parts.join('');
   }
   function renderMarkers(){
-    markers.innerHTML=(view.data.markers||[]).map((m)=>{const p=screenPoint(m.lat,m.lng),hidden=p.x<-80||p.y<-80||p.x>size().w+80||p.y>size().h+80;return `<button type="button" class="map-marker ${m.type||'client'} ${m.status||'unknown'}" data-map-marker="${String(m.id).replace(/"/g,'&quot;')}" style="left:${p.x}px;top:${p.y}px" ${hidden?'hidden':''} aria-label="${String(m.label||'Ponto').replace(/"/g,'&quot;')}">${m.type==='cto'?`<strong>${m.shortLabel||'CTO'}</strong><small>${m.subLabel||''}</small>`:'<span></span>'}</button>`;}).join('');
+    markers.innerHTML=(view.data.markers||[]).map((m)=>{const p=screenPoint(m.lat,m.lng),hidden=p.x<-80||p.y<-80||p.x>size().w+80||p.y>size().h+80,infrastructure=['cto','pop','ceo'].includes(m.type);return `<button type="button" class="map-marker ${m.type||'client'} ${m.status||'unknown'}" data-map-marker="${String(m.id).replace(/"/g,'&quot;')}" style="left:${p.x}px;top:${p.y}px" ${hidden?'hidden':''} aria-label="${String(m.label||'Ponto').replace(/"/g,'&quot;')}">${infrastructure?`<strong>${m.shortLabel||String(m.type||'Ponto').toUpperCase()}</strong><small>${m.subLabel||''}</small>`:'<span></span>'}</button>`;}).join('');
   }
   function render(){renderTiles();renderLines();renderMarkers();popup.hidden=true;}
   function setView(lat,lng,zoom=view.zoom){if(Number.isFinite(Number(lat)))view.lat=clamp(Number(lat),-85,85);if(Number.isFinite(Number(lng)))view.lng=((Number(lng)+540)%360)-180;view.zoom=clamp(Math.round(Number(zoom)||view.zoom),MIN_ZOOM,MAX_ZOOM);render();}

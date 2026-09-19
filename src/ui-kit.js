@@ -1,19 +1,75 @@
 import { statusKind, text } from './model.js';
 
-export const NAV = [
+const BASE_NAV = [
   ['dashboard','Central','⌂'],['clients','Clientes','◉'],['plans','Planos','◇'],['invoices','Mensalidades','▤'],
   ['finance','Financeiro','◈'],['cashback','Cashback','◆'],['routers','Rede','⌁'],['protocols','Atendimento','◫'],
   ['employees','Equipe','◎'],['communication','Comunicação','✦'],['integrations','Integrações','⇄'],
   ['settings','Automação','⚙'],['history','Auditoria','◷'],
 ];
+
+export const NAV = BASE_NAV;
+export const VIEW_ROUTES = Object.freeze({
+  dashboard:'/central',
+  clients:'/clientes',
+  plans:'/planos',
+  invoices:'/mensalidades',
+  finance:'/financeiro',
+  cashback:'/cashback',
+  routers:'/rede',
+  protocols:'/atendimento',
+  employees:'/equipe',
+  communication:'/comunicacao',
+  integrations:'/integracoes',
+  settings:'/automacao',
+  history:'/auditoria',
+});
+export const pathForView=(id)=>VIEW_ROUTES[id]||'/central';
+export const viewForPath=(pathname=globalThis.location?.pathname||'/')=>{
+  const path=String(pathname||'/').replace(/\/+$/,'')||'/';
+  if(path==='/')return 'dashboard';
+  return Object.entries(VIEW_ROUTES).find(([,route])=>route===path)?.[0]||'dashboard';
+};
+
+if(typeof window!=='undefined'&&typeof document!=='undefined'){
+  if(window.location.pathname==='/'&&window.history?.replaceState)window.history.replaceState(null,'','/central');
+  document.addEventListener('click',(event)=>{
+    if(event.defaultPrevented||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;
+    const target=event.target?.closest?.('[data-view]'),id=target?.dataset?.view,next=id?VIEW_ROUTES[id]:'';
+    if(!next)return;
+    if(target instanceof HTMLAnchorElement)event.preventDefault();
+    if(window.location.pathname!==next)window.history.pushState({view:id},'',next);
+  },true);
+  window.addEventListener('popstate',()=>window.location.reload());
+}
+
 export const PERMISSIONS=['dashboard','clients','plans','finance','billing','tickets','network'];
-export function hasPermission(user,permission){return String(user?.role||'').toLowerCase()==='admin'||(Array.isArray(user?.permissions)&&user.permissions.includes(permission));}
-export function navAllowed(user,id){
+function permissionAllowed(user,id){
   if(String(user?.role||'').toLowerCase()==='admin')return true;
   const permissions=Array.isArray(user?.permissions)?user.permissions:[];
   const map={dashboard:'dashboard',clients:'clients',plans:'plans',invoices:'billing',finance:'finance',cashback:'finance',routers:'network',protocols:'tickets'};
   return Boolean(map[id]&&permissions.includes(map[id]));
 }
+
+// O controlador atual inicia em "dashboard". Durante a primeira montagem de uma
+// rota direta, esta etapa faz o próprio fluxo existente escolher a view da URL.
+// Depois da montagem, navAllowed volta a ser apenas a checagem normal de permissão.
+const initialRouteView=viewForPath();
+let routeBootstrapPhase=initialRouteView!=='dashboard'?'scan':'done';
+export function navAllowed(user,id){
+  const allowed=permissionAllowed(user,id);
+  if(routeBootstrapPhase==='scan'){
+    if(id!==initialRouteView)return false;
+    if(!allowed){routeBootstrapPhase='done';return false;}
+    routeBootstrapPhase='confirm';
+    return true;
+  }
+  if(routeBootstrapPhase==='confirm'&&id==='dashboard'){
+    routeBootstrapPhase='done';
+    return false;
+  }
+  return allowed;
+}
+export function hasPermission(user,permission){return String(user?.role||'').toLowerCase()==='admin'||(Array.isArray(user?.permissions)&&user.permissions.includes(permission));}
 export const esc=(value)=>String(value??'').replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export const attr=esc;
 export const status=(value)=>`<span class="status ${statusKind(value)}"><i></i>${esc(text(value)||'—')}</span>`;
@@ -50,8 +106,12 @@ export const option=(value,label,selected)=>`<option value="${attr(value)}"${Str
 export function empty(title,message){return `<div class="empty"><span>○</span><strong>${esc(title)}</strong><p>${esc(message)}</p></div>`;}
 export function table(headers,rows){const body=Array.isArray(rows)?rows.join(''):String(rows??'');return `<div class="table-wrap"><table><thead><tr>${headers.map((h)=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div>`;}
 export function actions(items){return `<div class="row-actions">${items.filter(Boolean).join('')}</div>`;}
-export function button(label,action,id='',kind='secondary',extra=''){return `<button class="btn ${kind}" type="button" data-action="${attr(action)}"${id!==''?` data-id="${attr(id)}"`:''} ${extra}>${label}</button>`;}
-export function pageHead(eyebrow,title,textLine,action=''){return `<section class="page-head"><div><span class="section-label">${esc(eyebrow)}</span><h2>${esc(title)}</h2><p>${esc(textLine)}</p></div>${action}</section>`;}
+export function button(label,action,id='',kind='secondary',extra=''){
+  const actionRoutes={'go-invoices':VIEW_ROUTES.invoices,'go-connections':VIEW_ROUTES.routers},href=actionRoutes[action];
+  if(href)return `<a class="btn ${kind}" href="${attr(href)}" data-action="${attr(action)}"${id!==''?` data-id="${attr(id)}"`:''} ${extra}>${label}</a>`;
+  return `<button class="btn ${kind}" type="button" data-action="${attr(action)}"${id!==''?` data-id="${attr(id)}"`:''} ${extra}>${label}</button>`;
+}
+export function pageHead(eyebrow,title,textLine,action=''){return `<section class="page-head"><div><span class="section-label">${esc(eyebrow)}</span><h1>${esc(title)}</h1><p>${esc(textLine)}</p></div>${action}</section>`;}
 export function field(label,name,value='',type='text',extra=''){
   const isPhone=['phone','company_whatsapp'].includes(String(name)),shown=isPhone?formatPhone(value):value,phoneExtra=isPhone?'inputmode="tel" maxlength="15" autocomplete="tel" data-phone-mask':'';
   return `<label>${esc(label)}<input name="${attr(name)}" type="${attr(type)}" value="${attr(shown)}" ${phoneExtra} ${extra}></label>`;
@@ -65,8 +125,9 @@ export function loginTemplate(configured=true,message=''){
   </main>`;
 }
 export function shellTemplate(user){
-  const nav=NAV.filter(([id])=>navAllowed(user,id)).map(([id,label,icon],i)=>`<button class="module-tab${i===0?' active':''}" data-view="${id}" type="button"><span>${icon}</span>${label}</button>`).join('');
-  const serviceStatusLink='<a class="module-tab" href="/service-status.html"><span>◌</span>Status Serviços</a>';
+  const current=viewForPath();
+  const nav=NAV.filter(([id])=>navAllowed(user,id)).map(([id,label,icon])=>`<a class="module-tab${id===current?' active':''}" href="${attr(pathForView(id))}" data-view="${id}" aria-current="${id===current?'page':'false'}" style="text-decoration:none"><span>${icon}</span>${label}</a>`).join('');
+  const serviceStatusLink='<a class="module-tab" href="/service-status" style="text-decoration:none"><span>◌</span>Status Serviços</a>';
   const initial=esc((user?.name||'A').slice(0,1).toUpperCase());
-  return `<div class="app-shell"><header class="command-header"><div class="command-top"><div class="brand-lockup"><span class="brand-symbol">F+</span><div><strong>Provedor Plus</strong><small>Centro de Operações ISP</small></div></div><div class="command-status"><span class="live-pill"><i></i> Sistema online</span><span class="infra-pill">Cloudflare + Neon</span></div><div class="command-user"><button class="round-action" data-action="refresh" type="button" title="Atualizar">↻</button><div class="avatar">${initial}</div><div class="user-meta"><strong>${esc(user?.name||'Administrador')}</strong><small>${esc(user?.role||'admin')}</small></div><button class="exit-button" data-action="logout" type="button">Sair</button></div></div><div class="command-title"><div><span class="section-label light">OPERAÇÃO</span><h1 id="page-title">Central</h1></div><p>Cadastros, cobrança, rede e Área do Cliente no mesmo fluxo.</p></div></header><nav class="module-nav" id="module-nav">${nav}${serviceStatusLink}</nav><main class="workspace" id="content"><div class="loading-card"><span class="loader"></span>Carregando operação...</div></main><footer class="app-footer"><span>Provedor Plus</span><span>•</span><span>Fibra+ Operações</span></footer><div id="modal-root"></div><div id="toast-root"></div></div>`;
+  return `<div class="app-shell"><header class="status-header"><div class="status-brand"><span class="brand-symbol">F+</span><div><strong>Provedor Plus</strong><small id="page-title">Central</small></div></div><div class="status-header-actions"><span class="live-pill"><i></i> Sistema online</span><button class="round-action" data-action="refresh" type="button" title="Atualizar">↻</button><div class="avatar">${initial}</div><div class="user-meta"><strong>${esc(user?.name||'Administrador')}</strong><small>${esc(user?.role||'admin')}</small></div><button class="exit-button" data-action="logout" type="button">Sair</button></div></header><nav class="module-nav" id="module-nav" style="position:relative;top:auto;margin:14px auto 0">${nav}${serviceStatusLink}</nav><main class="status-workspace" id="content"><div class="loading-card"><span class="loader"></span>Carregando operação...</div></main><footer class="app-footer"><span>Provedor Plus</span><span>•</span><span>Fibra+ Operações</span></footer><div id="modal-root"></div><div id="toast-root"></div></div>`;
 }

@@ -1,12 +1,12 @@
 # Provedor Plus — Cloudflare Worker de produção
-# build: 20260907-form-id1
+# build: 20260918-mapa-rede1
 name = "painel"
 main = "notification-center-entry-worker.js"
 compatibility_date = "2026-08-30"
 workers_dev = true
 
 [build]
-command = "node --check app.js && node -e \"Promise.all([import('./src/api.js'),import('./src/ui.js')])\""
+command = "node --check app.js && node --check mapa.js && node --check src/network-map.js && node --check src/panel-forms.js && node -e \"Promise.all([import('./src/api.js'),import('./src/ui.js'),import('./src/network-map.js')])\""
 
 [triggers]
 crons = [ "* * * * *", "2-59/3 * * * *", "5 6 * * *" ]

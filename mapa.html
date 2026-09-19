@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="color-scheme" content="light" />
+  <meta http-equiv="Cache-Control" content="no-store,no-cache,must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://viacep.com.br https://nominatim.openstreetmap.org; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" />
+  <title>Mapa Operacional · Provedor Plus</title>
+  <link rel="stylesheet" href="/styles.css?v=20260907-form-id1" />
+  <link rel="stylesheet" href="/src/panel.css?v=20260913-automacao-organizada1" />
+  <link rel="stylesheet" href="/service-status.css?v=20260918-rotas-painel1" />
+  <link rel="stylesheet" href="/mapa.css?v=20260918-mapa-rede1" />
+</head>
+<body class="map-page">
+  <header class="status-header">
+    <div class="status-brand"><span class="brand-symbol">F+</span><div><strong>Provedor Plus</strong><small>Mapa Operacional</small></div></div>
+    <div class="status-header-actions"><a class="btn secondary" href="/central">← Voltar ao painel</a><button class="btn primary" id="map-refresh" type="button">Atualizar agora</button></div>
+  </header>
+
+  <main class="status-workspace">
+    <section class="page-head"><div><span class="section-label">REDE EM TEMPO REAL</span><h1>Mapa da rede</h1><p>Clientes online e offline no endereço, CTOs, portas, traçado da fibra, viabilidade e alertas de possíveis falhas.</p></div></section>
+
+    <section class="stats" id="map-stats">
+      <article class="stat-card"><span>Clientes mapeados</span><strong>—</strong><small>carregando</small></article>
+      <article class="stat-card featured"><span>Online</span><strong>—</strong><small>carregando MikroTik</small></article>
+      <article class="stat-card"><span>Offline</span><strong>—</strong><small>carregando MikroTik</small></article>
+      <article class="stat-card"><span>CTOs</span><strong>—</strong><small>carregando</small></article>
+      <article class="stat-card"><span>Portas livres</span><strong>—</strong><small>carregando</small></article>
+    </section>
+
+    <article class="panel-card map-toolbar">
+      <div class="map-search"><input id="map-search" type="search" placeholder="Buscar cliente, contrato, PPPoE, rua ou CTO" autocomplete="off"><select id="map-filter" aria-label="Filtrar status"><option value="all">Todos</option><option value="online">Online</option><option value="offline">Offline</option><option value="blocked">Bloqueados</option><option value="unknown">Sem leitura</option></select></div>
+      <div class="row-actions"><button class="btn secondary" id="map-viability" type="button">Consultar viabilidade</button><button class="btn secondary" id="map-draw" type="button">Desenhar fibra</button><button class="btn primary" id="map-new-cto" type="button">+ Nova CTO</button></div>
+    </article>
+
+    <section class="map-draw-bar" id="map-draw-bar">
+      <strong>Desenhando trecho</strong><input id="map-segment-name" placeholder="Nome do trecho" value="Trecho de fibra"><input id="map-segment-fibers" type="number" min="1" max="576" value="12" aria-label="Quantidade de fibras"><span class="hint" id="map-draw-note">Clique no mapa para marcar o caminho da fibra. Use pelo menos dois pontos.</span><button class="btn secondary" id="map-draw-undo" type="button">Desfazer ponto</button><button class="btn success" id="map-draw-save" type="button">Salvar trecho</button><button class="btn danger" id="map-draw-cancel" type="button">Cancelar</button>
+    </section>
+
+    <div class="map-legend"><span class="online"><i></i>Cliente online</span><span class="offline"><i></i>Cliente offline</span><span class="blocked"><i></i>Bloqueado</span><span><i></i>Sem leitura recente</span></div>
+
+    <section class="map-layout">
+      <div class="map-shell">
+        <div class="network-map" id="network-map" aria-label="Mapa operacional da rede"></div>
+        <div class="map-controls"><button id="map-zoom-in" type="button" aria-label="Aproximar">+</button><button id="map-zoom-out" type="button" aria-label="Afastar">−</button><button id="map-fit" type="button" aria-label="Enquadrar rede">⌂</button></div>
+      </div>
+      <aside class="map-side">
+        <article class="panel-card"><div class="panel-title"><div><span>Ocorrências</span><h3>Possíveis falhas</h3></div></div><div class="map-list" id="map-alerts"><div class="map-empty">Aguardando leitura dos acessos PPPoE.</div></div></article>
+        <article class="panel-card"><div class="panel-title"><div><span>Infraestrutura</span><h3>CTOs e portas</h3></div></div><div class="map-list" id="map-ctos"><div class="map-empty">Nenhuma CTO cadastrada ainda.</div></div></article>
+        <article class="panel-card"><div class="panel-title"><div><span>Fibra</span><h3>Trechos mapeados</h3></div></div><div class="map-list" id="map-segments"><div class="map-empty">Nenhum trecho desenhado ainda.</div></div></article>
+      </aside>
+    </section>
+  </main>
+
+  <div id="map-modal-root"></div>
+  <div id="map-toast-root"></div>
+  <script type="module" src="/mapa.js?v=20260918-mapa-rede1"></script>
+</body>
+</html>

@@ -137,11 +137,22 @@ async function removePppoeAccess(client) {
   return raw('/api/mikrotik-proxy', { action: 'pppoe.delete', router, data: client });
 }
 
+function mapNumber(value) {
+  if (value === '' || value === null || value === undefined) return '';
+  const number = Number(value);
+  return Number.isFinite(number) ? number : '';
+}
+
 function clientLocalFields(data = {}) {
   const local = {
     rg: valueText(data?.rg),
     birth_date: valueText(data?.birth_date),
     custom_monthly_cents: Math.max(0, Math.round(Number(data?.custom_monthly_cents) || 0)),
+    latitude: mapNumber(data?.latitude),
+    longitude: mapNumber(data?.longitude),
+    cto_id: valueText(data?.cto_id),
+    cto_port: Math.max(0, Math.trunc(Number(data?.cto_port) || 0)) || '',
+    cto_distance_m: Math.max(0, Math.round(Number(data?.cto_distance_m) || 0)) || '',
   };
   if (typeof document === 'undefined' || typeof HTMLFormElement === 'undefined') return local;
   const form = document.querySelector('#client-form');
@@ -152,12 +163,23 @@ function clientLocalFields(data = {}) {
     rg: valueText(form.elements?.rg?.value ?? local.rg),
     birth_date: valueText(form.elements?.birth_date?.value ?? local.birth_date),
     custom_monthly_cents: Math.max(0, Math.round(Number(form.elements?.custom_monthly_cents?.value ?? local.custom_monthly_cents) || 0)),
+    latitude: mapNumber(form.elements?.latitude?.value ?? local.latitude),
+    longitude: mapNumber(form.elements?.longitude?.value ?? local.longitude),
+    cto_id: valueText(form.elements?.cto_id?.value ?? local.cto_id),
+    cto_port: Math.max(0, Math.trunc(Number(form.elements?.cto_port?.value ?? local.cto_port) || 0)) || '',
+    cto_distance_m: Math.max(0, Math.round(Number(form.elements?.cto_distance_m?.value ?? local.cto_distance_m) || 0)) || '',
   };
 }
 
 async function saveCloudClient(data) {
-  const local = clientLocalFields(data);
-  const saved = await request('/api/cloud-data', 'clients.save', { ...data, ...local });
+  const local = clientLocalFields(data), source = data && typeof data === 'object' ? data : {};
+  const { latitude, longitude, cto_id, cto_port, cto_distance_m, ...serverData } = source;
+  const saved = await request('/api/cloud-data', 'clients.save', {
+    ...serverData,
+    rg: local.rg,
+    birth_date: local.birth_date,
+    custom_monthly_cents: local.custom_monthly_cents,
+  });
   return { ...saved, ...local };
 }
 

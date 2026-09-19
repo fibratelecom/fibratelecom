@@ -1,11 +1,13 @@
 import { dataApi, mikrotikApi } from './api.js';
 import { invoiceCents, money, nextContract, text } from './model.js';
+import { ctoPortSummary, findViability, geocodeAddress, networkCtos } from './network-map.js';
 import { attr, checkbox, field, formMoney, moneyToCents, option, PERMISSIONS, selectField, textareaField } from './ui-kit.js';
 
 let clientCepTimer=0;
 let clientProfileRequest=0;
 let clientIpRequest=0;
 let clientIpTimer=0;
+let clientNetworkContext={state:{},clients:[],contracts:[],routers:[]};
 
 function clientFormTarget(target){
   const form=target?.closest?.('#client-form');
@@ -25,6 +27,93 @@ function clientFormProfileStatus(form,message=''){
 function clientFormIpStatus(form,message=''){
   const status=form?.querySelector?.('[data-client-ip-status]');
   if(status)status.textContent=message;
+}
+
+function clientFormViabilityStatus(form,message=''){
+  const status=form?.querySelector?.('[data-client-viability-status]');
+  if(status)status.textContent=message;
+}
+
+function currentClientServiceKey(form){
+  const id=Number(form?.elements?.id?.value)||0;
+  return id?`client:${id}`:'';
+}
+
+function ctoById(id){
+  return networkCtos(clientNetworkContext.state).find((item)=>String(item?.id)===String(id))||null;
+}
+
+function syncClientRouterFromCto(form,cto){
+  const routerId=Number(cto?.router_id)||0,select=form?.elements?.router_id;
+  if(!routerId||!select||String(select.value)===String(routerId))return;
+  if(![...select.options].some((item)=>String(item.value)===String(routerId)))return;
+  select.value=String(routerId);
+  select.dispatchEvent(new Event('change',{bubbles:true}));
+}
+
+function refreshClientCtoPorts(form,preferredPort=''){
+  const ctoSelect=form?.elements?.cto_id,portSelect=form?.elements?.cto_port;
+  if(!ctoSelect||!portSelect)return;
+  const ctoId=text(ctoSelect.value),currentKey=currentClientServiceKey(form),currentPort=Math.trunc(Number(preferredPort||portSelect.value)||0);
+  portSelect.setCustomValidity('');
+  if(!ctoId){
+    portSelect.replaceChildren(new Option('Selecione a CTO primeiro',''));
+    portSelect.value='';portSelect.disabled=true;portSelect.required=false;
+    clientFormViabilityStatus(form,'CTO e porta são opcionais para cadastros antigos. Use “Analisar viabilidade” para localizar e sugerir automaticamente.');
+    return;
+  }
+  const cto=ctoById(ctoId);
+  if(!cto){
+    portSelect.replaceChildren(new Option('CTO não encontrada',''));portSelect.disabled=true;portSelect.required=true;portSelect.setCustomValidity('CTO selecionada não foi encontrada.');return;
+  }
+  const summary=ctoPortSummary(cto,clientNetworkContext.clients,clientNetworkContext.contracts,currentKey),ports=[...summary.free];
+  const options=[new Option(ports.length?'Selecione uma porta':'Sem porta disponível',''),...ports.map((port)=>new Option(`Porta ${port}`,String(port),false,port===currentPort))];
+  portSelect.replaceChildren(...options);portSelect.disabled=false;portSelect.required=true;
+  if(currentPort&&ports.includes(currentPort))portSelect.value=String(currentPort);else if(currentPort)portSelect.value='';
+  if(!ports.length)portSelect.setCustomValidity(`${cto.name||'A CTO'} está sem porta disponível.`);
+  clientFormViabilityStatus(form,`${cto.name||'CTO'} · ${summary.available} porta${summary.available===1?'':'s'} livre${summary.available===1?'':'s'} de ${summary.total}. ${summary.reserved.length?`${summary.reserved.length} reservada(s). `:''}${summary.defect.length?`${summary.defect.length} com defeito.`:''}`);
+  syncClientRouterFromCto(form,cto);
+}
+
+function clientAddressFromForm(form){
+  return {address:form?.elements?.address?.value,number:form?.elements?.address_number?.value,neighborhood:form?.elements?.neighborhood?.value,city:form?.elements?.city?.value,state:form?.elements?.state?.value,zip_code:form?.elements?.zip_code?.value};
+}
+
+async function analyzeClientViability(form){
+  const button=form?.querySelector?.('[data-client-viability]');
+  if(!form||!button)return;
+  button.disabled=true;button.textContent='Analisando…';clientFormViabilityStatus(form,'Localizando endereço e verificando as CTOs próximas…');
+  try{
+    const ctos=networkCtos(clientNetworkContext.state);
+    if(!ctos.length)throw new Error('Cadastre pelo menos uma CTO no Mapa antes de analisar a viabilidade.');
+    const found=await geocodeAddress(clientAddressFromForm(form));
+    if(form.elements.latitude)form.elements.latitude.value=String(found.lat);
+    if(form.elements.longitude)form.elements.longitude.value=String(found.lng);
+    const analysis=findViability({lat:found.lat,lng:found.lng,state:clientNetworkContext.state,clients:clientNetworkContext.clients,contracts:clientNetworkContext.contracts,currentServiceKey:currentClientServiceKey(form)}),recommended=analysis.recommendation,nearest=analysis.nearest;
+    if(!recommended){
+      if(form.elements.cto_distance_m)form.elements.cto_distance_m.value='';
+      const fallback=analysis.nearestFree;
+      clientFormViabilityStatus(form,fallback?`Sem CTO com porta livre dentro de ${analysis.maxDistanceM} m. A primeira com disponibilidade é ${fallback.cto.name||'CTO'}, a ${fallback.distance} m.`:`Nenhuma CTO com porta disponível foi encontrada. Confira a planta da rede.`);
+      return;
+    }
+    form.elements.cto_id.value=String(recommended.cto.id);
+    if(form.elements.cto_distance_m)form.elements.cto_distance_m.value=String(recommended.distance);
+    refreshClientCtoPorts(form,recommended.ports.free[0]||'');
+    if(recommended.ports.free[0])form.elements.cto_port.value=String(recommended.ports.free[0]);
+    syncClientRouterFromCto(form,recommended.cto);
+    const fallbackText=nearest&&String(nearest.cto.id)!==String(recommended.cto.id)&&nearest.ports.available===0?`A ${nearest.cto.name||'CTO mais próxima'} está lotada; foi escolhida a próxima com disponibilidade. `:'';
+    const fiberText=recommended.networkDistance===null?'Traçado da fibra ainda não mapeado.':`Rede mapeada a aproximadamente ${recommended.networkDistance} m do endereço.`;
+    clientFormViabilityStatus(form,`${fallbackText}${recommended.cto.name||'CTO'} · ${recommended.distance} m · porta ${recommended.ports.free[0]} sugerida · ${recommended.ports.available} livre(s). ${fiberText}`);
+  }catch(error){
+    clientFormViabilityStatus(form,error instanceof Error?error.message:String(error));
+  }finally{button.disabled=false;button.textContent='Analisar viabilidade';}
+}
+
+function clearClientMapLocation(form){
+  if(form?.elements?.latitude)form.elements.latitude.value='';
+  if(form?.elements?.longitude)form.elements.longitude.value='';
+  if(form?.elements?.cto_distance_m)form.elements.cto_distance_m.value='';
+  if(text(form?.elements?.cto_id?.value))clientFormViabilityStatus(form,'Endereço alterado. Analise a viabilidade novamente para confirmar distância e localização.');
 }
 
 function ipv4Parts(value){
@@ -161,6 +250,16 @@ function selectClientProfile(form,value){
 function handleClientFormField(event){
   const target=event.target,form=clientFormTarget(target);
   if(!form||!target?.name)return;
+  if(['address','address_number','neighborhood','city','state','zip_code'].includes(target.name))clearClientMapLocation(form);
+  if(target.name==='cto_id'){
+    refreshClientCtoPorts(form,form.dataset.originalCtoId===String(target.value)?form.dataset.originalCtoPort:'');
+    return;
+  }
+  if(target.name==='cto_port'){
+    const cto=ctoById(form.elements?.cto_id?.value),port=Math.trunc(Number(target.value)||0),summary=cto?ctoPortSummary(cto,clientNetworkContext.clients,clientNetworkContext.contracts,currentClientServiceKey(form)):null;
+    target.setCustomValidity(port&&summary&&!summary.free.includes(port)?'Esta porta não está disponível nesta CTO.':'');
+    return;
+  }
   if(target.name==='ip'){
     form.dataset.ipManual='1';
     clearTimeout(clientIpTimer);
@@ -241,6 +340,13 @@ function handleClientWhatsapp(event){
   window.open(`https://wa.me/${digits}`,'_blank','noopener,noreferrer');
 }
 
+function handleClientViability(event){
+  const button=event.target?.closest?.('[data-client-viability]');
+  if(!button)return;
+  const form=button.closest('#client-form');
+  if(form instanceof HTMLFormElement)void analyzeClientViability(form);
+}
+
 function updateSupportNegotiationPreview(form){
   if(!(form instanceof HTMLFormElement))return;
   const selected=[...form.querySelectorAll('input[name="invoice_ids"]:checked')],originalCents=selected.reduce((sum,input)=>sum+Math.max(0,Math.round(Number(input.dataset.amountCents)||0)),0),discountType=text(form.elements?.discount_type?.value)==='fixed'?'fixed':'percent',percentInput=form.elements?.discount_percent,fixedInput=form.elements?.discount_amount,entryInput=form.elements?.entry,interestInput=form.elements?.interest_percent;
@@ -271,12 +377,14 @@ if(typeof document!=='undefined'){
   document.addEventListener('input',handleClientFormField);
   document.addEventListener('change',handleClientFormField);
   document.addEventListener('click',handleClientWhatsapp);
+  document.addEventListener('click',handleClientViability);
   document.addEventListener('input',handleSupportNegotiationField);
   document.addEventListener('change',handleSupportNegotiationField);
 }
 
 export function createForms(ctx){
-  const {state,clients,routers,data,byPlan,bankSafe,employees}=ctx;
+  const {state,clients,contracts,routers,data,byPlan,bankSafe,employees}=ctx;
+  clientNetworkContext={state:state||{},clients:Array.isArray(clients)?clients:[],contracts:Array.isArray(contracts)?contracts:[],routers:Array.isArray(routers)?routers:[]};
   const activeStaff=(employees||[]).filter((x)=>x.active!==false);
   const efiReady=Boolean(bankSafe?.efi?.enabled&&bankSafe?.efi?.clientIdConfigured&&bankSafe?.efi?.clientSecretConfigured);
   const today=()=>new Date().toISOString().slice(0,10);
@@ -297,11 +405,16 @@ export function createForms(ctx){
       billingOption('pix_mp','Pix — Mercado Pago','mercadoPago',billingMode==='pix_mp'),
       billingOption('pix_auto','Pix Automático — Efí','efi',billingMode==='pix_auto')
     ].join('');
+    const ctos=networkCtos(state).filter((cto)=>cto.active!==false),ctoOptions=`<option value="">Sem CTO vinculada</option>${ctos.map((cto)=>{const summary=ctoPortSummary(cto,clients,contracts,item.id?`client:${Number(item.id)}`:'');return `<option value="${attr(cto.id)}"${String(cto.id)===String(item.cto_id)?' selected':''}>${attr(`${cto.name||'CTO'} · ${summary.available} porta${summary.available===1?'':'s'} livre${summary.available===1?'':'s'}`)}</option>`}).join('')}`;
+    const selectedCto=ctos.find((cto)=>String(cto.id)===String(item.cto_id)),selectedSummary=selectedCto?ctoPortSummary(selectedCto,clients,contracts,item.id?`client:${Number(item.id)}`:''):null,portOptions=selectedCto?`<option value="">${selectedSummary?.free?.length?'Selecione uma porta':'Sem porta disponível'}</option>${(selectedSummary?.free||[]).map((port)=>option(port,`Porta ${port}`,item.cto_port)).join('')}`:'<option value="">Selecione a CTO primeiro</option>';
     const efiOperations=item.id?`<fieldset class="form-section span-2"><legend>Efí — recorrência e carnê</legend><div class="form-actions"><button class="btn secondary" type="button" data-action="client-pix-auto" data-id="${attr(item.id)}" ${efiReady?'':'disabled'}>Pix Automático</button><button class="btn secondary" type="button" data-action="client-carnet" data-id="${attr(item.id)}" ${efiReady?'':'disabled'}>Gerar carnê</button></div><p class="hint">Pix Automático: <strong>${attr(pixStatus)}</strong>. ${efiReady?'Efí pronta para estas operações.':'Configure e ative a Efí Bank para liberar estas operações.'}</p></fieldset>`:'';
-    if(typeof document!=='undefined')queueMicrotask(()=>{const form=document.querySelector('#client-form');if(form){loadClientMikrotikProfiles(form,form.elements?.router_id?.value,mikrotikProfile);loadClientMikrotikIpState(form,form.elements?.router_id?.value);}});
-    return `<form id="client-form" class="form-grid" data-original-plan-id="${attr(item.plan_id||'')}" data-original-mikrotik-profile="${attr(text(item.mikrotik_profile))}" data-original-pppoe-username="${attr(text(item.pppoe_username||item.pppoe_user))}" data-ip-manual="0">
+    if(typeof document!=='undefined')queueMicrotask(()=>{const form=document.querySelector('#client-form');if(form){loadClientMikrotikProfiles(form,form.elements?.router_id?.value,mikrotikProfile);loadClientMikrotikIpState(form,form.elements?.router_id?.value);refreshClientCtoPorts(form,item.cto_port||'');}});
+    return `<form id="client-form" class="form-grid" data-original-plan-id="${attr(item.plan_id||'')}" data-original-mikrotik-profile="${attr(text(item.mikrotik_profile))}" data-original-pppoe-username="${attr(text(item.pppoe_username||item.pppoe_user))}" data-original-cto-id="${attr(text(item.cto_id))}" data-original-cto-port="${attr(text(item.cto_port))}" data-ip-manual="0">
       <input type="hidden" name="id" value="${attr(item.id||'')}">
       <input type="hidden" name="custom_monthly_cents" value="${attr(customMonthlyCents)}">
+      <input type="hidden" name="latitude" value="${attr(item.latitude??'')}">
+      <input type="hidden" name="longitude" value="${attr(item.longitude??'')}">
+      <input type="hidden" name="cto_distance_m" value="${attr(item.cto_distance_m??'')}">
       <fieldset class="form-section span-2"><legend>Identificação e contrato</legend><div class="form-grid inner-grid">
         ${field('Nome completo / Razão social','name',item.name,'text','required')}
         ${field('CPF/CNPJ','document',item.document,'text','inputmode="numeric"')}
@@ -314,6 +427,10 @@ export function createForms(ctx){
       <fieldset class="form-section span-2"><legend>Endereço</legend><div class="form-grid inner-grid">
         ${field('CEP','zip_code',item.zip_code||item.cep,'text','inputmode="numeric" maxlength="9" autocomplete="postal-code"')}${field('Endereço','address',item.address||item.street)}${field('Número','address_number',item.address_number)}${field('Bairro','neighborhood',item.neighborhood)}${field('Complemento','complement',item.complement)}${field('Cidade','city',item.city)}${field('UF','state',item.state,'text','maxlength="2"')}
       </div><p class="hint" data-client-cep-status></p></fieldset>
+      <fieldset class="form-section span-2"><legend>Rede física / CTO</legend><div class="form-grid inner-grid">
+        ${selectField('CTO','cto_id',ctoOptions)}${selectField('Porta da CTO','cto_port',portOptions,selectedCto?'required':'disabled')}
+        <div class="span-2 form-actions" style="justify-content:flex-start"><button class="btn primary" type="button" data-client-viability>Analisar viabilidade</button><a class="btn secondary" href="/mapa">Abrir mapa da rede</a></div>
+      </div><p class="hint" data-client-viability-status>${selectedCto?`${attr(selectedCto.name||'CTO')} · porta ${attr(item.cto_port||'não definida')}${item.cto_distance_m?` · ${attr(item.cto_distance_m)} m do endereço`:''}.`:'CTO e porta são opcionais para cadastros antigos. Ao analisar a viabilidade, o Provedor Plus localiza o endereço e procura automaticamente a primeira CTO próxima com porta disponível.'}</p></fieldset>
       <fieldset class="form-section span-2"><legend>Plano e cobrança</legend><div class="form-grid inner-grid">
         ${selectField('Plano','plan_id',planOpts)}${field('Valor mensal personalizado (R$)','custom_monthly',customMonthlyValue,'text','inputmode="decimal" placeholder="Vazio = valor do plano"')}${field('Dia do vencimento','due_day',item.due_day||10,'number','min="1" max="31"')}
         ${selectField('Status','status',['Ativo','Em atraso','Bloqueado','Suspenso','Cancelado'].map((v)=>option(v,v,item.status||'Ativo')).join(''))}

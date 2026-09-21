@@ -4,6 +4,7 @@ import {neon} from '@neondatabase/serverless';
 import {buildPushHTTPRequest} from '@pushforge/builder';
 import {resolveRouterForService,recordTrafficForService} from './worker-native-api.js';
 import {handleMikrotikProxy} from './worker-mikrotik-native.js';
+import {beginPaymentPriority,paymentPriorityActive} from './state-write-lock.js';
 
 const CLIENT_PUSH_PATH='/api/customer-push';
 const ADMIN_PUSH_PATH='/api/push-admin';
@@ -208,6 +209,11 @@ async function finishPortalLoginRate(request,response,rate,ctx){
   try{await registerPortalLoginFailure(rate.sql,rate.keys);return response}catch(error){if(Number(error?.statusCode)===429)return portalLoginRateResponse(request,error);console.error('Provedor Plus: não foi possível registrar a tentativa de login.',error);return response}
 }
 
+async function paymentPriorityAction(request,path){
+  if(path!=='/api/customer-portal'||request.method!=='POST'||new URL(request.url).searchParams.get('mp_webhook')==='1')return '';
+  let body={};try{body=await request.clone().json()}catch{return ''}
+  const action=text(body?.action);return ['payment-pix','payment-card','payment-status'].includes(action)?action:'';
+}
 async function stateMutationRequest(request,path){
   if(request.method!=='POST')return false;
   if(path==='/api/customer-portal'&&new URL(request.url).searchParams.get('mp_webhook')==='1')return true;
@@ -223,10 +229,8 @@ async function stateMutationRequest(request,path){
 }
 async function acquireStateWriteLock(env,maxWaitMs=20000){
   if(!env?.DATABASE_URL)return null;
-  const totalWaitMs=Math.max(1000,Number(maxWaitMs)||20000),sql=neon(env.DATABASE_URL),token=crypto.randomUUID(),deadline=Date.now()+totalWaitMs,maxAttempts=8,lockPollMs=Math.max(1000,Math.ceil(totalWaitMs/maxAttempts));
-  let attempts=0;
-  while(Date.now()<deadline&&attempts<maxAttempts){
-    attempts++;
+  const totalWaitMs=Math.max(1000,Number(maxWaitMs)||20000),sql=neon(env.DATABASE_URL),token=crypto.randomUUID(),deadline=Date.now()+totalWaitMs;
+  while(Date.now()<deadline){
     const expiresAt=new Date(Date.now()+STATE_WRITE_LOCK_TTL_MS).toISOString(),raw=JSON.stringify({token,expires_at:expiresAt});
     const rows=await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${STATE_WRITE_LOCK_KEY},${raw}::jsonb,now()) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at WHERE COALESCE(NULLIF(pp_settings.value->>'expires_at','')::timestamptz,to_timestamp(0))<=now() RETURNING value`;
     if(text(rows?.[0]?.value?.token)===token){
@@ -240,7 +244,7 @@ async function acquireStateWriteLock(env,maxWaitMs=20000){
       return async()=>{stopped=true;if(renewTimer)clearTimeout(renewTimer);try{await sql`DELETE FROM pp_settings WHERE key=${STATE_WRITE_LOCK_KEY} AND value->>'token'=${token}`}catch(error){console.error('Provedor Plus: não foi possível liberar a trava de estado.',error)}};
     }
     const remaining=deadline-Date.now();
-    if(remaining>0)await wait(Math.min(lockPollMs,remaining));
+    if(remaining>0)await wait(Math.min(250,remaining));
   }
   throw Object.assign(new Error('O Provedor Plus está concluindo outra atualização de dados. Tente novamente em alguns segundos.'),{statusCode:409});
 }
@@ -251,12 +255,6 @@ async function withStateWriteLock(env,fn,maxWaitMs=20000){
 function stateLockErrorResponse(request,error){
   const origin=text(request.headers.get('origin')),headers=CLIENT_ORIGINS.has(origin)?clientCors(request):{};
   return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||503,headers);
-}
-function scheduledLockContext(ctx,tasks){
-  return {
-    waitUntil(promise){tasks.push(Promise.resolve(promise))},
-    passThroughOnException(){if(typeof ctx?.passThroughOnException==='function')ctx.passThroughOnException()}
-  };
 }
 
 async function ensureTables(sql){
@@ -330,7 +328,8 @@ async function reconcilePendingPayments(env){
   return {checked,confirmed,failed};
 }
 async function tryBackgroundStateLock(env,fn,label){
-  try{return await withStateWriteLock(env,fn,1000)}catch(error){if(Number(error?.statusCode)===409)return null;console.error(label,error);return null}
+  if(await paymentPriorityActive(env))return null;
+  try{return await withStateWriteLock(env,async()=>{if(await paymentPriorityActive(env))return null;return fn()},1000)}catch(error){if(Number(error?.statusCode)===409)return null;console.error(label,error);return null}
 }
 async function runMinuteStateMaintenance(env,scheduledAt){
   await tryBackgroundStateLock(env,async()=>{try{await reconcilePendingPayments(env)}catch(error){console.error('Provedor Plus: falha na conciliação automática de pagamentos pendentes.',error)}},'Provedor Plus: conciliação automática não pôde obter a trava de estado.');
@@ -515,13 +514,14 @@ export default {
     if(path===ADMIN_PUSH_PATH){const response=await handleAdminSend(request,env,ctx);if(response)return response}
     if(path===OPS_PATH){const response=await handleOperations(request,env,ctx);if(response)return response}
     if(path==='/api/bank-settings'){const service=await handleBankServiceAction(request,env,ctx);if(service)return service}
-    let portalLoginRate=null;
+    let portalLoginRate=null,priorityStop=null;
     try{portalLoginRate=await preparePortalLoginRate(request,env,path)}catch(error){if(Number(error?.statusCode)===429)return portalLoginRateResponse(request,error);console.error('Provedor Plus: proteção de tentativas do login não pôde ser preparada.',error)}
     try{
+      const priorityAction=await paymentPriorityAction(request,path);if(priorityAction)priorityStop=await beginPaymentPriority(env);
       const forward=async()=>{let response=await baseWorker.fetch(request,env,ctx);if(portalLoginRate)response=await finishPortalLoginRate(request,response,portalLoginRate,ctx);return path==='/api/bank-settings'?await sanitizeBankResponse(response):response};
-      if(await stateMutationRequest(request,path))return await withStateWriteLock(env,forward);
+      if(await stateMutationRequest(request,path))return await withStateWriteLock(env,forward,priorityAction?60000:20000);
       return await forward();
-    }catch(error){return stateLockErrorResponse(request,error)}
+    }catch(error){return stateLockErrorResponse(request,error)}finally{if(priorityStop)await priorityStop()}
   },
   async scheduled(controller,env,ctx){
     const cron=text(controller?.cron);
@@ -534,13 +534,15 @@ export default {
       }
       return;
     }
-    try{
-      await withStateWriteLock(env,async()=>{
-        const tasks=[],lockedCtx=scheduledLockContext(ctx,tasks),result=baseWorker.scheduled(controller,env,lockedCtx);
-        if(result&&typeof result.then==='function')await result;
-        if(tasks.length)await Promise.allSettled(tasks);
-      },60000);
-    }catch(error){console.error('Provedor Plus: rotina agendada aguardou outra gravação de estado e não pôde iniciar.',error)}
+    if(!(await paymentPriorityActive(env))){
+      try{
+        await withStateWriteLock(env,async()=>{
+          if(await paymentPriorityActive(env))return;
+          const result=baseWorker.scheduled(controller,env,ctx);
+          if(result&&typeof result.then==='function')await result;
+        },1000);
+      }catch(error){if(Number(error?.statusCode)!==409)console.error('Provedor Plus: rotina agendada não pôde executar a gravação de estado.',error)}
+    }
     if(env?.DATABASE_URL&&typeof ctx?.waitUntil==='function')ctx.waitUntil(processDueSchedules(env).catch(error=>console.error('Provedor Plus: falha nos agendamentos de notificações.',error)));
   }
 };

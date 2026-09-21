@@ -318,7 +318,7 @@ async function reconcilePendingPayments(env){
     if(!invoiceOpen(row))return false;
     const provider=text(row?.bank_provider).toLowerCase(),detail=normalize(row?.bank_status_detail),paymentId=text(row?.bank_payment_id||row?.bank_charge_id);
     return paymentId&&detail.includes('pix')&&(provider==='mercadopago'||provider==='efi');
-  }).sort((a,b)=>text(a?.bank_last_sync_at).localeCompare(text(b?.bank_last_sync_at))).slice(0,10);
+  }).sort((a,b)=>text(a?.bank_last_sync_at).localeCompare(text(b?.bank_last_sync_at))).slice(0,1);
   let checked=0,confirmed=0,failed=0;
   for(const invoice of candidates){
     const clientId=Number(invoice?.client_id)||0,paymentId=text(invoice?.bank_payment_id||invoice?.bank_charge_id);if(!clientId||!paymentId)continue;
@@ -328,6 +328,15 @@ async function reconcilePendingPayments(env){
     }catch(error){failed++;console.error(`Provedor Plus: falha ao conciliar automaticamente a fatura ${text(invoice?.id)}.`,error)}
   }
   return {checked,confirmed,failed};
+}
+async function tryBackgroundStateLock(env,fn,label){
+  try{return await withStateWriteLock(env,fn,1000)}catch(error){if(Number(error?.statusCode)===409)return null;console.error(label,error);return null}
+}
+async function runMinuteStateMaintenance(env,scheduledAt){
+  await tryBackgroundStateLock(env,async()=>{try{await reconcilePendingPayments(env)}catch(error){console.error('Provedor Plus: falha na conciliação automática de pagamentos pendentes.',error)}},'Provedor Plus: conciliação automática não pôde obter a trava de estado.');
+  const sql=neon(env.DATABASE_URL),quarterStart=Math.floor(scheduledAt/(15*60*1000))*(15*60*1000),state=await loadState(sql),lastAt=Date.parse(text(state?.settings?.billing_cloudflare_last_result?.at));
+  if(Number.isFinite(lastAt)&&lastAt>=quarterStart)return;
+  await tryBackgroundStateLock(env,async()=>{const fresh=await loadState(sql),freshLastAt=Date.parse(text(fresh?.settings?.billing_cloudflare_last_result?.at));if(!Number.isFinite(freshLastAt)||freshLastAt<quarterStart)await runBillingCron(env)},'Provedor Plus: geração automática de mensalidades aguardará a próxima checagem.');
 }
 
 async function pushCryptoKey(env){const secret=text(env.BANK_SECRET_KEY)||text(env.PORTAL_SESSION_SECRET)||text(env.DATABASE_URL);if(!secret)throw new Error('Chave de proteção das notificações não configurada.');const raw=await crypto.subtle.digest('SHA-256',enc.encode(`provedor-plus-push-v1|${secret}`));return crypto.subtle.importKey('raw',raw,{name:'AES-GCM'},false,['decrypt'])}
@@ -521,7 +530,7 @@ export default {
         ctx.waitUntil(processDueSchedules(env).catch(error=>console.error('Provedor Plus: falha nos agendamentos de notificações.',error)));
         ctx.waitUntil(collectCustomerTraffic(env).catch(error=>console.error('Provedor Plus: falha na coleta automática do consumo PPPoE.',error)));
         const scheduledAt=Number(controller?.scheduledTime)||Date.now();
-        ctx.waitUntil(withStateWriteLock(env,async()=>{try{await reconcilePendingPayments(env)}catch(error){console.error('Provedor Plus: falha na conciliação automática de pagamentos pendentes.',error)}const state=await loadState(neon(env.DATABASE_URL)),lastAt=Date.parse(text(state?.settings?.billing_cloudflare_last_result?.at)),quarterStart=Math.floor(scheduledAt/(15*60*1000))*(15*60*1000);if(!Number.isFinite(lastAt)||lastAt<quarterStart)await runBillingCron(env)},60000).catch(error=>console.error('Provedor Plus: falha na checagem protegida de pagamentos e mensalidades.',error)));
+        ctx.waitUntil(runMinuteStateMaintenance(env,scheduledAt).catch(error=>console.error('Provedor Plus: falha na manutenção automática de pagamentos e mensalidades.',error)));
       }
       return;
     }

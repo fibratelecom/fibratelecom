@@ -1,6 +1,7 @@
 import baseWorker from './worker.js';
 import { neon } from '@neondatabase/serverless';
 import { handleBankProxy } from './worker-bank-native.js';
+import {paymentPriorityActive} from './state-write-lock.js';
 
 const STATE_KEY='web_state_v1017';
 const BANK_SETTINGS_KEY='bank_credentials_v1';
@@ -306,8 +307,9 @@ async function runBillingCron(env,{force=false}={}){
   try{vault=await readBankSettings(env,sql)}catch(error){bankSettingsError=error instanceof Error?error.message:String(error)}
   const rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code FROM pp_clients ORDER BY id ASC`;
   const primaryClients=(Array.isArray(rows)?rows:[]).map(remote=>mergedClient(remote,state)),owners=new Map(primaryClients.map(item=>[Number(item.id),item])),extraContracts=Array.isArray(state?.client_contracts)?state.client_contracts:[],contractClients=extraContracts.map(item=>{const owner=owners.get(Number(item?.client_id));return owner?mergedContractClient(item,owner,state):null}).filter(Boolean),billable=[...primaryClients,...contractClients];
-  let generated=0,issued=0,skipped=0,failed=0;const errors=[];
+  let generated=0,issued=0,skipped=0,failed=0,yielded=false;const errors=[];
   for(const client of billable){
+    if(!force&&await paymentPriorityActive(env,sql)){yielded=true;break}
     if(!activeClient(client)){skipped++;continue}
     if(serviceContractId(client)&&Number(client.due_day)===0){skipped++;continue}
     const plan=planFor(client,state);if(!plan||num(plan.price_cents)<=0){failed++;errors.push(`${billingSubject(client)}: contrato sem plano com valor.`);continue}
@@ -334,6 +336,7 @@ async function runBillingCron(env,{force=false}={}){
       if(remoteIssued)issued++;if(!existing)generated++;
     }catch(error){failed++;errors.push(`${billingSubject(client)}: ${error instanceof Error?error.message:String(error)}`)}
   }
+  if(yielded)return {date:today,manual:force,enabled,generated,issued,skipped,failed,yielded:true,errors};
   state.settings.billing_auto_enabled=enabled;
   state.settings.billing_auto_days_before=daysBefore;
   const result={generated,issued,skipped,failed,at:new Date().toISOString(),errors:errors.slice(0,50)};

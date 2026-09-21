@@ -215,7 +215,7 @@ async function bankAction(env,payload){
 }
 
 async function issueRealCharge(env,invoice,client,state,vault){
-  const first=invoice?.prorated_first_invoice===true||invoice?.billing_origin==='first_prorated',combined=invoice?.combined_billing===true||invoice?.billing_origin==='monthly_auto_combined',override=normalize(invoice?.payment_mode_override);let mode=override||(first||combined?'boleto':normalize(client.billing_mode||'boleto'));
+  const first=invoice?.prorated_first_invoice===true||invoice?.billing_origin==='first_prorated',combined=invoice?.combined_billing===true||invoice?.billing_origin==='monthly_auto_combined',override=normalize(invoice?.payment_mode_override),clientMode=normalize(client.billing_mode||'boleto');let mode=override||(first&&clientMode==='pix_mp'?'pix_mp':(first||combined?'boleto':clientMode));
   if(!['boleto','pix_due','pix_auto','pix_mp'].includes(mode))mode='boleto';
   if(mode==='pix_mp'){
     requireMpPix(client,vault);
@@ -312,6 +312,7 @@ async function runBillingCron(env,{force=false}={}){
     if(!force&&await paymentPriorityActive(env,sql)){yielded=true;break}
     if(!activeClient(client)){skipped++;continue}
     if(serviceContractId(client)&&Number(client.due_day)===0){skipped++;continue}
+    const installation=dateFromKey(client.installation_date),todayDate=dateFromKey(today);if(installation&&todayDate&&installation.getTime()>todayDate.getTime()){skipped++;continue}
     const plan=planFor(client,state);if(!plan||num(plan.price_cents)<=0){failed++;errors.push(`${billingSubject(client)}: contrato sem plano com valor.`);continue}
     try{
       let dueDate='',existing=null,invoice=null;const contractId=serviceContractId(client);

@@ -224,7 +224,7 @@ async function stateMutationRequest(request,path){
   if(path==='/api/bank-settings')return action==='save-default';
   if(path==='/api/customer-trust-release')return action==='release';
   if(path==='/api/customer-due-date')return action==='change';
-  if(path==='/api/customer-portal')return new Set(['refresh','payment-pix','payment-card','payment-status','negotiate']).has(action);
+  if(path==='/api/customer-portal')return new Set(['refresh','negotiate']).has(action);
   return false;
 }
 async function acquireStateWriteLock(env,maxWaitMs=20000){

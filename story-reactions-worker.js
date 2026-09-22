@@ -1,4 +1,3 @@
-import {neon} from '@neondatabase/serverless';
 import {handleNativeAuth} from './worker-native-api.js';
 
 const REACTION_STORE_KEY='customer_story_reactions_v1';
@@ -16,10 +15,10 @@ function customerCors(request){const origin=text(request.headers.get('origin')),
 function parseObject(value){if(value&&typeof value==='object'&&!Array.isArray(value))return value;if(typeof value==='string')try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{}return {}}
 function cleanClientMap(value){const source=parseObject(value),out={};for(const [clientId,reaction] of Object.entries(source)){const id=String(Math.max(0,Number(clientId)||0)),emoji=text(reaction);if(id!=='0'&&REACTIONS.includes(emoji))out[id]=emoji}return out}
 function cleanReactionStore(value){const source=parseObject(value),raw=parseObject(source.reactions),reactions={};for(const [storyId,map] of Object.entries(raw)){const id=text(storyId);if(id)reactions[id]=cleanClientMap(map)}return {version:1,reactions}}
-async function sqlClient(env){if(!env.DATABASE_URL)throw Object.assign(new Error('Banco de dados não configurado.'),{statusCode:503});return neon(env.DATABASE_URL)}
-async function readSetting(sql,key){const rows=await sql`SELECT value FROM pp_settings WHERE key=${key} LIMIT 1`;return parseObject(rows?.[0]?.value)}
+async function sqlClient(env){if(!env.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 não configurado.'),{statusCode:503});return env.PROVEDOR_DB}
+async function readSetting(sql,key){const result=await sql.prepare('SELECT value FROM pp_settings WHERE key = ? LIMIT 1').bind(key).all();return parseObject(result?.results?.[0]?.value)}
 async function readReactionStore(sql){return cleanReactionStore(await readSetting(sql,REACTION_STORE_KEY))}
-async function writeReactionStore(sql,store){const at=new Date().toISOString(),raw=JSON.stringify(cleanReactionStore(store));await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${REACTION_STORE_KEY},${raw}::jsonb,${at}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at`}
+async function writeReactionStore(sql,store){const at=new Date().toISOString(),raw=JSON.stringify(cleanReactionStore(store));await sql.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(REACTION_STORE_KEY,raw,at).run()}
 function countsForMap(map){const counts=Object.fromEntries(REACTIONS.map(item=>[item,0]));for(const emoji of Object.values(cleanClientMap(map)))counts[emoji]=(counts[emoji]||0)+1;return counts}
 function metricForMap(map){const counts=countsForMap(map);return {counts,total:Object.values(counts).reduce((sum,value)=>sum+Number(value||0),0)}}
 
@@ -27,7 +26,7 @@ async function requireAdmin(request,env){const headers=new Headers(request.heade
 function b64urlBytes(value){let raw=text(value).replace(/-/g,'+').replace(/_/g,'/');while(raw.length%4)raw+='=';const bin=atob(raw),out=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);return out}
 async function portalKey(env){const secret=text(env.PORTAL_SESSION_SECRET)||text(env.DATABASE_URL);if(!secret)throw Object.assign(new Error('Sessão segura da Área do Cliente não configurada.'),{statusCode:503});return crypto.subtle.importKey('raw',utf8.encode(secret),{name:'HMAC',hash:'SHA-256'},false,['verify'])}
 async function verifySession(token,env){const parts=text(token).split('.');if(parts.length!==2)throw Object.assign(new Error('Sua sessão expirou. Entre novamente.'),{statusCode:401});try{const key=await portalKey(env),ok=await crypto.subtle.verify('HMAC',key,b64urlBytes(parts[1]),utf8.encode(parts[0]));if(!ok)throw new Error('assinatura');const payload=JSON.parse(new TextDecoder().decode(b64urlBytes(parts[0]))),clientId=Number(payload?.clientId)||0,exp=Number(payload?.exp)||0;if(!clientId||exp<=Date.now())throw new Error('expirada');return {clientId}}catch{throw Object.assign(new Error('Sua sessão expirou. Entre novamente.'),{statusCode:401})}}
-async function customer(sql,id){const rows=await sql`SELECT id,status,plan_id,city FROM pp_clients WHERE id=${Number(id)} LIMIT 1`;return rows?.[0]||null}
+async function customer(sql,id){const result=await sql.prepare('SELECT id,status,plan_id,city FROM pp_clients WHERE id = ? LIMIT 1').bind(Number(id)).all();return result?.results?.[0]||null}
 function isBlockedStatus(value){const status=normalize(value);return ['bloqueado','suspenso','atrasado','inadimplente'].some(term=>status.includes(term))}
 function isActiveStatus(value){const status=normalize(value);return !['cancelado','inativo','bloqueado','suspenso'].some(term=>status.includes(term))}
 function visibleTo(story,client,now=Date.now()){if(story?.active===false)return false;const start=story?.startAt?new Date(story.startAt).getTime():0,end=story?.endAt?new Date(story.endAt).getTime():0;if(start&&now<start)return false;if(end&&now>end)return false;if(story?.audience==='active'&&!isActiveStatus(client?.status))return false;if(story?.audience==='blocked'&&!isBlockedStatus(client?.status))return false;if(Number(story?.planId)>0&&Number(story.planId)!==Number(client?.plan_id))return false;if(text(story?.city)&&normalize(story.city)!==normalize(client?.city))return false;return true}

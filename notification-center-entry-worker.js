@@ -25,6 +25,7 @@ const NOTIFICATION_SCHEDULE_INTERVAL_MINUTES=5;
 const PAYMENT_RECONCILIATION_INTERVAL_MINUTES=15;
 const TRAFFIC_COLLECTION_INTERVAL_MINUTES=30;
 const BILLING_INTERVAL_MINUTES=60;
+const ECONOMY_CRON='*/5 * * * *';
 const enc=new TextEncoder();
 const text=value=>String(value??'').trim();
 const digits=value=>text(value).replace(/\D/g,'');
@@ -341,9 +342,7 @@ async function runScheduledStateMaintenance(env,scheduledAt){
     await tryBackgroundStateLock(env,async()=>{try{await reconcilePendingPayments(env)}catch(error){console.error('Provedor Plus: falha na conciliação automática de pagamentos pendentes.',error)}},'Provedor Plus: conciliação automática não pôde obter a trava de estado.');
   }
   if(!dueEvery(scheduledAt,BILLING_INTERVAL_MINUTES))return;
-  const windowMs=BILLING_INTERVAL_MINUTES*60*1000,windowStart=Math.floor(scheduledAt/windowMs)*windowMs,sql=neon(env.DATABASE_URL),state=await loadState(sql),lastAt=Date.parse(text(state?.settings?.billing_cloudflare_last_result?.at));
-  if(Number.isFinite(lastAt)&&lastAt>=windowStart)return;
-  await tryBackgroundStateLock(env,async()=>{const fresh=await loadState(sql),freshLastAt=Date.parse(text(fresh?.settings?.billing_cloudflare_last_result?.at));if(!Number.isFinite(freshLastAt)||freshLastAt<windowStart)await runBillingCron(env)},'Provedor Plus: geração automática de mensalidades aguardará a próxima checagem.');
+  await tryBackgroundStateLock(env,async()=>{await runBillingCron(env)},'Provedor Plus: geração automática de mensalidades aguardará a próxima checagem.');
 }
 
 async function pushCryptoKey(env){const secret=text(env.BANK_SECRET_KEY)||text(env.PORTAL_SESSION_SECRET)||text(env.DATABASE_URL);if(!secret)throw new Error('Chave de proteção das notificações não configurada.');const raw=await crypto.subtle.digest('SHA-256',enc.encode(`provedor-plus-push-v1|${secret}`));return crypto.subtle.importKey('raw',raw,{name:'AES-GCM'},false,['decrypt'])}
@@ -389,10 +388,22 @@ async function recordInbox(sql,clientId,sourceKey,title,body,clickUrl,createdAt=
 }
 
 async function syncInboxFromMessages(env,sqlArg=null){
-  if(!env?.DATABASE_URL)return;
+  if(!env?.DATABASE_URL)return 0;
   const sql=sqlArg||neon(env.DATABASE_URL);await ensureTables(sql);
-  const rows=await sql`SELECT id,target_client_id,title,body,click_url,created_at FROM pp_push_messages WHERE target_client_id IS NOT NULL AND created_at>=now()-interval '30 days' ORDER BY id DESC LIMIT 1000`;
-  for(const row of rows||[])try{await recordInbox(sql,Number(row.target_client_id),`message:${row.id}`,row.title,row.body,row.click_url,row.created_at)}catch{}
+  const rows=await sql`INSERT INTO pp_notification_inbox (client_id,source_key,title,body,click_url,created_at)
+    SELECT m.target_client_id,'message:'||m.id::text,LEFT(m.title,90),LEFT(m.body,500),m.click_url,m.created_at
+    FROM pp_push_messages m
+    WHERE m.target_client_id IS NOT NULL
+      AND m.created_at>=now()-interval '30 days'
+      AND NOT EXISTS (
+        SELECT 1 FROM pp_notification_inbox i
+        WHERE i.client_id=m.target_client_id AND i.source_key='message:'||m.id::text
+      )
+    ORDER BY m.id ASC
+    LIMIT 200
+    ON CONFLICT (client_id,source_key) DO NOTHING
+    RETURNING id`;
+  return rows?.length||0;
 }
 
 async function deliver(sql,env,{mode='client',identifier='',clientId=null,title,body,url='/',createdBy='Administrador',source='manual'}){
@@ -458,15 +469,15 @@ async function processDueSchedules(env){
       await sql`UPDATE pp_notification_schedules SET status=${noDevice?'failed':'sent'},sent_count=${Number(result.sent)||0},failed_count=${Number(result.failed)||(noDevice?1:0)},sent_at=now(),last_error=${noDevice?'Cliente sem dispositivo autorizado no horário do envio.':null} WHERE id=${Number(row.id)}`;
     }catch(error){failed++;await sql`UPDATE pp_notification_schedules SET status='failed',failed_count=failed_count+1,last_error=${text(error instanceof Error?error.message:error).slice(0,500)},sent_at=now() WHERE id=${Number(row.id)}`}
   }
-  if((rows?.length||0)>0)await syncInboxFromMessages(env,sql);
   return {processed:rows?.length||0,sent,failed};
 }
 
 async function handleInbox(request,env,data,cors){
   if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Provedor Plus não configurada.'),{statusCode:503});
-  const session=await verifySession(data?.session,env),sql=neon(env.DATABASE_URL);await ensureTables(sql);await syncInboxFromMessages(env,sql);
+  const session=await verifySession(data?.session,env),sql=neon(env.DATABASE_URL);await ensureTables(sql);
   const action=text(data?._action);
   if(action==='inbox'){
+    await syncInboxFromMessages(env,sql);
     const items=await sql`SELECT id,title,body,click_url,read_at,created_at FROM pp_notification_inbox WHERE client_id=${session.clientId} ORDER BY created_at DESC,id DESC LIMIT 50`,count=await sql`SELECT COUNT(*)::int AS unread FROM pp_notification_inbox WHERE client_id=${session.clientId} AND read_at IS NULL`;
     return json({ok:true,data:{items:(items||[]).map(row=>({id:Number(row.id),title:text(row.title),body:text(row.body),clickUrl:text(row.click_url),readAt:row.read_at,createdAt:row.created_at})),unread:Number(count?.[0]?.unread)||0}},200,cors);
   }
@@ -533,7 +544,7 @@ export default {
   },
   async scheduled(controller,env,ctx){
     const cron=text(controller?.cron);
-    if(cron==='* * * * *'){
+    if(cron===ECONOMY_CRON){
       if(env?.DATABASE_URL&&typeof ctx?.waitUntil==='function'){
         const scheduledAt=Number(controller?.scheduledTime)||Date.now();
         if(dueEvery(scheduledAt,NOTIFICATION_SCHEDULE_INTERVAL_MINUTES))ctx.waitUntil(processDueSchedules(env).catch(error=>console.error('Provedor Plus: falha nos agendamentos de notificações.',error)));

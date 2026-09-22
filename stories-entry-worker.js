@@ -5,6 +5,7 @@ import {handleServiceStatus} from './service-status-worker.js';
 import {neon} from '@neondatabase/serverless';
 
 const STATE_KEY='web_state_v1017';
+const FINANCIAL_REPAIR_PORTAL_ACTIONS=new Set(['refresh','payment-pix','payment-card','payment-status','payment-prepare','negotiate']);
 const text=value=>String(value??'').trim();
 function parseState(value){if(value&&typeof value==='object'&&!Array.isArray(value))return value;if(typeof value==='string')try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{}return {}}
 function balanceCents(client){const direct=Number(client?.cashback_balance_cents);if(Number.isFinite(direct))return Math.max(0,Math.round(direct));const amount=Number(client?.cashback_balance);return Number.isFinite(amount)?Math.max(0,Math.round(amount*100)):0}
@@ -107,8 +108,10 @@ async function enhancePortalResponse(response,env){
   if(!response?.ok||!env?.DATABASE_URL)return response;
   let body={};try{body=await response.clone().json()}catch{return response}
   if(!body?.ok||!body?.data)return response;
+  const data=body.data,hasPortalData=Boolean(data?.client||Array.isArray(data?.invoices)||data?.portal?.client||Array.isArray(data?.portal?.invoices));
+  if(!hasPortalData)return response;
   try{
-    const sql=neon(env.DATABASE_URL),rows=await sql`SELECT value FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,state=parseState(rows?.[0]?.value),data=body.data;
+    const sql=neon(env.DATABASE_URL),rows=await sql`SELECT value FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,state=parseState(rows?.[0]?.value);
     if(data?.client||data?.invoices)enhancePortalObject(data,state);
     if(data?.portal)enhancePortalObject(data.portal,state);
     const headers=new Headers(response.headers);headers.set('Content-Type','application/json; charset=utf-8');headers.set('Cache-Control','no-store, max-age=0');
@@ -119,12 +122,11 @@ async function enhancePortalResponse(response,env){
 async function fetchWithFinancialConsistency(request,env,ctx){
   const path=new URL(request.url).pathname,reviewPath=path==='/api/customer-portal'||path==='/api/cloud-state';
   if(!reviewPath||request.method!=='POST')return baseWorker.fetch(request,env,ctx);
-  let action='';
-  if(path==='/api/customer-portal')try{const body=await request.clone().json();action=text(body?.action)}catch{}
-  const loginRead=path==='/api/customer-portal'&&action==='login';
-  if(!loginRead)try{await repairFinancialConsistency(env)}catch(error){console.error('Provedor Plus: falha ao revisar consistência financeira antes da ação.',error)}
+  let action='';try{const body=await request.clone().json();action=text(body?.action)}catch{}
+  const needsRepair=path==='/api/cloud-state'?action==='state.save':FINANCIAL_REPAIR_PORTAL_ACTIONS.has(action);
+  if(needsRepair)try{await repairFinancialConsistency(env)}catch(error){console.error('Provedor Plus: falha ao revisar consistência financeira antes da ação.',error)}
   let response=await baseWorker.fetch(request,env,ctx);
-  if(response?.ok&&!loginRead)try{await repairFinancialConsistency(env)}catch(error){console.error('Provedor Plus: falha ao revisar consistência financeira após a ação.',error)}
+  if(response?.ok&&needsRepair)try{await repairFinancialConsistency(env)}catch(error){console.error('Provedor Plus: falha ao revisar consistência financeira após a ação.',error)}
   if(path==='/api/customer-portal'&&response?.ok)response=await enhancePortalResponse(response,env);
   return response;
 }

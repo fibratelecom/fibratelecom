@@ -1,12 +1,12 @@
 # Provedor Plus — Cloudflare Worker de produção
-# build: 20260922-neon-economy3
+# build: 20260922-neon-economy4
 name = "painel"
 main = "notification-center-entry-worker.js"
 compatibility_date = "2026-08-30"
 workers_dev = true
 
 [build]
-command = "node --check app.js && node --check mapa.js && node --check src/network-map.js && node --check src/panel-forms.js && node -e \"Promise.all([import('./src/api.js'),import('./src/ui.js'),import('./src/network-map.js')])\""
+command = "node --check app.js && node --check mapa.js && node --check src/network-map.js && node --check src/panel-forms.js && node --check notification-center-entry-worker.js && node --check operations-entry-worker.js && node --check push-worker.js && node --check stories-entry-worker.js && node --check billing-cron.js && node --check worker-native-api.js && node --check customer-service-worker.js && node --check trust-release-worker.js && node --check negotiation-worker.js && node -e \"Promise.all([import('./src/api.js'),import('./src/ui.js'),import('./src/network-map.js')])\""
 
 [triggers]
 crons = [ "*/5 * * * *", "7 * * * *", "5 6 * * *" ]

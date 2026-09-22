@@ -15,6 +15,51 @@ const normalizeRole=value=>{const role=text(value).toLowerCase();return ['admin'
 function defaultPermissions(role){role=normalizeRole(role);if(role==='admin')return [...ALL_PERMISSIONS];if(role==='tecnico')return ['dashboard','clients','tickets','network'];return ['dashboard','clients','plans','finance','billing','tickets'];}
 function normalizePermissions(value,role){if(normalizeRole(role)==='admin')return [...ALL_PERMISSIONS];const list=Array.isArray(value)?value:defaultPermissions(role);return [...new Set(list.map(v=>text(v)).filter(v=>ALL_PERMISSIONS.includes(v)))];}
 function sqlFor(env){if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão nativa com o Neon não configurada na Cloudflare.'),{statusCode:503});return neon(env.DATABASE_URL);}
+function d1Bool(value){return value===null||value===undefined?null:(bool(value)?1:0)}
+async function mirrorClientRowToD1(env,row){
+  if(!env?.PROVEDOR_DB||!row?.id)return false;
+  const db=env.PROVEDOR_DB;
+  await db.prepare(`INSERT INTO pp_clients (
+    id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,
+    pppoe_user,auto_block,block_after_days,notes,router_id,connection_type,pppoe_username,mikrotik_profile,ip,
+    mac_address,mikrotik_secret_id,mikrotik_status,mikrotik_last_sync,created_at,updated_at
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  ON CONFLICT(id) DO UPDATE SET
+    name=excluded.name,document=excluded.document,contract_number=excluded.contract_number,plan=excluded.plan,
+    plan_id=excluded.plan_id,due_day=excluded.due_day,status=excluded.status,email=excluded.email,phone=excluded.phone,
+    address=excluded.address,city=excluded.city,state=excluded.state,zip_code=excluded.zip_code,pppoe_user=excluded.pppoe_user,
+    auto_block=excluded.auto_block,block_after_days=excluded.block_after_days,notes=excluded.notes,router_id=excluded.router_id,
+    connection_type=excluded.connection_type,pppoe_username=excluded.pppoe_username,mikrotik_profile=excluded.mikrotik_profile,
+    ip=excluded.ip,mac_address=excluded.mac_address,mikrotik_secret_id=excluded.mikrotik_secret_id,
+    mikrotik_status=excluded.mikrotik_status,mikrotik_last_sync=excluded.mikrotik_last_sync,
+    created_at=COALESCE(pp_clients.created_at,excluded.created_at),updated_at=excluded.updated_at`).bind(
+      Number(row.id),text(row.name),nullableText(row.document),nullableText(row.contract_number),nullableText(row.plan),num(row.plan_id),num(row.due_day),nullableText(row.status),nullableText(row.email),nullableText(row.phone),nullableText(row.address),nullableText(row.city),nullableText(row.state),nullableText(row.zip_code),nullableText(row.pppoe_user),d1Bool(row.auto_block),num(row.block_after_days),nullableText(row.notes),num(row.router_id),nullableText(row.connection_type),nullableText(row.pppoe_username),nullableText(row.mikrotik_profile),nullableText(row.ip),nullableText(row.mac_address),nullableText(row.mikrotik_secret_id),nullableText(row.mikrotik_status),row.mikrotik_last_sync||null,row.created_at||null,row.updated_at||new Date().toISOString()
+    ).run();
+  return true;
+}
+async function mirrorPlanRowToD1(env,row){
+  if(!env?.PROVEDOR_DB||!row?.id)return false;
+  await env.PROVEDOR_DB.prepare(`INSERT INTO pp_plans (id,name,speed_down_mbps,speed_up_mbps,price_cents,active,description,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(id) DO UPDATE SET name=excluded.name,speed_down_mbps=excluded.speed_down_mbps,
+    speed_up_mbps=excluded.speed_up_mbps,price_cents=excluded.price_cents,active=excluded.active,
+    description=excluded.description,created_at=COALESCE(pp_plans.created_at,excluded.created_at),updated_at=excluded.updated_at`).bind(
+      Number(row.id),text(row.name),Math.max(0,Number(row.speed_down_mbps)||0),Math.max(0,Number(row.speed_up_mbps)||0),Math.max(0,Math.round(Number(row.price_cents)||0)),d1Bool(row.active),nullableText(row.description),row.created_at||null,row.updated_at||new Date().toISOString()
+    ).run();
+  return true;
+}
+export async function mirrorClientToD1(env,clientId){
+  const id=num(clientId);if(!id||!env?.PROVEDOR_DB)return false;
+  const rows=await sqlFor(env)`SELECT * FROM pp_clients WHERE id=${id} LIMIT 1`,row=Array.isArray(rows)?rows[0]:null;
+  if(!row){await env.PROVEDOR_DB.prepare('DELETE FROM pp_clients WHERE id = ?').bind(id).run();return false}
+  return mirrorClientRowToD1(env,row);
+}
+export async function mirrorPlanToD1(env,planId){
+  const id=num(planId);if(!id||!env?.PROVEDOR_DB)return false;
+  const rows=await sqlFor(env)`SELECT * FROM pp_plans WHERE id=${id} LIMIT 1`,row=Array.isArray(rows)?rows[0]:null;
+  if(!row){await env.PROVEDOR_DB.prepare('DELETE FROM pp_plans WHERE id = ?').bind(id).run();return false}
+  return mirrorPlanRowToD1(env,row);
+}
 function apiJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store, max-age=0',...headers}});}
 async function bodyOf(request){try{return await request.json()}catch{return {}}}
 function cookies(request){const out={};for(const part of text(request.headers.get('cookie')).split(';')){const i=part.indexOf('=');if(i<0)continue;out[part.slice(0,i).trim()]=decodeURIComponent(part.slice(i+1).trim())}return out;}
@@ -185,19 +230,20 @@ function nativePlanPayload(data={}){
   if(!id||!name)return null;
   return {id,name,speedDown:Math.max(0,Math.round(Number(data.download_mbps??data.speed_down_mbps??data.download)||0)),speedUp:Math.max(0,Math.round(Number(data.upload_mbps??data.speed_up_mbps??data.upload)||0)),priceCents:Math.max(0,Math.round(Number(data.price_cents??data.value_cents)||0)),active:bool(data.active??data.enabled,true),description:text(data.description),updatedAt:new Date().toISOString()};
 }
-async function upsertNativePlan(sql,data){
+async function upsertNativePlan(sql,data,env=null){
   const plan=nativePlanPayload(data);if(!plan)throw Object.assign(new Error('Plano inválido para sincronização com o cadastro nativo.'),{statusCode:409});
   const conflict=await sql`SELECT id FROM pp_plans WHERE name=${plan.name} AND id<>${plan.id} LIMIT 1`;
   if(conflict[0]?.id)throw Object.assign(new Error(`O plano ${plan.name} já existe no banco com outro identificador. Revise o cadastro de planos antes de vincular clientes.`),{statusCode:409});
-  const rows=await sql`INSERT INTO pp_plans (id,name,speed_down_mbps,speed_up_mbps,price_cents,active,description,updated_at) VALUES (${plan.id},${plan.name},${plan.speedDown},${plan.speedUp},${plan.priceCents},${plan.active},${plan.description},${plan.updatedAt}) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name,speed_down_mbps=EXCLUDED.speed_down_mbps,speed_up_mbps=EXCLUDED.speed_up_mbps,price_cents=EXCLUDED.price_cents,active=EXCLUDED.active,description=EXCLUDED.description,updated_at=EXCLUDED.updated_at RETURNING *`;
-  return rows[0]||null;
+  const rows=await sql`INSERT INTO pp_plans (id,name,speed_down_mbps,speed_up_mbps,price_cents,active,description,updated_at) VALUES (${plan.id},${plan.name},${plan.speedDown},${plan.speedUp},${plan.priceCents},${plan.active},${plan.description},${plan.updatedAt}) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name,speed_down_mbps=EXCLUDED.speed_down_mbps,speed_up_mbps=EXCLUDED.speed_up_mbps,price_cents=EXCLUDED.price_cents,active=EXCLUDED.active,description=EXCLUDED.description,updated_at=EXCLUDED.updated_at RETURNING *`,saved=rows[0]||null;
+  if(saved&&env?.PROVEDOR_DB)try{await mirrorPlanRowToD1(env,saved)}catch(error){console.error(`Provedor Plus: não foi possível espelhar o plano ${plan.id} no D1.`,error)}
+  return saved;
 }
-async function syncNativePlanCatalog(sql,state){for(const plan of Array.isArray(state?.plans)?state.plans:[]){if(num(plan?.id)&&text(plan?.name))await upsertNativePlan(sql,plan)}}
-async function ensureNativePlanForClient(sql,planId){
+async function syncNativePlanCatalog(sql,state,env){for(const plan of Array.isArray(state?.plans)?state.plans:[]){if(num(plan?.id)&&text(plan?.name))await upsertNativePlan(sql,plan,env)}}
+async function ensureNativePlanForClient(sql,planId,env){
   const id=num(planId);if(!id)return null;
   const row=await getSetting(sql,STATE_KEY),state=row?.value&&typeof row.value==='object'?row.value:{},plan=(Array.isArray(state?.plans)?state.plans:[]).find(item=>Number(item?.id)===Number(id));
   if(!plan)throw Object.assign(new Error('O plano selecionado não existe mais no cadastro de planos do Provedor Plus. Atualize o formulário e selecione um plano válido.'),{statusCode:409});
-  return upsertNativePlan(sql,plan);
+  return upsertNativePlan(sql,plan,env);
 }
 export async function handleNativeCloudState(request,env){
   if(request.method!=='POST')return apiJson({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-native-state'});const sql=sqlFor(env);
@@ -207,7 +253,7 @@ export async function handleNativeCloudState(request,env){
       if(!data.state||typeof data.state!=='object'||Array.isArray(data.state))throw Object.assign(new Error('Estado do gerenciador inválido.'),{statusCode:400});
       const previous=await getSetting(sql,STATE_KEY),expectedAt=text(data.baseUpdatedAt),actualAt=previous?.updated_at,expectedTime=Date.parse(expectedAt),actualTime=actualAt instanceof Date?actualAt.getTime():Date.parse(text(actualAt));
       if(expectedAt&&actualAt&&Number.isFinite(expectedTime)&&Number.isFinite(actualTime)&&expectedTime!==actualTime)throw Object.assign(new Error('O estado foi atualizado em outro acesso. Recarregando para mesclar as alterações.'),{statusCode:409});
-      const merged=preservePortalState(data.state,previous?.value),clean=sanitize(merged);await syncNativePlanCatalog(sql,clean);const row=await setSetting(sql,STATE_KEY,clean);result={state:row?.value||clean,updated_at:row?.updated_at||new Date().toISOString()};
+      const merged=preservePortalState(data.state,previous?.value),clean=sanitize(merged);await syncNativePlanCatalog(sql,clean,env);const row=await setSetting(sql,STATE_KEY,clean);result={state:row?.value||clean,updated_at:row?.updated_at||new Date().toISOString()};
     }
     else if(action==='health'){const row=await getSetting(sql,STATE_KEY);result={online:true,hasState:Boolean(row?.value),updated_at:row?.updated_at||null};}
     else throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});return apiJson({ok:true,data:result},200,{'x-provedor-plus-edge':'cloudflare-native-state'});
@@ -219,14 +265,16 @@ function clientPayload(data={}){const id=num(data.id),routerId=num(data.router_i
 function safeClientRow(row){if(!row||typeof row!=='object')return row;const out={...row};delete out.pppoe_password;delete out.pppoePassword;delete out.password;return out;}
 async function saveRouter(sql,data){const p=routerPayload(data);if(!p.host||!p.username)throw Object.assign(new Error('Informe o endereço e o usuário do MikroTik.'),{statusCode:400});let rows=[];if(p.id)rows=await sql`UPDATE pp_routers SET name=${p.name},host=${p.host},port=${p.port},username=${p.username},connection_method=${p.connection_method},allow_self_signed=${p.allow_self_signed},active=${p.active},last_status=${p.last_status},last_sync=COALESCE(${p.last_sync},last_sync),updated_at=${p.updated_at} WHERE id=${p.id} RETURNING *`;if(rows[0])return rows[0];if(p.id){rows=await sql`INSERT INTO pp_routers (id,name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,updated_at) VALUES (${p.id},${p.name},${p.host},${p.port},${p.username},${p.connection_method},${p.allow_self_signed},${p.active},${p.last_status},${p.last_sync},${p.updated_at}) RETURNING *`;return rows[0]}rows=await sql`INSERT INTO pp_routers (name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,updated_at) VALUES (${p.name},${p.host},${p.port},${p.username},${p.connection_method},${p.allow_self_signed},${p.active},${p.last_status},${p.last_sync},${p.updated_at}) RETURNING *`;return rows[0];}
 async function findExistingClient(sql,p){if(p.contract_number){const rows=await sql`SELECT id FROM pp_clients WHERE contract_number=${p.contract_number} LIMIT 1`;if(rows[0]?.id)return num(rows[0].id)}if(p.document){const rows=await sql`SELECT id FROM pp_clients WHERE document=${p.document} LIMIT 1`;if(rows[0]?.id)return num(rows[0].id)}return null;}
-async function saveClient(sql,data){const p=clientPayload(data);if(!p.name)throw Object.assign(new Error('Nome do cliente é obrigatório.'),{statusCode:400});if(p.plan_id){const linkedPlan=await ensureNativePlanForClient(sql,p.plan_id);if(!p.plan)p.plan=text(linkedPlan?.name)}if(!p.id)p.id=await findExistingClient(sql,p);let rows=[];
+async function saveClient(sql,data,env){const p=clientPayload(data);if(!p.name)throw Object.assign(new Error('Nome do cliente é obrigatório.'),{statusCode:400});if(p.plan_id){const linkedPlan=await ensureNativePlanForClient(sql,p.plan_id,env);if(!p.plan)p.plan=text(linkedPlan?.name)}if(!p.id)p.id=await findExistingClient(sql,p);let rows=[];
   if(p.id){
     if(p.pppoe_password)rows=await sql`UPDATE pp_clients SET name=${p.name},document=${p.document},contract_number=${p.contract_number},plan=${p.plan},plan_id=${p.plan_id},due_day=${p.due_day},status=${p.status},email=${p.email},phone=${p.phone},address=${p.address},city=${p.city},state=${p.state},zip_code=${p.zip_code},pppoe_user=${p.pppoe_user},pppoe_password=${p.pppoe_password},auto_block=${p.auto_block},block_after_days=${p.block_after_days},notes=${p.notes},router_id=${p.router_id},connection_type=${p.connection_type},pppoe_username=${p.pppoe_username},mikrotik_profile=${p.mikrotik_profile},ip=${p.ip},mac_address=${p.mac_address},mikrotik_secret_id=${p.mikrotik_secret_id},mikrotik_status=${p.mikrotik_status},mikrotik_last_sync=${p.mikrotik_last_sync},updated_at=${p.updated_at} WHERE id=${p.id} RETURNING *`;
     else rows=await sql`UPDATE pp_clients SET name=${p.name},document=${p.document},contract_number=${p.contract_number},plan=${p.plan},plan_id=${p.plan_id},due_day=${p.due_day},status=${p.status},email=${p.email},phone=${p.phone},address=${p.address},city=${p.city},state=${p.state},zip_code=${p.zip_code},pppoe_user=${p.pppoe_user},auto_block=${p.auto_block},block_after_days=${p.block_after_days},notes=${p.notes},router_id=${p.router_id},connection_type=${p.connection_type},pppoe_username=${p.pppoe_username},mikrotik_profile=${p.mikrotik_profile},ip=${p.ip},mac_address=${p.mac_address},mikrotik_secret_id=${p.mikrotik_secret_id},mikrotik_status=${p.mikrotik_status},mikrotik_last_sync=${p.mikrotik_last_sync},updated_at=${p.updated_at} WHERE id=${p.id} RETURNING *`;
-    if(rows[0])return safeClientRow(rows[0]);
+    if(rows[0]){if(env?.PROVEDOR_DB)try{await mirrorClientRowToD1(env,rows[0])}catch(error){console.error(`Provedor Plus: não foi possível espelhar o cliente ${p.id} no D1.`,error)}return safeClientRow(rows[0]);}
   }
   if(p.pppoe_password)rows=await sql`INSERT INTO pp_clients (name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,pppoe_user,pppoe_password,auto_block,block_after_days,notes,router_id,connection_type,pppoe_username,mikrotik_profile,ip,mac_address,mikrotik_secret_id,mikrotik_status,mikrotik_last_sync,updated_at) VALUES (${p.name},${p.document},${p.contract_number},${p.plan},${p.plan_id},${p.due_day},${p.status},${p.email},${p.phone},${p.address},${p.city},${p.state},${p.zip_code},${p.pppoe_user},${p.pppoe_password},${p.auto_block},${p.block_after_days},${p.notes},${p.router_id},${p.connection_type},${p.pppoe_username},${p.mikrotik_profile},${p.ip},${p.mac_address},${p.mikrotik_secret_id},${p.mikrotik_status},${p.mikrotik_last_sync},${p.updated_at}) RETURNING *`;
-  else rows=await sql`INSERT INTO pp_clients (name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,pppoe_user,auto_block,block_after_days,notes,router_id,connection_type,pppoe_username,mikrotik_profile,ip,mac_address,mikrotik_secret_id,mikrotik_status,mikrotik_last_sync,updated_at) VALUES (${p.name},${p.document},${p.contract_number},${p.plan},${p.plan_id},${p.due_day},${p.status},${p.email},${p.phone},${p.address},${p.city},${p.state},${p.zip_code},${p.pppoe_user},${p.auto_block},${p.block_after_days},${p.notes},${p.router_id},${p.connection_type},${p.pppoe_username},${p.mikrotik_profile},${p.ip},${p.mac_address},${p.mikrotik_secret_id},${p.mikrotik_status},${p.mikrotik_last_sync},${p.updated_at}) RETURNING *`;return safeClientRow(rows[0]);}
+  else rows=await sql`INSERT INTO pp_clients (name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,pppoe_user,auto_block,block_after_days,notes,router_id,connection_type,pppoe_username,mikrotik_profile,ip,mac_address,mikrotik_secret_id,mikrotik_status,mikrotik_last_sync,updated_at) VALUES (${p.name},${p.document},${p.contract_number},${p.plan},${p.plan_id},${p.due_day},${p.status},${p.email},${p.phone},${p.address},${p.city},${p.state},${p.zip_code},${p.pppoe_user},${p.auto_block},${p.block_after_days},${p.notes},${p.router_id},${p.connection_type},${p.pppoe_username},${p.mikrotik_profile},${p.ip},${p.mac_address},${p.mikrotik_secret_id},${p.mikrotik_status},${p.mikrotik_last_sync},${p.updated_at}) RETURNING *`;
+  const saved=rows[0]||null;if(saved&&env?.PROVEDOR_DB)try{await mirrorClientRowToD1(env,saved)}catch(error){console.error(`Provedor Plus: não foi possível espelhar o cliente ${saved.id} no D1.`,error)}return safeClientRow(saved);
+}
 async function encryptSecret(value,keyBytes){const iv=randomBytes(12),key=await crypto.subtle.importKey('raw',keyBytes,{name:'AES-GCM'},false,['encrypt']),combined=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},key,utf8.encode(String(value))));const tag=combined.slice(combined.length-16),data=combined.slice(0,combined.length-16);return {v:1,iv:bytesToB64(iv),tag:bytesToB64(tag),data:bytesToB64(data)};}
 async function decryptSecret(record,keyBytes){try{if(!record?.iv||!record?.tag||!record?.data)return '';const data=b64ToBytes(record.data),tag=b64ToBytes(record.tag),combined=new Uint8Array(data.length+tag.length);combined.set(data);combined.set(tag,data.length);const key=await crypto.subtle.importKey('raw',keyBytes,{name:'AES-GCM'},false,['decrypt']),plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:b64ToBytes(record.iv)},key,combined);return new TextDecoder().decode(plain)}catch{return ''}}
 const routerSecretV2SettingKey=routerId=>`router_secret_v2_${Number(routerId)}`;
@@ -303,8 +351,8 @@ export async function handleNativeCloudData(request,env){
     else if(action==='routers.secret.save')result=await routerSecretSave(env,sql,data.id,data.password);
     else if(action==='routers.secret.delete')result=await routerSecretDelete(env,sql,data.id);
     else if(action==='clients.list')result=(await sql`SELECT * FROM pp_clients ORDER BY id ASC`).map(safeClientRow);
-    else if(action==='clients.save')result=safeClientRow(await saveClient(sql,data));
-    else if(action==='clients.delete'){const id=num(data.id);if(!id)throw Object.assign(new Error('Cliente inválido.'),{statusCode:400});await sql`DELETE FROM pp_clients WHERE id=${id}`;result={deleted:true,id};}
+    else if(action==='clients.save')result=safeClientRow(await saveClient(sql,data,env));
+    else if(action==='clients.delete'){const id=num(data.id);if(!id)throw Object.assign(new Error('Cliente inválido.'),{statusCode:400});await sql`DELETE FROM pp_clients WHERE id=${id}`;if(env?.PROVEDOR_DB)try{await mirrorClientToD1(env,id)}catch(error){console.error(`Provedor Plus: não foi possível remover o espelho D1 do cliente ${id}.`,error)}result={deleted:true,id};}
     else if(action==='cashback.wallet.get')result=await cashbackWalletGet(sql,data);
     else if(action==='cashback.wallet.adjust')result=await cashbackWalletAdjust(request,sql,data);
     else if(action==='traffic.record')result=await trafficRecord(sql,data);

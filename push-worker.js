@@ -8,6 +8,7 @@ const VAPID_KEY='push_vapid_v1';
 const STATE_KEY='web_state_v1017';
 const CLIENT_ORIGINS=new Set(['https://cliente.fibramais.workers.dev','https://client.fibramais.workers.dev']);
 const CLIENT_APP_ORIGIN='https://cliente.fibramais.workers.dev';
+const AUTOMATIC_SCAN_PORTAL_ACTIONS=new Set(['payment-pix','payment-card','payment-status','negotiate']);
 const DAY=86400000;
 const text=value=>String(value??'').trim();
 const digits=value=>text(value).replace(/\D/g,'');
@@ -195,11 +196,12 @@ async function scanAutomaticEvents(env){
 
 async function shouldScanAfterRequest(request){
   if(request.method!=='POST')return false;
-  const path=new URL(request.url).pathname;
-  if(path==='/api/cloud-state'||path==='/api/bank-proxy')return true;
-  if(path!=='/api/customer-portal')return false;
+  const url=new URL(request.url),path=url.pathname;
+  if(path==='/api/customer-portal'&&url.searchParams.get('mp_webhook')==='1')return true;
   let action='';try{const body=await request.clone().json();action=text(body?.action).toLowerCase()}catch{}
-  return !['login','refresh','connection-test','negotiation-options','negotiation-preview','cashback-statement'].includes(action);
+  if(path==='/api/cloud-state')return action==='state.save';
+  if(path!=='/api/customer-portal')return false;
+  return AUTOMATIC_SCAN_PORTAL_ACTIONS.has(action);
 }
 
 async function requirePanelAdmin(request,env,ctx){

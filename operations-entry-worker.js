@@ -246,9 +246,11 @@ async function handleOperations(request,env,ctx){
 async function shouldScanAfterRequest(request){
   if(request.method!=='POST')return false;
   const path=new URL(request.url).pathname;
-  if(['/api/cloud-state','/api/bank-proxy','/api/customer-due-date','/api/customer-trust-release','/api/protocols'].includes(path))return true;
-  if(path!=='/api/customer-portal')return false;
   let action='';try{const body=await request.clone().json();action=text(body?.action).toLowerCase()}catch{}
+  if(path==='/api/cloud-state')return action==='state.save';
+  if(path==='/api/protocols')return action==='create'||action==='close';
+  if(['/api/bank-proxy','/api/customer-due-date','/api/customer-trust-release'].includes(path))return true;
+  if(path!=='/api/customer-portal')return false;
   return !['login','refresh','connection-test','negotiation-options','negotiation-preview','cashback-statement'].includes(action);
 }
 

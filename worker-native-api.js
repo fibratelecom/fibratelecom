@@ -271,10 +271,19 @@ async function upsertNativePlan(sql,data,env=null){
   return saved;
 }
 async function syncNativePlanCatalog(sql,state,env){for(const plan of Array.isArray(state?.plans)?state.plans:[]){if(num(plan?.id)&&text(plan?.name))await upsertNativePlan(sql,plan,env)}}
+function safePlanRow(row){if(!row||typeof row!=='object')return row;return {...row,id:Number(row.id),speed_down_mbps:Math.max(0,Number(row.speed_down_mbps)||0),speed_up_mbps:Math.max(0,Number(row.speed_up_mbps)||0),price_cents:Math.max(0,Math.round(Number(row.price_cents)||0)),active:bool(row.active,true)}}
+async function readPlanById(env,sql,planId){
+  const id=num(planId);if(!id)return null;
+  if(env?.PROVEDOR_DB)try{const result=await env.PROVEDOR_DB.prepare('SELECT id,name,speed_down_mbps,speed_up_mbps,price_cents,active,description,created_at,updated_at FROM pp_plans WHERE id=? LIMIT 1').bind(id).all(),row=result?.results?.[0];if(row)return safePlanRow(row)}catch(error){console.error(`Provedor Plus: leitura D1 do plano ${id} falhou; usando Neon.`,error)}
+  const rows=await sql`SELECT * FROM pp_plans WHERE id=${id} LIMIT 1`,row=Array.isArray(rows)?rows[0]:null;
+  if(row&&env?.PROVEDOR_DB)try{await mirrorPlanRowToD1(env,row)}catch(error){console.error(`Provedor Plus: não foi possível recompor o espelho D1 do plano ${id}.`,error)}
+  return safePlanRow(row);
+}
 async function ensureNativePlanForClient(sql,planId,env){
   const id=num(planId);if(!id)return null;
-  const row=await getSetting(sql,STATE_KEY),state=row?.value&&typeof row.value==='object'?row.value:{},plan=(Array.isArray(state?.plans)?state.plans:[]).find(item=>Number(item?.id)===Number(id));
+  const nativePlan=await readPlanById(env,sql,id),row=await getSetting(sql,STATE_KEY),state=row?.value&&typeof row.value==='object'?row.value:{},plan=(Array.isArray(state?.plans)?state.plans:[]).find(item=>Number(item?.id)===Number(id));
   if(!plan)throw Object.assign(new Error('O plano selecionado não existe mais no cadastro de planos do Provedor Plus. Atualize o formulário e selecione um plano válido.'),{statusCode:409});
+  if(nativePlan&&text(nativePlan.name)===text(plan.name))return nativePlan;
   return upsertNativePlan(sql,plan,env);
 }
 export async function handleNativeCloudState(request,env){
@@ -294,7 +303,13 @@ export async function handleNativeCloudState(request,env){
 
 function routerPayload(data={}){const id=num(data.id),out={name:text(data.name)||'MikroTik',host:text(data.host),port:num(data.port)||443,username:text(data.username),connection_method:'rest',allow_self_signed:bool(data.allow_self_signed,false),active:bool(data.active,true),last_status:text(data.last_status),last_sync:data.last_sync||null,updated_at:new Date().toISOString()};if(id)out.id=id;return out;}
 function clientPayload(data={}){const id=num(data.id),routerId=num(data.router_id),pppoeUser=text(data.pppoe_username||data.pppoe_user),out={name:text(data.name),document:text(data.document),contract_number:text(data.contract_number),plan:text(data.plan||data.plan_name),plan_id:num(data.plan_id),due_day:num(data.due_day),status:text(data.status)||'Ativo',email:text(data.email),phone:text(data.phone),address:text(data.address||data.street),city:text(data.city),state:text(data.state),zip_code:text(data.zip_code||data.cep),pppoe_user:pppoeUser,auto_block:bool(data.auto_block,false),block_after_days:num(data.block_after_days)||7,notes:text(data.notes),router_id:routerId,connection_type:nullableText(data.connection_type),pppoe_username:nullableText(pppoeUser),mikrotik_profile:nullableText(data.mikrotik_profile),ip:nullableText(data.ip),mac_address:nullableText(data.mac_address),mikrotik_secret_id:nullableText(data.mikrotik_secret_id||data.secret_id),mikrotik_status:nullableText(data.mikrotik_status),mikrotik_last_sync:data.mikrotik_last_sync||data.last_mikrotik_sync||null,updated_at:new Date().toISOString()};if(id)out.id=id;if(text(data.pppoe_password))out.pppoe_password=text(data.pppoe_password);return out;}
-function safeClientRow(row){if(!row||typeof row!=='object')return row;const out={...row};delete out.pppoe_password;delete out.pppoePassword;delete out.password;return out;}
+function safeClientRow(row){if(!row||typeof row!=='object')return row;const out={...row};delete out.pppoe_password;delete out.pppoePassword;delete out.password;out.id=Number(out.id);out.auto_block=bool(out.auto_block,false);return out;}
+async function readClientList(env,sql){
+  if(env?.PROVEDOR_DB)try{const result=await env.PROVEDOR_DB.prepare(`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,pppoe_user,auto_block,block_after_days,notes,router_id,connection_type,pppoe_username,mikrotik_profile,ip,mac_address,mikrotik_secret_id,mikrotik_status,mikrotik_last_sync,created_at,updated_at FROM pp_clients ORDER BY id ASC`).all(),rows=Array.isArray(result?.results)?result.results:[];if(rows.length)return rows.map(safeClientRow)}catch(error){console.error('Provedor Plus: leitura D1 dos clientes falhou; usando Neon.',error)}
+  const rows=await sql`SELECT * FROM pp_clients ORDER BY id ASC`;
+  if(env?.PROVEDOR_DB)for(const row of Array.isArray(rows)?rows:[])try{await mirrorClientRowToD1(env,row)}catch(error){console.error(`Provedor Plus: não foi possível recompor o espelho D1 do cliente ${row?.id}.`,error)}
+  return (Array.isArray(rows)?rows:[]).map(safeClientRow);
+}
 async function saveRouter(sql,data,env){const p=routerPayload(data);if(!p.host||!p.username)throw Object.assign(new Error('Informe o endereço e o usuário do MikroTik.'),{statusCode:400});let rows=[];if(p.id)rows=await sql`UPDATE pp_routers SET name=${p.name},host=${p.host},port=${p.port},username=${p.username},connection_method=${p.connection_method},allow_self_signed=${p.allow_self_signed},active=${p.active},last_status=${p.last_status},last_sync=COALESCE(${p.last_sync},last_sync),updated_at=${p.updated_at} WHERE id=${p.id} RETURNING *`;if(!rows[0]&&p.id)rows=await sql`INSERT INTO pp_routers (id,name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,updated_at) VALUES (${p.id},${p.name},${p.host},${p.port},${p.username},${p.connection_method},${p.allow_self_signed},${p.active},${p.last_status},${p.last_sync},${p.updated_at}) RETURNING *`;if(!rows[0])rows=await sql`INSERT INTO pp_routers (name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,updated_at) VALUES (${p.name},${p.host},${p.port},${p.username},${p.connection_method},${p.allow_self_signed},${p.active},${p.last_status},${p.last_sync},${p.updated_at}) RETURNING *`;const saved=rows[0]||null;if(saved&&env?.PROVEDOR_DB)try{await mirrorRouterRowToD1(env,saved)}catch(error){console.error(`Provedor Plus: não foi possível espelhar o MikroTik ${saved.id} no D1.`,error)}return saved;}
 async function findExistingClient(sql,p){if(p.contract_number){const rows=await sql`SELECT id FROM pp_clients WHERE contract_number=${p.contract_number} LIMIT 1`;if(rows[0]?.id)return num(rows[0].id)}if(p.document){const rows=await sql`SELECT id FROM pp_clients WHERE document=${p.document} LIMIT 1`;if(rows[0]?.id)return num(rows[0].id)}return null;}
 async function saveClient(sql,data,env){const p=clientPayload(data);if(!p.name)throw Object.assign(new Error('Nome do cliente é obrigatório.'),{statusCode:400});if(p.plan_id){const linkedPlan=await ensureNativePlanForClient(sql,p.plan_id,env);if(!p.plan)p.plan=text(linkedPlan?.name)}if(!p.id)p.id=await findExistingClient(sql,p);let rows=[];
@@ -390,7 +405,7 @@ export async function handleNativeCloudData(request,env){
     else if(action==='routers.secret.get')result=await routerSecretGet(env,sql,data.id);
     else if(action==='routers.secret.save')result=await routerSecretSave(env,sql,data.id,data.password);
     else if(action==='routers.secret.delete')result=await routerSecretDelete(env,sql,data.id);
-    else if(action==='clients.list')result=(await sql`SELECT * FROM pp_clients ORDER BY id ASC`).map(safeClientRow);
+    else if(action==='clients.list')result=await readClientList(env,sql);
     else if(action==='clients.save')result=safeClientRow(await saveClient(sql,data,env));
     else if(action==='clients.delete'){const id=num(data.id);if(!id)throw Object.assign(new Error('Cliente inválido.'),{statusCode:400});await sql`DELETE FROM pp_clients WHERE id=${id}`;if(env?.PROVEDOR_DB)try{await mirrorClientToD1(env,id)}catch(error){console.error(`Provedor Plus: não foi possível remover o espelho D1 do cliente ${id}.`,error)}result={deleted:true,id};}
     else if(action==='cashback.wallet.get')result=await cashbackWalletGet(sql,data);

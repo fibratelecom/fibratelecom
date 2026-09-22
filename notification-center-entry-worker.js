@@ -2,7 +2,7 @@ import baseWorker from './operations-entry-worker.js';
 import {runBillingCron} from './billing-cron.js';
 import {neon} from '@neondatabase/serverless';
 import {buildPushHTTPRequest} from '@pushforge/builder';
-import {resolveRouterForService,recordTrafficForService} from './worker-native-api.js';
+import {resolveRouterForService,recordTrafficForService,mirrorClientToD1} from './worker-native-api.js';
 import {handleMikrotikProxy} from './worker-mikrotik-native.js';
 import {beginPaymentPriority,paymentPriorityActive} from './state-write-lock.js';
 
@@ -36,6 +36,16 @@ function json(data,status=200,headers={}){return new Response(JSON.stringify(dat
 function clientCors(request){const origin=text(request.headers.get('origin')),headers={'Vary':'Origin','Access-Control-Allow-Methods':'POST,OPTIONS','Access-Control-Allow-Headers':'Content-Type','Access-Control-Max-Age':'86400'};if(CLIENT_ORIGINS.has(origin))headers['Access-Control-Allow-Origin']=origin;return headers}
 function parseState(value){if(value&&typeof value==='object'&&!Array.isArray(value))return value;if(typeof value==='string')try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{}return {}}
 async function loadState(sql){const rows=await sql`SELECT value FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`;return parseState(rows?.[0]?.value)}
+async function mirrorRecentClientsToD1(env,minutes=15){
+  if(!env?.DATABASE_URL||!env?.PROVEDOR_DB)return {checked:0,mirrored:0,failed:0};
+  const windowMinutes=Math.max(5,Math.min(60,Math.floor(Number(minutes)||15))),since=new Date(Date.now()-windowMinutes*60*1000).toISOString(),sql=neon(env.DATABASE_URL),rows=await sql`SELECT id FROM pp_clients WHERE updated_at IS NOT NULL AND updated_at>=${since} ORDER BY updated_at ASC LIMIT 500`;
+  let mirrored=0,failed=0;
+  for(let start=0;start<(rows||[]).length;start+=20){
+    const results=await Promise.allSettled(rows.slice(start,start+20).map(row=>mirrorClientToD1(env,row.id)));
+    for(const result of results)result.status==='fulfilled'?mirrored++:failed++;
+  }
+  return {checked:(rows||[]).length,mirrored,failed};
+}
 function trafficService(row,scope='primary'){
   const clientId=Number(row?.client_id??row?.id)||0,routerId=Number(row?.router_id)||0,username=text(row?.pppoe_username||row?.pppoe_user),connectionType=normalize(row?.connection_type),normalizedScope=text(scope)||'primary';
   if(!clientId||!routerId||!username||(connectionType&&connectionType!=='pppoe'))return null;
@@ -538,7 +548,12 @@ export default {
     try{
       const priorityAction=await paymentPriorityAction(request,path);if(priorityAction)priorityStop=await beginPaymentPriority(env);
       const forward=async()=>{let response=await baseWorker.fetch(request,env,ctx);if(portalLoginRate)response=await finishPortalLoginRate(request,response,portalLoginRate,ctx);return path==='/api/bank-settings'?await sanitizeBankResponse(response):response};
-      if(await stateMutationRequest(request,path))return await withStateWriteLock(env,forward,priorityAction?60000:20000);
+      const mutation=await stateMutationRequest(request,path);
+      if(mutation){
+        const response=await withStateWriteLock(env,forward,priorityAction?60000:20000);
+        if(response?.ok&&env?.PROVEDOR_DB){const task=mirrorRecentClientsToD1(env).catch(error=>console.error('Provedor Plus: falha ao espelhar alterações recentes de clientes no D1.',error));if(typeof ctx?.waitUntil==='function')ctx.waitUntil(task);else await task}
+        return response;
+      }
       return await forward();
     }catch(error){return stateLockErrorResponse(request,error)}finally{if(priorityStop)await priorityStop()}
   },
@@ -550,6 +565,7 @@ export default {
         if(dueEvery(scheduledAt,NOTIFICATION_SCHEDULE_INTERVAL_MINUTES))ctx.waitUntil(processDueSchedules(env).catch(error=>console.error('Provedor Plus: falha nos agendamentos de notificações.',error)));
         if(dueEvery(scheduledAt,TRAFFIC_COLLECTION_INTERVAL_MINUTES))ctx.waitUntil(collectCustomerTraffic(env).catch(error=>console.error('Provedor Plus: falha na coleta automática do consumo PPPoE.',error)));
         if(dueEvery(scheduledAt,PAYMENT_RECONCILIATION_INTERVAL_MINUTES))ctx.waitUntil(runScheduledStateMaintenance(env,scheduledAt).catch(error=>console.error('Provedor Plus: falha na manutenção automática de pagamentos e mensalidades.',error)));
+        if(env?.PROVEDOR_DB)ctx.waitUntil(mirrorRecentClientsToD1(env).catch(error=>console.error('Provedor Plus: falha ao sincronizar clientes recentes com o D1.',error)));
       }
       return;
     }

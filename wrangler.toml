@@ -1,5 +1,5 @@
 # Provedor Plus — Cloudflare Worker de produção
-# build: 20260922-neon-economy1
+# build: 20260922-neon-economy2
 name = "painel"
 main = "notification-center-entry-worker.js"
 compatibility_date = "2026-08-30"
@@ -9,7 +9,7 @@ workers_dev = true
 command = "node --check app.js && node --check mapa.js && node --check src/network-map.js && node --check src/panel-forms.js && node -e \"Promise.all([import('./src/api.js'),import('./src/ui.js'),import('./src/network-map.js')])\""
 
 [triggers]
-crons = [ "* * * * *", "7,37 * * * *", "5 6 * * *" ]
+crons = [ "* * * * *", "7 * * * *", "5 6 * * *" ]
 
 [[mtls_certificates]]
 binding = "EFI_MTLS"

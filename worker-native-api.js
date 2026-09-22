@@ -48,6 +48,18 @@ async function mirrorPlanRowToD1(env,row){
     ).run();
   return true;
 }
+async function mirrorRouterRowToD1(env,row){
+  if(!env?.PROVEDOR_DB||!row?.id)return false;
+  await env.PROVEDOR_DB.prepare(`INSERT INTO pp_routers (id,name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(id) DO UPDATE SET name=excluded.name,host=excluded.host,port=excluded.port,username=excluded.username,
+    connection_method=excluded.connection_method,allow_self_signed=excluded.allow_self_signed,active=excluded.active,
+    last_status=excluded.last_status,last_sync=excluded.last_sync,
+    created_at=COALESCE(pp_routers.created_at,excluded.created_at),updated_at=excluded.updated_at`).bind(
+      Number(row.id),text(row.name),text(row.host),Math.max(1,Number(row.port)||443),text(row.username),text(row.connection_method)||'rest',d1Bool(row.allow_self_signed),d1Bool(row.active),nullableText(row.last_status),row.last_sync||null,row.created_at||null,row.updated_at||new Date().toISOString()
+    ).run();
+  return true;
+}
 export async function mirrorClientToD1(env,clientId){
   const id=num(clientId);if(!id||!env?.PROVEDOR_DB)return false;
   const rows=await sqlFor(env)`SELECT * FROM pp_clients WHERE id=${id} LIMIT 1`,row=Array.isArray(rows)?rows[0]:null;
@@ -59,6 +71,12 @@ export async function mirrorPlanToD1(env,planId){
   const rows=await sqlFor(env)`SELECT * FROM pp_plans WHERE id=${id} LIMIT 1`,row=Array.isArray(rows)?rows[0]:null;
   if(!row){await env.PROVEDOR_DB.prepare('DELETE FROM pp_plans WHERE id = ?').bind(id).run();return false}
   return mirrorPlanRowToD1(env,row);
+}
+export async function mirrorRouterToD1(env,routerId){
+  const id=num(routerId);if(!id||!env?.PROVEDOR_DB)return false;
+  const rows=await sqlFor(env)`SELECT * FROM pp_routers WHERE id=${id} LIMIT 1`,row=Array.isArray(rows)?rows[0]:null;
+  if(!row){await env.PROVEDOR_DB.prepare('DELETE FROM pp_routers WHERE id = ?').bind(id).run();return false}
+  return mirrorRouterRowToD1(env,row);
 }
 function apiJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store, max-age=0',...headers}});}
 async function bodyOf(request){try{return await request.json()}catch{return {}}}
@@ -263,7 +281,7 @@ export async function handleNativeCloudState(request,env){
 function routerPayload(data={}){const id=num(data.id),out={name:text(data.name)||'MikroTik',host:text(data.host),port:num(data.port)||443,username:text(data.username),connection_method:'rest',allow_self_signed:bool(data.allow_self_signed,false),active:bool(data.active,true),last_status:text(data.last_status),last_sync:data.last_sync||null,updated_at:new Date().toISOString()};if(id)out.id=id;return out;}
 function clientPayload(data={}){const id=num(data.id),routerId=num(data.router_id),pppoeUser=text(data.pppoe_username||data.pppoe_user),out={name:text(data.name),document:text(data.document),contract_number:text(data.contract_number),plan:text(data.plan||data.plan_name),plan_id:num(data.plan_id),due_day:num(data.due_day),status:text(data.status)||'Ativo',email:text(data.email),phone:text(data.phone),address:text(data.address||data.street),city:text(data.city),state:text(data.state),zip_code:text(data.zip_code||data.cep),pppoe_user:pppoeUser,auto_block:bool(data.auto_block,false),block_after_days:num(data.block_after_days)||7,notes:text(data.notes),router_id:routerId,connection_type:nullableText(data.connection_type),pppoe_username:nullableText(pppoeUser),mikrotik_profile:nullableText(data.mikrotik_profile),ip:nullableText(data.ip),mac_address:nullableText(data.mac_address),mikrotik_secret_id:nullableText(data.mikrotik_secret_id||data.secret_id),mikrotik_status:nullableText(data.mikrotik_status),mikrotik_last_sync:data.mikrotik_last_sync||data.last_mikrotik_sync||null,updated_at:new Date().toISOString()};if(id)out.id=id;if(text(data.pppoe_password))out.pppoe_password=text(data.pppoe_password);return out;}
 function safeClientRow(row){if(!row||typeof row!=='object')return row;const out={...row};delete out.pppoe_password;delete out.pppoePassword;delete out.password;return out;}
-async function saveRouter(sql,data){const p=routerPayload(data);if(!p.host||!p.username)throw Object.assign(new Error('Informe o endereço e o usuário do MikroTik.'),{statusCode:400});let rows=[];if(p.id)rows=await sql`UPDATE pp_routers SET name=${p.name},host=${p.host},port=${p.port},username=${p.username},connection_method=${p.connection_method},allow_self_signed=${p.allow_self_signed},active=${p.active},last_status=${p.last_status},last_sync=COALESCE(${p.last_sync},last_sync),updated_at=${p.updated_at} WHERE id=${p.id} RETURNING *`;if(rows[0])return rows[0];if(p.id){rows=await sql`INSERT INTO pp_routers (id,name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,updated_at) VALUES (${p.id},${p.name},${p.host},${p.port},${p.username},${p.connection_method},${p.allow_self_signed},${p.active},${p.last_status},${p.last_sync},${p.updated_at}) RETURNING *`;return rows[0]}rows=await sql`INSERT INTO pp_routers (name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,updated_at) VALUES (${p.name},${p.host},${p.port},${p.username},${p.connection_method},${p.allow_self_signed},${p.active},${p.last_status},${p.last_sync},${p.updated_at}) RETURNING *`;return rows[0];}
+async function saveRouter(sql,data,env){const p=routerPayload(data);if(!p.host||!p.username)throw Object.assign(new Error('Informe o endereço e o usuário do MikroTik.'),{statusCode:400});let rows=[];if(p.id)rows=await sql`UPDATE pp_routers SET name=${p.name},host=${p.host},port=${p.port},username=${p.username},connection_method=${p.connection_method},allow_self_signed=${p.allow_self_signed},active=${p.active},last_status=${p.last_status},last_sync=COALESCE(${p.last_sync},last_sync),updated_at=${p.updated_at} WHERE id=${p.id} RETURNING *`;if(!rows[0]&&p.id)rows=await sql`INSERT INTO pp_routers (id,name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,updated_at) VALUES (${p.id},${p.name},${p.host},${p.port},${p.username},${p.connection_method},${p.allow_self_signed},${p.active},${p.last_status},${p.last_sync},${p.updated_at}) RETURNING *`;if(!rows[0])rows=await sql`INSERT INTO pp_routers (name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,updated_at) VALUES (${p.name},${p.host},${p.port},${p.username},${p.connection_method},${p.allow_self_signed},${p.active},${p.last_status},${p.last_sync},${p.updated_at}) RETURNING *`;const saved=rows[0]||null;if(saved&&env?.PROVEDOR_DB)try{await mirrorRouterRowToD1(env,saved)}catch(error){console.error(`Provedor Plus: não foi possível espelhar o MikroTik ${saved.id} no D1.`,error)}return saved;}
 async function findExistingClient(sql,p){if(p.contract_number){const rows=await sql`SELECT id FROM pp_clients WHERE contract_number=${p.contract_number} LIMIT 1`;if(rows[0]?.id)return num(rows[0].id)}if(p.document){const rows=await sql`SELECT id FROM pp_clients WHERE document=${p.document} LIMIT 1`;if(rows[0]?.id)return num(rows[0].id)}return null;}
 async function saveClient(sql,data,env){const p=clientPayload(data);if(!p.name)throw Object.assign(new Error('Nome do cliente é obrigatório.'),{statusCode:400});if(p.plan_id){const linkedPlan=await ensureNativePlanForClient(sql,p.plan_id,env);if(!p.plan)p.plan=text(linkedPlan?.name)}if(!p.id)p.id=await findExistingClient(sql,p);let rows=[];
   if(p.id){
@@ -353,8 +371,8 @@ export async function handleNativeCloudData(request,env){
   if(request.method!=='POST')return apiJson({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-native-data'});const sql=sqlFor(env);
   try{const body=await bodyOf(request),action=text(body?.action),data=body?.data||{};if(action.startsWith('routers.')||action==='traffic.record')await requirePermission(request,sql,'network');else if(action.startsWith('clients.'))await requirePermission(request,sql,'clients');else if(action.startsWith('cashback.'))await requirePermission(request,sql,'finance');else await requireAuth(request,sql);let result;
     if(action==='routers.list')result=await sql`SELECT * FROM pp_routers ORDER BY id ASC`;
-    else if(action==='routers.save')result=await saveRouter(sql,data);
-    else if(action==='routers.delete'){const id=num(data.id);if(!id)throw Object.assign(new Error('MikroTik inválido.'),{statusCode:400});await sql`DELETE FROM pp_routers WHERE id=${id}`;result={deleted:true,id};}
+    else if(action==='routers.save')result=await saveRouter(sql,data,env);
+    else if(action==='routers.delete'){const id=num(data.id);if(!id)throw Object.assign(new Error('MikroTik inválido.'),{statusCode:400});await sql`DELETE FROM pp_routers WHERE id=${id}`;if(env?.PROVEDOR_DB)try{await mirrorRouterToD1(env,id)}catch(error){console.error(`Provedor Plus: não foi possível remover o espelho D1 do MikroTik ${id}.`,error)}result={deleted:true,id};}
     else if(action==='routers.secret.get')result=await routerSecretGet(env,sql,data.id);
     else if(action==='routers.secret.save')result=await routerSecretSave(env,sql,data.id,data.password);
     else if(action==='routers.secret.delete')result=await routerSecretDelete(env,sql,data.id);

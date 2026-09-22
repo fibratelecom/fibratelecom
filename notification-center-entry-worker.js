@@ -21,6 +21,10 @@ const VAPID_KEY='push_vapid_v1';
 const CLIENT_APP_ORIGIN='https://cliente.fibramais.workers.dev';
 const CLIENT_ORIGINS=new Set(['https://cliente.fibramais.workers.dev','https://client.fibramais.workers.dev']);
 const VARIABLE_NAMES=['{nome}','{valor}','{vencimento}','{plano}','{contrato}','{cashback}'];
+const NOTIFICATION_SCHEDULE_INTERVAL_MINUTES=5;
+const PAYMENT_RECONCILIATION_INTERVAL_MINUTES=15;
+const TRAFFIC_COLLECTION_INTERVAL_MINUTES=30;
+const BILLING_INTERVAL_MINUTES=60;
 const enc=new TextEncoder();
 const text=value=>String(value??'').trim();
 const digits=value=>text(value).replace(/\D/g,'');
@@ -73,6 +77,7 @@ function base64UrlBytes(value){const raw=text(value).replace(/-/g,'+').replace(/
 function base64Url(value){const bytes=value instanceof Uint8Array?value:new Uint8Array(value);let binary='';for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,Math.min(i+0x8000,bytes.length)));return btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
 function normalizeClickUrl(value=''){const raw=text(value);if(!raw)return `${CLIENT_APP_ORIGIN}/`;if(raw.startsWith('/'))return `${CLIENT_APP_ORIGIN}${raw}`;try{const url=new URL(raw);return CLIENT_ORIGINS.has(url.origin)?url.toString():`${CLIENT_APP_ORIGIN}/`}catch{return `${CLIENT_APP_ORIGIN}/`}}
 function notificationPayload(title,body,url,tag='fibra-plus'){return {title:text(title)||'Fibra+',body:text(body),icon:`${CLIENT_APP_ORIGIN}/icons/fibra-app-192.png?v=15`,badge:`${CLIENT_APP_ORIGIN}/icons/fibra-app-192.png?v=15`,tag:text(tag)||'fibra-plus',lang:'pt-BR',data:{url:normalizeClickUrl(url)}}}
+function dueEvery(scheduledAt,minutes){const interval=Math.max(1,Math.floor(Number(minutes)||1));return Math.floor(Number(scheduledAt)/(60*1000))%interval===0}
 
 function bankFlag(source,flag,secretKey){return Object.prototype.hasOwnProperty.call(source||{},flag)?Boolean(source?.[flag]):Boolean(text(source?.[secretKey]))}
 function safeBankClientSettings(value){
@@ -331,11 +336,14 @@ async function tryBackgroundStateLock(env,fn,label){
   if(await paymentPriorityActive(env))return null;
   try{return await withStateWriteLock(env,async()=>{if(await paymentPriorityActive(env))return null;return fn()},1000)}catch(error){if(Number(error?.statusCode)===409)return null;console.error(label,error);return null}
 }
-async function runMinuteStateMaintenance(env,scheduledAt){
-  await tryBackgroundStateLock(env,async()=>{try{await reconcilePendingPayments(env)}catch(error){console.error('Provedor Plus: falha na conciliação automática de pagamentos pendentes.',error)}},'Provedor Plus: conciliação automática não pôde obter a trava de estado.');
-  const sql=neon(env.DATABASE_URL),quarterStart=Math.floor(scheduledAt/(15*60*1000))*(15*60*1000),state=await loadState(sql),lastAt=Date.parse(text(state?.settings?.billing_cloudflare_last_result?.at));
-  if(Number.isFinite(lastAt)&&lastAt>=quarterStart)return;
-  await tryBackgroundStateLock(env,async()=>{const fresh=await loadState(sql),freshLastAt=Date.parse(text(fresh?.settings?.billing_cloudflare_last_result?.at));if(!Number.isFinite(freshLastAt)||freshLastAt<quarterStart)await runBillingCron(env)},'Provedor Plus: geração automática de mensalidades aguardará a próxima checagem.');
+async function runScheduledStateMaintenance(env,scheduledAt){
+  if(dueEvery(scheduledAt,PAYMENT_RECONCILIATION_INTERVAL_MINUTES)){
+    await tryBackgroundStateLock(env,async()=>{try{await reconcilePendingPayments(env)}catch(error){console.error('Provedor Plus: falha na conciliação automática de pagamentos pendentes.',error)}},'Provedor Plus: conciliação automática não pôde obter a trava de estado.');
+  }
+  if(!dueEvery(scheduledAt,BILLING_INTERVAL_MINUTES))return;
+  const windowMs=BILLING_INTERVAL_MINUTES*60*1000,windowStart=Math.floor(scheduledAt/windowMs)*windowMs,sql=neon(env.DATABASE_URL),state=await loadState(sql),lastAt=Date.parse(text(state?.settings?.billing_cloudflare_last_result?.at));
+  if(Number.isFinite(lastAt)&&lastAt>=windowStart)return;
+  await tryBackgroundStateLock(env,async()=>{const fresh=await loadState(sql),freshLastAt=Date.parse(text(fresh?.settings?.billing_cloudflare_last_result?.at));if(!Number.isFinite(freshLastAt)||freshLastAt<windowStart)await runBillingCron(env)},'Provedor Plus: geração automática de mensalidades aguardará a próxima checagem.');
 }
 
 async function pushCryptoKey(env){const secret=text(env.BANK_SECRET_KEY)||text(env.PORTAL_SESSION_SECRET)||text(env.DATABASE_URL);if(!secret)throw new Error('Chave de proteção das notificações não configurada.');const raw=await crypto.subtle.digest('SHA-256',enc.encode(`provedor-plus-push-v1|${secret}`));return crypto.subtle.importKey('raw',raw,{name:'AES-GCM'},false,['decrypt'])}
@@ -450,7 +458,7 @@ async function processDueSchedules(env){
       await sql`UPDATE pp_notification_schedules SET status=${noDevice?'failed':'sent'},sent_count=${Number(result.sent)||0},failed_count=${Number(result.failed)||(noDevice?1:0)},sent_at=now(),last_error=${noDevice?'Cliente sem dispositivo autorizado no horário do envio.':null} WHERE id=${Number(row.id)}`;
     }catch(error){failed++;await sql`UPDATE pp_notification_schedules SET status='failed',failed_count=failed_count+1,last_error=${text(error instanceof Error?error.message:error).slice(0,500)},sent_at=now() WHERE id=${Number(row.id)}`}
   }
-  await syncInboxFromMessages(env,sql);
+  if((rows?.length||0)>0)await syncInboxFromMessages(env,sql);
   return {processed:rows?.length||0,sent,failed};
 }
 
@@ -527,10 +535,10 @@ export default {
     const cron=text(controller?.cron);
     if(cron==='* * * * *'){
       if(env?.DATABASE_URL&&typeof ctx?.waitUntil==='function'){
-        ctx.waitUntil(processDueSchedules(env).catch(error=>console.error('Provedor Plus: falha nos agendamentos de notificações.',error)));
-        ctx.waitUntil(collectCustomerTraffic(env).catch(error=>console.error('Provedor Plus: falha na coleta automática do consumo PPPoE.',error)));
         const scheduledAt=Number(controller?.scheduledTime)||Date.now();
-        ctx.waitUntil(runMinuteStateMaintenance(env,scheduledAt).catch(error=>console.error('Provedor Plus: falha na manutenção automática de pagamentos e mensalidades.',error)));
+        if(dueEvery(scheduledAt,NOTIFICATION_SCHEDULE_INTERVAL_MINUTES))ctx.waitUntil(processDueSchedules(env).catch(error=>console.error('Provedor Plus: falha nos agendamentos de notificações.',error)));
+        if(dueEvery(scheduledAt,TRAFFIC_COLLECTION_INTERVAL_MINUTES))ctx.waitUntil(collectCustomerTraffic(env).catch(error=>console.error('Provedor Plus: falha na coleta automática do consumo PPPoE.',error)));
+        if(dueEvery(scheduledAt,PAYMENT_RECONCILIATION_INTERVAL_MINUTES))ctx.waitUntil(runScheduledStateMaintenance(env,scheduledAt).catch(error=>console.error('Provedor Plus: falha na manutenção automática de pagamentos e mensalidades.',error)));
       }
       return;
     }
@@ -543,6 +551,5 @@ export default {
         },1000);
       }catch(error){if(Number(error?.statusCode)!==409)console.error('Provedor Plus: rotina agendada não pôde executar a gravação de estado.',error)}
     }
-    if(env?.DATABASE_URL&&typeof ctx?.waitUntil==='function')ctx.waitUntil(processDueSchedules(env).catch(error=>console.error('Provedor Plus: falha nos agendamentos de notificações.',error)));
   }
 };

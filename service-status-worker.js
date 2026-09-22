@@ -1,5 +1,3 @@
-import {neon} from '@neondatabase/serverless';
-
 const STATUS_PATH='/api/service-status';
 const HISTORY_WINDOW_HOURS=24;
 const HISTORY_BUCKET_MS=5*60*1000;
@@ -149,41 +147,44 @@ async function checkSource(source){
   }
 }
 
+function parseComponents(value){if(Array.isArray(value))return value;if(typeof value==='string')try{const parsed=JSON.parse(value);return Array.isArray(parsed)?parsed:[]}catch{}return []}
+
 async function ensureServiceStatusTable(sql){
   if(serviceStatusSchemaReady)return;
-  await sql`CREATE TABLE IF NOT EXISTS pp_service_status_history (
+  await sql.prepare(`CREATE TABLE IF NOT EXISTS pp_service_status_history (
     service_id TEXT NOT NULL,
     status TEXT NOT NULL,
     detail TEXT NULL,
-    components JSONB NOT NULL DEFAULT '[]'::jsonb,
+    components TEXT NOT NULL DEFAULT '[]',
     response_ms INTEGER NULL,
-    checked_at TIMESTAMPTZ NOT NULL,
+    checked_at TEXT NOT NULL,
     PRIMARY KEY (service_id,checked_at)
-  )`;
-  await sql`CREATE INDEX IF NOT EXISTS pp_service_status_history_checked_idx ON pp_service_status_history (checked_at DESC)`;
+  )`).run();
+  await sql.prepare('CREATE INDEX IF NOT EXISTS pp_service_status_history_checked_idx ON pp_service_status_history (checked_at DESC)').run();
   serviceStatusSchemaReady=true;
 }
 
 async function saveResults(sql,results){
   if(!results.length)return;
   const bucket=new Date(Math.floor(Date.now()/HISTORY_BUCKET_MS)*HISTORY_BUCKET_MS).toISOString();
-  const payload=JSON.stringify(results.map(result=>({
-    service_id:result.id,
-    status:result.status,
-    detail:safeText(result.detail).slice(0,800),
-    components:Array.isArray(result.components)?result.components:[],
-    response_ms:Math.max(0,Math.round(Number(result.responseMs)||0)),
-  })));
-  await sql`INSERT INTO pp_service_status_history (service_id,status,detail,components,response_ms,checked_at)
-    SELECT row.service_id,row.status,row.detail,row.components,row.response_ms,${bucket}::timestamptz
-    FROM jsonb_to_recordset(${payload}::jsonb) AS row(service_id text,status text,detail text,components jsonb,response_ms integer)
-    ON CONFLICT (service_id,checked_at) DO UPDATE
-    SET status=EXCLUDED.status,detail=EXCLUDED.detail,components=EXCLUDED.components,response_ms=EXCLUDED.response_ms`;
+  const statements=results.map(result=>sql.prepare(`INSERT INTO pp_service_status_history (service_id,status,detail,components,response_ms,checked_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT (service_id,checked_at) DO UPDATE SET
+    status=excluded.status,detail=excluded.detail,components=excluded.components,response_ms=excluded.response_ms`).bind(
+      result.id,
+      result.status,
+      safeText(result.detail).slice(0,800),
+      JSON.stringify(Array.isArray(result.components)?result.components:[]),
+      Math.max(0,Math.round(Number(result.responseMs)||0)),
+      bucket
+    ));
+  await sql.batch(statements);
 }
 
 export async function pollServiceStatuses(env,sqlArg=null,sources=SOURCES){
-  if(!env?.DATABASE_URL)return [];
-  const sql=sqlArg||neon(env.DATABASE_URL),settled=await Promise.all(sources.map(checkSource));
+  if(!env?.PROVEDOR_DB)return [];
+  const sql=sqlArg||env.PROVEDOR_DB,settled=await Promise.all(sources.map(checkSource));
+  await ensureServiceStatusTable(sql);
   await saveResults(sql,settled);
   return settled;
 }
@@ -198,12 +199,13 @@ async function requirePanelSession(request,env,ctx,baseWorker){
 
 async function readStatusPayload(sql){
   await ensureServiceStatusTable(sql);
-  const rows=await sql`SELECT service_id,status,detail,components,response_ms,checked_at
+  const threshold=new Date(Date.now()-HISTORY_WINDOW_HOURS*60*60*1000).toISOString();
+  const result=await sql.prepare(`SELECT service_id,status,detail,components,response_ms,checked_at
     FROM pp_service_status_history
-    WHERE checked_at>=now()-interval '24 hours'
-    ORDER BY checked_at ASC`;
+    WHERE checked_at>=?
+    ORDER BY checked_at ASC`).bind(threshold).all(),rows=Array.isArray(result?.results)?result.results:[];
   const latestAny=new Map(),latestValid=new Map();
-  for(const row of rows||[]){
+  for(const row of rows){
     const id=safeText(row.service_id);
     latestAny.set(id,row);
     if(safeText(row.status)!=='error')latestValid.set(id,row);
@@ -213,9 +215,9 @@ async function readStatusPayload(sql){
     current:SOURCES.map(source=>{
       const row=latestValid.get(source.id)||latestAny.get(source.id);
       if(!row)return {id:source.id,status:'error',detail:'Ainda não foi possível concluir a primeira coleta deste serviço.',components:[],responseMs:0,checkedAt:null};
-      return {id:source.id,status:safeText(row.status)||'error',detail:safeText(row.detail),components:Array.isArray(row.components)?row.components:[],responseMs:Number(row.response_ms)||0,checkedAt:row.checked_at};
+      return {id:source.id,status:safeText(row.status)||'error',detail:safeText(row.detail),components:parseComponents(row.components),responseMs:Number(row.response_ms)||0,checkedAt:row.checked_at};
     }),
-    history:(rows||[]).filter(row=>safeText(row.status)!=='error').map(row=>({id:safeText(row.service_id),status:safeText(row.status),responseMs:Number(row.response_ms)||0,checkedAt:row.checked_at})),
+    history:rows.filter(row=>safeText(row.status)!=='error').map(row=>({id:safeText(row.service_id),status:safeText(row.status),responseMs:Number(row.response_ms)||0,checkedAt:row.checked_at})),
   };
 }
 
@@ -224,8 +226,8 @@ export async function handleServiceStatus(request,env,ctx,baseWorker){
   if(request.method!=='GET')return responseJson({ok:false,error:'Método não permitido.'},405);
   try{
     await requirePanelSession(request,env,ctx,baseWorker);
-    if(!env?.DATABASE_URL)throw Object.assign(new Error('Conexão com o Provedor Plus não configurada.'),{statusCode:503});
-    const sql=neon(env.DATABASE_URL),url=new URL(request.url),batchCount=Math.ceil(SOURCES.length/SOURCE_BATCH_SIZE),batchParam=url.searchParams.get('batch');
+    if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Conexão D1 do Provedor Plus não configurada.'),{statusCode:503});
+    const sql=env.PROVEDOR_DB,url=new URL(request.url),batchCount=Math.ceil(SOURCES.length/SOURCE_BATCH_SIZE),batchParam=url.searchParams.get('batch');
     if(batchParam!==null){
       const parsed=Math.floor(Number(batchParam)),batch=Number.isFinite(parsed)?Math.max(0,Math.min(batchCount-1,parsed)):0,start=batch*SOURCE_BATCH_SIZE,sources=SOURCES.slice(start,start+SOURCE_BATCH_SIZE);
       const results=await pollServiceStatuses(env,sql,sources);

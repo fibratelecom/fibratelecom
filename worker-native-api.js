@@ -60,6 +60,20 @@ async function mirrorRouterRowToD1(env,row){
     ).run();
   return true;
 }
+function safeRouterRow(row){if(!row||typeof row!=='object')return row;return {...row,id:Number(row.id),port:Math.max(1,Number(row.port)||443),allow_self_signed:bool(row.allow_self_signed,false),active:bool(row.active,true)}}
+async function readRouterList(env,sql){
+  if(env?.PROVEDOR_DB)try{const result=await env.PROVEDOR_DB.prepare('SELECT id,name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,created_at,updated_at FROM pp_routers ORDER BY id ASC').all(),rows=Array.isArray(result?.results)?result.results:[];if(rows.length)return rows.map(safeRouterRow)}catch(error){console.error('Provedor Plus: leitura D1 dos MikroTik falhou; usando Neon.',error)}
+  const rows=await sql`SELECT * FROM pp_routers ORDER BY id ASC`;
+  if(env?.PROVEDOR_DB)for(const row of Array.isArray(rows)?rows:[])try{await mirrorRouterRowToD1(env,row)}catch(error){console.error(`Provedor Plus: não foi possível recompor o espelho D1 do MikroTik ${row?.id}.`,error)}
+  return (Array.isArray(rows)?rows:[]).map(safeRouterRow);
+}
+async function readRouterById(env,sql,routerId){
+  const id=num(routerId);if(!id)return null;
+  if(env?.PROVEDOR_DB)try{const result=await env.PROVEDOR_DB.prepare('SELECT id,name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,created_at,updated_at FROM pp_routers WHERE id=? LIMIT 1').bind(id).all(),row=result?.results?.[0];if(row)return safeRouterRow(row)}catch(error){console.error(`Provedor Plus: leitura D1 do MikroTik ${id} falhou; usando Neon.`,error)}
+  const rows=await sql`SELECT id,name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,created_at,updated_at FROM pp_routers WHERE id=${id} LIMIT 1`,row=Array.isArray(rows)?rows[0]:null;
+  if(row&&env?.PROVEDOR_DB)try{await mirrorRouterRowToD1(env,row)}catch(error){console.error(`Provedor Plus: não foi possível recompor o espelho D1 do MikroTik ${id}.`,error)}
+  return safeRouterRow(row);
+}
 export async function mirrorClientToD1(env,clientId){
   const id=num(clientId);if(!id||!env?.PROVEDOR_DB)return false;
   const rows=await sqlFor(env)`SELECT * FROM pp_clients WHERE id=${id} LIMIT 1`,row=Array.isArray(rows)?rows[0]:null;
@@ -325,7 +339,7 @@ async function routerSecretDelete(env,sql,routerId){const id=num(routerId);if(!i
 export async function resolveRouterForService(env,routerId){
   const sql=sqlFor(env),id=num(routerId);
   if(!id)throw Object.assign(new Error('MikroTik do cliente não está configurado.'),{statusCode:409});
-  const routers=await sql`SELECT id,name,host,port,username,allow_self_signed,active FROM pp_routers WHERE id=${id} LIMIT 1`,router=Array.isArray(routers)?routers[0]:null;
+  const router=await readRouterById(env,sql,id);
   if(!router)throw Object.assign(new Error('MikroTik vinculado ao cliente não foi encontrado.'),{statusCode:404});
   if(router.active===false)throw Object.assign(new Error('O MikroTik vinculado ao cliente está desativado.'),{statusCode:409});
   const password=await sharedRouterSecret(env,sql,id);
@@ -370,7 +384,7 @@ async function cashbackWalletAdjust(request,sql,data){
 export async function handleNativeCloudData(request,env){
   if(request.method!=='POST')return apiJson({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-native-data'});const sql=sqlFor(env);
   try{const body=await bodyOf(request),action=text(body?.action),data=body?.data||{};if(action.startsWith('routers.')||action==='traffic.record')await requirePermission(request,sql,'network');else if(action.startsWith('clients.'))await requirePermission(request,sql,'clients');else if(action.startsWith('cashback.'))await requirePermission(request,sql,'finance');else await requireAuth(request,sql);let result;
-    if(action==='routers.list')result=await sql`SELECT * FROM pp_routers ORDER BY id ASC`;
+    if(action==='routers.list')result=await readRouterList(env,sql);
     else if(action==='routers.save')result=await saveRouter(sql,data,env);
     else if(action==='routers.delete'){const id=num(data.id);if(!id)throw Object.assign(new Error('MikroTik inválido.'),{statusCode:400});await sql`DELETE FROM pp_routers WHERE id=${id}`;if(env?.PROVEDOR_DB)try{await mirrorRouterToD1(env,id)}catch(error){console.error(`Provedor Plus: não foi possível remover o espelho D1 do MikroTik ${id}.`,error)}result={deleted:true,id};}
     else if(action==='routers.secret.get')result=await routerSecretGet(env,sql,data.id);

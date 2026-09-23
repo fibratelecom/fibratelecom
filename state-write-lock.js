@@ -9,7 +9,7 @@ function settingRecord(value){
   return {};
 }
 
-async function paymentPriorityActive(env,sqlArg=null){
+async function paymentPriorityActive(env){
   if(!env?.PROVEDOR_DB)return false;
   try{
     const result=await env.PROVEDOR_DB.prepare('SELECT value FROM pp_settings WHERE key=? LIMIT 1').bind(PAYMENT_PRIORITY_KEY).all(),row=Array.isArray(result?.results)?result.results[0]:null,expiresAt=text(settingRecord(row?.value)?.expires_at);

@@ -246,16 +246,29 @@ async function portalLoginHash(env,value){
   const bytes=new Uint8Array(await crypto.subtle.digest('SHA-256',enc.encode(`provedor-plus-portal-login-v1|${secret}|${value}`)));
   return [...bytes].map(byte=>byte.toString(16).padStart(2,'0')).join('');
 }
-async function ensurePortalLoginRateTable(sql){
+async function ensurePortalLoginRateTable(store){
   if(portalLoginRateSchemaReady)return;
-  await sql`CREATE TABLE IF NOT EXISTS pp_portal_login_rate (
-    key TEXT PRIMARY KEY,
-    failures INTEGER NOT NULL DEFAULT 0,
-    window_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    blocked_until TIMESTAMPTZ NULL,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-  )`;
-  await sql`CREATE INDEX IF NOT EXISTS pp_portal_login_rate_updated_idx ON pp_portal_login_rate (updated_at)`;
+  if(store?.prepare){
+    await store.batch([
+      store.prepare(`CREATE TABLE IF NOT EXISTS pp_portal_login_rate (
+        key TEXT PRIMARY KEY,
+        failures INTEGER NOT NULL DEFAULT 0,
+        window_started_at TEXT NOT NULL,
+        blocked_until TEXT NULL,
+        updated_at TEXT NOT NULL
+      )`),
+      store.prepare('CREATE INDEX IF NOT EXISTS pp_portal_login_rate_updated_idx ON pp_portal_login_rate (updated_at)')
+    ]);
+  }else{
+    await store`CREATE TABLE IF NOT EXISTS pp_portal_login_rate (
+      key TEXT PRIMARY KEY,
+      failures INTEGER NOT NULL DEFAULT 0,
+      window_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      blocked_until TIMESTAMPTZ NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`;
+    await store`CREATE INDEX IF NOT EXISTS pp_portal_login_rate_updated_idx ON pp_portal_login_rate (updated_at)`;
+  }
   portalLoginRateSchemaReady=true;
 }
 function portalLoginRateError(blockedUntil){
@@ -271,25 +284,43 @@ async function portalLoginRateKeys(request,env,data){
   const pairHash=await portalLoginHash(env,`${ip||'sem-ip'}|${identity}`),ipHash=ip?await portalLoginHash(env,ip):'';
   return {pairKey:`portal_login_pair_${pairHash}`,ipKey:ipHash?`portal_login_ip_${ipHash}`:''};
 }
-async function portalLoginRateRows(sql,keys){
-  const query=()=>keys.ipKey?sql`SELECT key,blocked_until FROM pp_portal_login_rate WHERE key=${keys.pairKey} OR key=${keys.ipKey}`:sql`SELECT key,blocked_until FROM pp_portal_login_rate WHERE key=${keys.pairKey}`;
-  try{const rows=await query();portalLoginRateSchemaReady=true;return rows}
-  catch(error){
-    if(portalLoginRateSchemaReady||text(error?.code)!=='42P01')throw error;
-    await ensurePortalLoginRateTable(sql);
-    return query();
+async function portalLoginRateRows(store,keys){
+  if(store?.prepare){
+    await ensurePortalLoginRateTable(store);
+    const statement=keys.ipKey?store.prepare('SELECT key,blocked_until FROM pp_portal_login_rate WHERE key=? OR key=?').bind(keys.pairKey,keys.ipKey):store.prepare('SELECT key,blocked_until FROM pp_portal_login_rate WHERE key=?').bind(keys.pairKey);
+    return d1Rows(statement);
   }
+  const query=()=>keys.ipKey?store`SELECT key,blocked_until FROM pp_portal_login_rate WHERE key=${keys.pairKey} OR key=${keys.ipKey}`:store`SELECT key,blocked_until FROM pp_portal_login_rate WHERE key=${keys.pairKey}`;
+  try{const rows=await query();portalLoginRateSchemaReady=true;return rows}
+  catch(error){if(portalLoginRateSchemaReady||text(error?.code)!=='42P01')throw error;await ensurePortalLoginRateTable(store);return query()}
 }
-async function checkPortalLoginRate(sql,keys){
-  const rows=await portalLoginRateRows(sql,keys);
+async function checkPortalLoginRate(store,keys){
+  const rows=await portalLoginRateRows(store,keys);
   let blockedUntil=null;
   for(const row of rows||[]){const at=row?.blocked_until?new Date(row.blocked_until):null;if(at&&!Number.isNaN(at.getTime())&&at.getTime()>Date.now()&&(!blockedUntil||at>blockedUntil))blockedUntil=at}
   if(blockedUntil)throw portalLoginRateError(blockedUntil);
   return {pairExists:(rows||[]).some(row=>text(row?.key)===keys.pairKey)};
 }
-async function recordPortalLoginFailure(sql,key,limit){
+async function recordPortalLoginFailure(store,key,limit){
   const now=Date.now(),nowIso=new Date(now).toISOString(),cutoffIso=new Date(now-PORTAL_LOGIN_WINDOW_MS).toISOString(),blockIso=new Date(now+PORTAL_LOGIN_BLOCK_MS).toISOString();
-  const rows=await sql`INSERT INTO pp_portal_login_rate (key,failures,window_started_at,blocked_until,updated_at)
+  if(store?.prepare){
+    await ensurePortalLoginRateTable(store);
+    const rows=await d1Rows(store.prepare(`INSERT INTO pp_portal_login_rate (key,failures,window_started_at,blocked_until,updated_at)
+      VALUES (?,1,?,NULL,?)
+      ON CONFLICT(key) DO UPDATE SET
+        failures=CASE WHEN datetime(pp_portal_login_rate.window_started_at)<datetime(?) THEN 1 ELSE pp_portal_login_rate.failures+1 END,
+        window_started_at=CASE WHEN datetime(pp_portal_login_rate.window_started_at)<datetime(?) THEN ? ELSE pp_portal_login_rate.window_started_at END,
+        blocked_until=CASE
+          WHEN pp_portal_login_rate.blocked_until IS NOT NULL AND datetime(pp_portal_login_rate.blocked_until)>datetime(?) THEN pp_portal_login_rate.blocked_until
+          WHEN datetime(pp_portal_login_rate.window_started_at)<datetime(?) THEN NULL
+          WHEN pp_portal_login_rate.failures+1>=? THEN ?
+          ELSE NULL
+        END,
+        updated_at=?
+      RETURNING failures,blocked_until`).bind(key,nowIso,nowIso,cutoffIso,cutoffIso,nowIso,nowIso,cutoffIso,Number(limit),blockIso,nowIso));
+    return rows?.[0]||null;
+  }
+  const rows=await store`INSERT INTO pp_portal_login_rate (key,failures,window_started_at,blocked_until,updated_at)
     VALUES (${key},1,${nowIso},NULL,${nowIso})
     ON CONFLICT (key) DO UPDATE SET
       failures=CASE WHEN pp_portal_login_rate.window_started_at<${cutoffIso} THEN 1 ELSE pp_portal_login_rate.failures+1 END,
@@ -304,29 +335,31 @@ async function recordPortalLoginFailure(sql,key,limit){
     RETURNING failures,blocked_until`;
   return rows?.[0]||null;
 }
-async function registerPortalLoginFailure(sql,keys){
-  const pair=await recordPortalLoginFailure(sql,keys.pairKey,PORTAL_LOGIN_PAIR_LIMIT),ip=keys.ipKey?await recordPortalLoginFailure(sql,keys.ipKey,PORTAL_LOGIN_IP_LIMIT):null;
-  try{await sql`DELETE FROM pp_portal_login_rate WHERE updated_at<now()-interval '2 days'`}catch{}
+async function registerPortalLoginFailure(store,keys){
+  const pair=await recordPortalLoginFailure(store,keys.pairKey,PORTAL_LOGIN_PAIR_LIMIT),ip=keys.ipKey?await recordPortalLoginFailure(store,keys.ipKey,PORTAL_LOGIN_IP_LIMIT):null;
+  const cutoff=new Date(Date.now()-2*86400000).toISOString();
+  try{if(store?.prepare)await store.prepare('DELETE FROM pp_portal_login_rate WHERE datetime(updated_at)<datetime(?)').bind(cutoff).run();else await store`DELETE FROM pp_portal_login_rate WHERE updated_at<now()-interval '2 days'`}catch{}
   let blockedUntil=null;for(const row of [pair,ip]){const at=row?.blocked_until?new Date(row.blocked_until):null;if(at&&!Number.isNaN(at.getTime())&&at.getTime()>Date.now()&&(!blockedUntil||at>blockedUntil))blockedUntil=at}
   if(blockedUntil)throw portalLoginRateError(blockedUntil);
 }
 async function preparePortalLoginRate(request,env,path){
-  if(path!==PORTAL_LOGIN_PATH||request.method!=='POST'||!env?.DATABASE_URL)return null;
+  if(path!==PORTAL_LOGIN_PATH||request.method!=='POST')return null;
   const origin=text(request.headers.get('origin'));if(origin&&!CLIENT_ORIGINS.has(origin))return null;
   let body={};try{body=await request.clone().json()}catch{return null};if(text(body?.action)!=='login')return null;
-  const sql=neon(env.DATABASE_URL),keys=await portalLoginRateKeys(request,env,body?.data||{}),check=await checkPortalLoginRate(sql,keys);return {sql,keys,...check};
+  const store=env?.PROVEDOR_DB||(env?.DATABASE_URL?neon(env.DATABASE_URL):null);if(!store)return null;
+  const keys=await portalLoginRateKeys(request,env,body?.data||{}),check=await checkPortalLoginRate(store,keys);return {store,keys,...check};
 }
 async function finishPortalLoginRate(request,response,rate,ctx){
   if(!rate)return response;
   if(response?.ok){
     if(rate.pairExists){
-      const cleanup=async()=>{try{await rate.sql`DELETE FROM pp_portal_login_rate WHERE key=${rate.keys.pairKey}`}catch(error){console.error('Provedor Plus: não foi possível limpar a contagem de login válido.',error)}};
+      const cleanup=async()=>{try{if(rate.store?.prepare)await rate.store.prepare('DELETE FROM pp_portal_login_rate WHERE key=?').bind(rate.keys.pairKey).run();else await rate.store`DELETE FROM pp_portal_login_rate WHERE key=${rate.keys.pairKey}`}catch(error){console.error('Provedor Plus: não foi possível limpar a contagem de login válido.',error)}};
       if(typeof ctx?.waitUntil==='function')ctx.waitUntil(cleanup());else await cleanup();
     }
     return response;
   }
   if(![400,404].includes(Number(response?.status)))return response;
-  try{await registerPortalLoginFailure(rate.sql,rate.keys);return response}catch(error){if(Number(error?.statusCode)===429)return portalLoginRateResponse(request,error);console.error('Provedor Plus: não foi possível registrar a tentativa de login.',error);return response}
+  try{await registerPortalLoginFailure(rate.store,rate.keys);return response}catch(error){if(Number(error?.statusCode)===429)return portalLoginRateResponse(request,error);console.error('Provedor Plus: não foi possível registrar a tentativa de login.',error);return response}
 }
 
 async function paymentPriorityAction(request,path){
@@ -347,7 +380,7 @@ async function stateMutationRequest(request,path){
   if(path==='/api/customer-portal')return new Set(['login','refresh','payment-config','payment-prepare','negotiate','payment-pix','payment-card','payment-status']).has(action);
   return false;
 }
-async function acquireStateWriteLock(env,maxWaitMs=20000){
+async function acquireStateWriteLockNeon(env,maxWaitMs=20000){
   if(!env?.DATABASE_URL)return null;
   const totalWaitMs=Math.max(1000,Number(maxWaitMs)||20000),sql=neon(env.DATABASE_URL),token=crypto.randomUUID(),deadline=Date.now()+totalWaitMs;
   while(Date.now()<deadline){
@@ -355,16 +388,30 @@ async function acquireStateWriteLock(env,maxWaitMs=20000){
     const rows=await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${STATE_WRITE_LOCK_KEY},${raw}::jsonb,now()) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at WHERE COALESCE(NULLIF(pp_settings.value->>'expires_at','')::timestamptz,to_timestamp(0))<=now() RETURNING value`;
     if(text(rows?.[0]?.value?.token)===token){
       let stopped=false,renewTimer=null;
-      const renew=async()=>{
-        if(stopped)return;
-        try{const nextExpiry=new Date(Date.now()+STATE_WRITE_LOCK_TTL_MS).toISOString(),nextRaw=JSON.stringify({token,expires_at:nextExpiry});await sql`UPDATE pp_settings SET value=${nextRaw}::jsonb,updated_at=now() WHERE key=${STATE_WRITE_LOCK_KEY} AND value->>'token'=${token}`}catch(error){console.error('Provedor Plus: não foi possível renovar a trava de estado.',error)}
-        if(!stopped)renewTimer=setTimeout(renew,20000);
-      };
+      const renew=async()=>{if(stopped)return;try{const nextExpiry=new Date(Date.now()+STATE_WRITE_LOCK_TTL_MS).toISOString(),nextRaw=JSON.stringify({token,expires_at:nextExpiry});await sql`UPDATE pp_settings SET value=${nextRaw}::jsonb,updated_at=now() WHERE key=${STATE_WRITE_LOCK_KEY} AND value->>'token'=${token}`}catch(error){console.error('Provedor Plus: não foi possível renovar a trava de estado.',error)}if(!stopped)renewTimer=setTimeout(renew,20000)};
       renewTimer=setTimeout(renew,20000);
       return async()=>{stopped=true;if(renewTimer)clearTimeout(renewTimer);try{await sql`DELETE FROM pp_settings WHERE key=${STATE_WRITE_LOCK_KEY} AND value->>'token'=${token}`}catch(error){console.error('Provedor Plus: não foi possível liberar a trava de estado.',error)}};
     }
-    const remaining=deadline-Date.now();
-    if(remaining>0)await wait(Math.min(250,remaining));
+    const remaining=deadline-Date.now();if(remaining>0)await wait(Math.min(250,remaining));
+  }
+  throw Object.assign(new Error('O Provedor Plus está concluindo outra atualização de dados. Tente novamente em alguns segundos.'),{statusCode:409});
+}
+async function acquireStateWriteLock(env,maxWaitMs=20000){
+  if(!env?.PROVEDOR_DB)return acquireStateWriteLockNeon(env,maxWaitMs);
+  const db=env.PROVEDOR_DB,totalWaitMs=Math.max(1000,Number(maxWaitMs)||20000),token=crypto.randomUUID(),deadline=Date.now()+totalWaitMs;
+  while(Date.now()<deadline){
+    const nowIso=new Date().toISOString(),expiresAt=new Date(Date.now()+STATE_WRITE_LOCK_TTL_MS).toISOString(),raw=JSON.stringify({token,expires_at:expiresAt});
+    const rows=await d1Rows(db.prepare(`INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?)
+      ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+      WHERE COALESCE(json_extract(pp_settings.value,'$.expires_at'),'1970-01-01T00:00:00.000Z')<=?
+      RETURNING value`).bind(STATE_WRITE_LOCK_KEY,raw,nowIso,nowIso));
+    const lock=parseState(rows?.[0]?.value);if(text(lock?.token)===token){
+      let stopped=false,renewTimer=null;
+      const renew=async()=>{if(stopped)return;try{const at=new Date().toISOString(),nextExpiry=new Date(Date.now()+STATE_WRITE_LOCK_TTL_MS).toISOString(),nextRaw=JSON.stringify({token,expires_at:nextExpiry});await db.prepare("UPDATE pp_settings SET value=?,updated_at=? WHERE key=? AND json_extract(value,'$.token')=?").bind(nextRaw,at,STATE_WRITE_LOCK_KEY,token).run()}catch(error){console.error('Provedor Plus: não foi possível renovar a trava de estado no D1.',error)}if(!stopped)renewTimer=setTimeout(renew,20000)};
+      renewTimer=setTimeout(renew,20000);
+      return async()=>{stopped=true;if(renewTimer)clearTimeout(renewTimer);try{await db.prepare("DELETE FROM pp_settings WHERE key=? AND json_extract(value,'$.token')=?").bind(STATE_WRITE_LOCK_KEY,token).run()}catch(error){console.error('Provedor Plus: não foi possível liberar a trava de estado no D1.',error)}};
+    }
+    const remaining=deadline-Date.now();if(remaining>0)await wait(Math.min(250,remaining));
   }
   throw Object.assign(new Error('O Provedor Plus está concluindo outra atualização de dados. Tente novamente em alguns segundos.'),{statusCode:409});
 }

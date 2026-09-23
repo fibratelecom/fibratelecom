@@ -21,9 +21,15 @@ function parseStateValue(value){
   return {};
 }
 
-async function loadState(sql){
-  const rows=await sql`SELECT value FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`;
-  return parseStateValue(Array.isArray(rows)?rows[0]?.value:null);
+async function loadState(env,sql){
+  const rows=await sql`SELECT value,updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,row=Array.isArray(rows)?rows[0]:null,state=parseStateValue(row?.value),neonUpdatedAt=row?.updated_at instanceof Date?row.updated_at.toISOString():text(row?.updated_at);
+  if(!env?.PROVEDOR_DB)return state;
+  try{
+    const result=await env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY).all(),d1Row=Array.isArray(result?.results)?result.results[0]:null,d1Time=Date.parse(text(d1Row?.updated_at)),neonTime=Date.parse(neonUpdatedAt);
+    if(d1Row&&(!Number.isFinite(neonTime)||(Number.isFinite(d1Time)&&d1Time>=neonTime)))return parseStateValue(d1Row.value);
+    if(row)await mirrorInvoicesToD1(env,state,neonUpdatedAt||new Date().toISOString());
+  }catch(error){console.error('Provedor Plus: leitura do estado completo no D1 falhou; usando Neon.',error)}
+  return state;
 }
 
 async function mirrorInvoicesToD1(env,state,updatedAt=''){
@@ -311,7 +317,7 @@ async function issueAndSave(env,sql,state,invoice,client,vault,isExisting){
 
 async function runBillingCron(env,{force=false}={}){
   if(!env.DATABASE_URL)throw new Error('DATABASE_URL não configurada para a geração automática.');
-  const sql=neon(env.DATABASE_URL),state=await loadState(sql);state.settings={...(state.settings||{})};
+  const sql=neon(env.DATABASE_URL),state=await loadState(env,sql);state.settings={...(state.settings||{})};
   const enabled=state.settings.billing_auto_enabled!==false&&String(state.settings.billing_auto_enabled)!=='false';
   if(!enabled&&!force)return {enabled:false,generated:0,issued:0,skipped:0,failed:0,errors:[]};
   const todayParts=brazilParts(),today=keyFromParts(todayParts.year,todayParts.month,todayParts.day),daysBefore=Math.max(1,Math.min(30,Math.floor(num(state.settings.billing_auto_days_before)||7)));

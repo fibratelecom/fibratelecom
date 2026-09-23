@@ -648,7 +648,7 @@ async function handleInbox(request,env,data,cors){
     return json({ok:true,data:{unread:Number(count?.[0]?.unread)||0}},200,cors);
   }
   if(action==='read-all'){
-    await db.prepare('UPDATE pp_notification_inbox SET read_at=COALESCE(read_at,?) WHERE client_id=? AND read_at IS NULL').bind(new Date().toISOString(),id,session.clientId).run();
+    await db.prepare('UPDATE pp_notification_inbox SET read_at=COALESCE(read_at,?) WHERE client_id=? AND read_at IS NULL').bind(new Date().toISOString(),session.clientId).run();
     return json({ok:true,data:{unread:0}},200,cors);
   }
   throw Object.assign(new Error('Ação da caixa de notificações não permitida.'),{statusCode:400});

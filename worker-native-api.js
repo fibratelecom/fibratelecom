@@ -6,6 +6,7 @@ const PROFILE_PREFIX='employee_access_v1_';
 const PROFILE_D1_CUTOVER_AT=Date.parse('2026-09-23T00:24:01Z');
 const STATE_KEY='web_state_v1017';
 const TICKETS_D1_KEY='support_tickets_v1';
+const AUDIT_D1_KEY='admin_audit_v1';
 const ALL_PERMISSIONS=['dashboard','clients','plans','finance','billing','tickets','network'];
 const utf8=new TextEncoder();
 
@@ -288,6 +289,21 @@ async function readTicketsD1(env,legacyTickets=[]){
     await saveTicketsD1(env,fallback);return {tickets:fallback,active:true};
   }catch(error){console.error('Provedor Plus: leitura D1 dos chamados falhou; usando a cópia legado do Neon.',error);return {tickets:fallback,active:false}}
 }
+async function saveAuditD1(env,audit){
+  if(!env?.PROVEDOR_DB)return false;
+  const safe=Array.isArray(audit)?sanitize(audit).slice(0,1500):[],updatedAt=new Date().toISOString();
+  await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(AUDIT_D1_KEY,JSON.stringify(safe),updatedAt).run();
+  return true;
+}
+async function readAuditD1(env,legacyAudit=[]){
+  const fallback=Array.isArray(legacyAudit)?sanitize(legacyAudit).slice(0,1500):[];
+  if(!env?.PROVEDOR_DB)return {audit:fallback,active:false};
+  try{
+    const result=await env.PROVEDOR_DB.prepare('SELECT value FROM pp_settings WHERE key=? LIMIT 1').bind(AUDIT_D1_KEY).all(),row=result?.results?.[0];
+    if(row){let value=row.value;if(typeof value==='string')try{value=JSON.parse(value)}catch{value=[]}return {audit:Array.isArray(value)?sanitize(value).slice(0,1500):[],active:true}}
+    await saveAuditD1(env,fallback);return {audit:fallback,active:true};
+  }catch(error){console.error('Provedor Plus: leitura D1 da auditoria falhou; usando a cópia legado do Neon.',error);return {audit:fallback,active:false}}
+}
 function nativePlanPayload(data={}){
   const id=num(data.id),name=text(data.name);
   if(!id||!name)return null;
@@ -323,7 +339,11 @@ export async function handleNativeCloudState(request,env){
     if(action==='state.get'){
       const row=await getSetting(sql,STATE_KEY);
       if(!row)result={state:null,updated_at:null};
-      else{const clean=sanitize(row.value||{}),ticketStore=await readTicketsD1(env,clean.tickets);if(ticketStore.active)clean.tickets=ticketStore.tickets;result={state:clean,updated_at:row.updated_at||null};}
+      else{
+        const clean=sanitize(row.value||{}),ticketStore=await readTicketsD1(env,clean.tickets),legacyAudit=Array.isArray(clean.audit)?clean.audit:Array.isArray(clean.audit_log)?clean.audit_log:Array.isArray(clean.history)?clean.history:Array.isArray(clean.logs)?clean.logs:[],auditStore=await readAuditD1(env,legacyAudit);
+        if(ticketStore.active)clean.tickets=ticketStore.tickets;if(auditStore.active)clean.audit=auditStore.audit;
+        result={state:clean,updated_at:row.updated_at||null};
+      }
     }
     else if(action==='state.save'){
       if(!data.state||typeof data.state!=='object'||Array.isArray(data.state))throw Object.assign(new Error('Estado do gerenciador inválido.'),{statusCode:400});
@@ -331,8 +351,13 @@ export async function handleNativeCloudState(request,env){
       if(expectedAt&&actualAt&&Number.isFinite(expectedTime)&&Number.isFinite(actualTime)&&expectedTime!==actualTime)throw Object.assign(new Error('O estado foi atualizado em outro acesso. Recarregando para mesclar as alterações.'),{statusCode:409});
       const merged=preservePortalState(data.state,previous?.value),clean=sanitize(merged);await syncNativePlanCatalog(sql,clean,env);
       let ticketsOnD1=false;if(Array.isArray(clean.tickets)&&env?.PROVEDOR_DB)try{ticketsOnD1=await saveTicketsD1(env,clean.tickets)}catch(error){console.error('Provedor Plus: gravação D1 dos chamados falhou; mantendo gravação no Neon.',error)}
-      const legacyTickets=Array.isArray(previous?.value?.tickets)?previous.value.tickets:[],neonState=ticketsOnD1?{...clean,tickets:legacyTickets}:clean,row=await setSetting(sql,STATE_KEY,neonState),savedState=row?.value||neonState;
-      result={state:ticketsOnD1?{...savedState,tickets:clean.tickets}:savedState,updated_at:row?.updated_at||new Date().toISOString()};
+      let auditOnD1=false;if(Array.isArray(clean.audit)&&env?.PROVEDOR_DB)try{auditOnD1=await saveAuditD1(env,clean.audit)}catch(error){console.error('Provedor Plus: gravação D1 da auditoria falhou; mantendo gravação no Neon.',error)}
+      const legacyTickets=Array.isArray(previous?.value?.tickets)?previous.value.tickets:[],legacyAudit=Array.isArray(previous?.value?.audit)?previous.value.audit:null;let neonState=clean;
+      if(ticketsOnD1)neonState={...neonState,tickets:legacyTickets};
+      if(auditOnD1){neonState={...neonState};if(legacyAudit)neonState.audit=legacyAudit;else delete neonState.audit}
+      const row=await setSetting(sql,STATE_KEY,neonState),savedState=row?.value||neonState;let resultState=savedState;
+      if(ticketsOnD1)resultState={...resultState,tickets:clean.tickets};if(auditOnD1)resultState={...resultState,audit:clean.audit};
+      result={state:resultState,updated_at:row?.updated_at||new Date().toISOString()};
     }
     else if(action==='health'){const row=await getSetting(sql,STATE_KEY);result={online:true,hasState:Boolean(row?.value),updated_at:row?.updated_at||null};}
     else throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});return apiJson({ok:true,data:result},200,{'x-provedor-plus-edge':'cloudflare-native-state'});
@@ -353,7 +378,7 @@ async function findExistingClient(sql,p){if(p.contract_number){const rows=await 
 async function saveClient(sql,data,env){const p=clientPayload(data);if(!p.name)throw Object.assign(new Error('Nome do cliente é obrigatório.'),{statusCode:400});if(p.plan_id){const linkedPlan=await ensureNativePlanForClient(sql,p.plan_id,env);if(!p.plan)p.plan=text(linkedPlan?.name)}if(!p.id)p.id=await findExistingClient(sql,p);let rows=[];
   if(p.id){
     if(p.pppoe_password)rows=await sql`UPDATE pp_clients SET name=${p.name},document=${p.document},contract_number=${p.contract_number},plan=${p.plan},plan_id=${p.plan_id},due_day=${p.due_day},status=${p.status},email=${p.email},phone=${p.phone},address=${p.address},city=${p.city},state=${p.state},zip_code=${p.zip_code},pppoe_user=${p.pppoe_user},pppoe_password=${p.pppoe_password},auto_block=${p.auto_block},block_after_days=${p.block_after_days},notes=${p.notes},router_id=${p.router_id},connection_type=${p.connection_type},pppoe_username=${p.pppoe_username},mikrotik_profile=${p.mikrotik_profile},ip=${p.ip},mac_address=${p.mac_address},mikrotik_secret_id=${p.mikrotik_secret_id},mikrotik_status=${p.mikrotik_status},mikrotik_last_sync=${p.mikrotik_last_sync},updated_at=${p.updated_at} WHERE id=${p.id} RETURNING *`;
-    else rows=await sql`UPDATE pp_clients SET name=${p.name},document=${p.document},contract_number=${p.contract_number},plan=${p.plan},plan_id=${p.plan_id},due_day=${p.due_day},status=${p.status},email=${p.email},phone=${p.phone},address=${p.address},city=${p.city},state=${p.state},zip_code=${p.zip_code},pppoe_user=${p.ppoe_user},auto_block=${p.auto_block},block_after_days=${p.block_after_days},notes=${p.notes},router_id=${p.router_id},connection_type=${p.connection_type},pppoe_username=${p.pppoe_username},mikrotik_profile=${p.mikrotik_profile},ip=${p.ip},mac_address=${p.mac_address},mikrotik_secret_id=${p.mikrotik_secret_id},mikrotik_status=${p.mikrotik_status},mikrotik_last_sync=${p.mikrotik_last_sync},updated_at=${p.updated_at} WHERE id=${p.id} RETURNING *`;
+    else rows=await sql`UPDATE pp_clients SET name=${p.name},document=${p.document},contract_number=${p.contract_number},plan=${p.plan},plan_id=${p.plan_id},due_day=${p.due_day},status=${p.status},email=${p.email},phone=${p.phone},address=${p.address},city=${p.city},state=${p.state},zip_code=${p.zip_code},pppoe_user=${p.pppoe_user},auto_block=${p.auto_block},block_after_days=${p.block_after_days},notes=${p.notes},router_id=${p.router_id},connection_type=${p.connection_type},pppoe_username=${p.pppoe_username},mikrotik_profile=${p.mikrotik_profile},ip=${p.ip},mac_address=${p.mac_address},mikrotik_secret_id=${p.mikrotik_secret_id},mikrotik_status=${p.mikrotik_status},mikrotik_last_sync=${p.mikrotik_last_sync},updated_at=${p.updated_at} WHERE id=${p.id} RETURNING *`;
     if(rows[0]){if(env?.PROVEDOR_DB)try{await mirrorClientRowToD1(env,rows[0])}catch(error){console.error(`Provedor Plus: não foi possível espelhar o cliente ${p.id} no D1.`,error)}return safeClientRow(rows[0]);}
   }
   if(p.pppoe_password)rows=await sql`INSERT INTO pp_clients (name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,pppoe_user,pppoe_password,auto_block,block_after_days,notes,router_id,connection_type,pppoe_username,mikrotik_profile,ip,mac_address,mikrotik_secret_id,mikrotik_status,mikrotik_last_sync,updated_at) VALUES (${p.name},${p.document},${p.contract_number},${p.plan},${p.plan_id},${p.due_day},${p.status},${p.email},${p.phone},${p.address},${p.city},${p.state},${p.zip_code},${p.pppoe_user},${p.pppoe_password},${p.auto_block},${p.block_after_days},${p.notes},${p.router_id},${p.connection_type},${p.pppoe_username},${p.mikrotik_profile},${p.ip},${p.mac_address},${p.mikrotik_secret_id},${p.mikrotik_status},${p.mikrotik_last_sync},${p.updated_at}) RETURNING *`;

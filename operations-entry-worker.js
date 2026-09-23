@@ -5,6 +5,7 @@ import {buildPushHTTPRequest} from '@pushforge/builder';
 const OPS_PATH='/api/push-operations';
 const STATE_KEY='web_state_v1017';
 const VAPID_KEY='push_vapid_v1';
+const VAPID_D1_KEY='push_vapid_d1_v1';
 const OPS_SETTINGS_KEY='push_operational_settings_v1';
 const CUSTOM_TEMPLATES_KEY='push_custom_templates_v1';
 const CLIENT_APP_ORIGIN='https://cliente.fibramais.workers.dev';
@@ -115,7 +116,14 @@ async function saveTemplates(store,items){const safe=(Array.isArray(items)?items
 function newTemplateId(){const random=crypto.getRandomValues(new Uint32Array(1))[0].toString(36);return `tpl-${Date.now().toString(36)}-${random}`}
 
 async function pushCryptoKey(env){const secret=text(env.BANK_SECRET_KEY)||text(env.PORTAL_SESSION_SECRET)||text(env.DATABASE_URL);if(!secret)throw new Error('Chave de proteção das notificações não configurada.');const raw=await crypto.subtle.digest('SHA-256',enc.encode(`provedor-plus-push-v1|${secret}`));return crypto.subtle.importKey('raw',raw,{name:'AES-GCM'},false,['decrypt'])}
-async function readVapid(env,sql){const rows=await sql`SELECT value FROM pp_settings WHERE key=${VAPID_KEY} LIMIT 1`,record=rows?.[0]?.value;if(!record?.iv||!record?.data)return null;const key=await pushCryptoKey(env),plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:base64UrlBytes(record.iv)},key,base64UrlBytes(record.data));return JSON.parse(new TextDecoder().decode(plain))}
+async function readVapid(env,sql){
+  let record=null;
+  if(env?.PROVEDOR_DB){
+    try{record=parseObject(await settingValue(env.PROVEDOR_DB,VAPID_D1_KEY))}catch(error){console.error('Provedor Plus: leitura D1 do VAPID operacional falhou; usando cópia legado.',error)}
+  }
+  if(!record?.iv||!record?.data){const rows=await sql`SELECT value FROM pp_settings WHERE key=${VAPID_KEY} LIMIT 1`;record=rows?.[0]?.value}
+  if(!record?.iv||!record?.data)return null;const key=await pushCryptoKey(env),plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:base64UrlBytes(record.iv)},key,base64UrlBytes(record.data));return JSON.parse(new TextDecoder().decode(plain))
+}
 
 async function sendOne(sql,row,vapid,payload){
   try{

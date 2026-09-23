@@ -1,11 +1,10 @@
 // pp-build: 20260914-portal-billing-details1
 import { neon } from '@neondatabase/serverless';
 import { handleNativeAuth,handleNativeCloudState,handleNativeCloudData,resolveRouterForService,recordTrafficForService,readTrafficForService,finalizePaidNegotiations } from './worker-native-api.js';
-import { handleBankProxy } from './worker-bank-native.js';
+import { handleBankProxy,readBankSettingsRecord,writeBankSettingsRecord } from './worker-bank-native.js';
 import { handleMikrotikProxy } from './worker-mikrotik-native.js';
 
 const STATE_KEY='web_state_v1017';
-const BANK_SETTINGS_KEY='bank_credentials_v1';
 const CUSTOMER_PORTAL_PATH='/api/customer-portal';
 const PROTOCOLS_PATH='/api/protocols';
 const CARD_PAYMENT_FEE_CENTS=500;
@@ -137,23 +136,20 @@ async function requireBankAdmin(request,env){
 }
 
 async function readBankSettings(env){
-  if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Neon não configurada.'),{statusCode:503});
-  const sql=neon(env.DATABASE_URL),rows=await sql`SELECT value FROM pp_settings WHERE key=${BANK_SETTINGS_KEY} LIMIT 1`;
-  const encrypted=Array.isArray(rows)?rows[0]?.value:null;
+  const sql=env?.DATABASE_URL?neon(env.DATABASE_URL):null,stored=await readBankSettingsRecord(env,sql),encrypted=stored?.record;
   if(!encrypted)return emptyBankSettings();
-  const stored=await decryptBankSettings(env,encrypted);
+  const value=await decryptBankSettings(env,encrypted);
   return {
     ...emptyBankSettings(),
-    ...stored,
-    efi:{...emptyBankSettings().efi,...(stored?.efi||{})},
-    mercadoPago:{...emptyBankSettings().mercadoPago,...(stored?.mercadoPago||{})}
+    ...value,
+    efi:{...emptyBankSettings().efi,...(value?.efi||{})},
+    mercadoPago:{...emptyBankSettings().mercadoPago,...(value?.mercadoPago||{})}
   };
 }
 
 async function writeBankSettings(env,value){
-  if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Neon não configurada.'),{statusCode:503});
-  const sql=neon(env.DATABASE_URL),updatedAt=new Date().toISOString(),encrypted=await encryptBankSettings(env,value),raw=JSON.stringify(encrypted);
-  await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${BANK_SETTINGS_KEY},${raw}::jsonb,${updatedAt}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at`;
+  const sql=env?.DATABASE_URL?neon(env.DATABASE_URL):null,updatedAt=new Date().toISOString(),encrypted=await encryptBankSettings(env,value);
+  await writeBankSettingsRecord(env,sql,encrypted,updatedAt);
   return value;
 }
 

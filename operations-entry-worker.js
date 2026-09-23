@@ -10,11 +10,12 @@ const OPS_SETTINGS_KEY='push_operational_settings_v1';
 const CUSTOM_TEMPLATES_KEY='push_custom_templates_v1';
 const PROTOCOL_OBSERVER_D1_MARKER='push_protocol_observer_d1_v1';
 const CLIENT_OBSERVER_D1_MARKER='push_client_observer_d1_v1';
+const OPERATIONAL_EVENTS_D1_MARKER='operational_push_events_d1_v1';
 const CLIENT_APP_ORIGIN='https://cliente.fibramais.workers.dev';
 const text=value=>String(value??'').trim();
 const normalize=value=>text(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
 const enc=new TextEncoder();
-let schemaReady=false,protocolObserverReady=false,clientObserverReady=false;
+let schemaReady=false,protocolObserverReady=false,clientObserverReady=false,operationalEventsSeedReady=false;
 
 const DEFAULT_SETTINGS={
   statusSuspended:true,
@@ -137,6 +138,37 @@ async function sendOne(sql,row,vapid,payload,db=null){
   }catch(error){const message=error instanceof Error?error.message:String(error),now=new Date().toISOString();try{if(db)await db.prepare('UPDATE pp_push_subscriptions SET last_error=?,updated_at=? WHERE id=?').bind(message.slice(0,500),now,Number(row.id)).run();else await sql`UPDATE pp_push_subscriptions SET last_error=${message.slice(0,500)},updated_at=${now} WHERE id=${Number(row.id)}`}catch{}return {ok:false,error:message}}
 }
 async function sendRows(sql,rows,vapid,payload,db=null){let sent=0,failed=0;for(let start=0;start<rows.length;start+=10){const results=await Promise.all(rows.slice(start,start+10).map(row=>sendOne(sql,row,vapid,payload,db)));for(const result of results)result.ok?sent++:failed++}return {sent,failed,total:rows.length}}
+
+async function seedOperationalEventsD1(env,sql){
+  if(!env?.PROVEDOR_DB||operationalEventsSeedReady)return false;
+  const db=env.PROVEDOR_DB;
+  try{
+    await db.prepare(`CREATE TABLE IF NOT EXISTS pp_push_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_key TEXT NOT NULL UNIQUE,
+      client_id INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      click_url TEXT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      sent_count INTEGER NOT NULL DEFAULT 0,
+      failed_count INTEGER NOT NULL DEFAULT 0,
+      completed INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at TEXT NULL,
+      sent_at TEXT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`).run();
+    const marker=parseObject(await settingValue(db,OPERATIONAL_EVENTS_D1_MARKER));if(marker?.migratedAt){operationalEventsSeedReady=true;return true}
+    const rows=await sql`SELECT event_key,client_id,event_type,title,body,click_url,attempts,sent_count,failed_count,completed,last_attempt_at,sent_at,created_at FROM pp_push_events WHERE event_type LIKE 'operational:%' ORDER BY id ASC`;
+    let copied=0;
+    for(let start=0;start<(rows||[]).length;start+=40){
+      const statements=rows.slice(start,start+40).map(row=>db.prepare('INSERT OR IGNORE INTO pp_push_events (event_key,client_id,event_type,title,body,click_url,attempts,sent_count,failed_count,completed,last_attempt_at,sent_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(text(row.event_key),Number(row.client_id),text(row.event_type),text(row.title),text(row.body),text(row.click_url)||null,Math.max(0,Number(row.attempts)||0),Math.max(0,Number(row.sent_count)||0),Math.max(0,Number(row.failed_count)||0,row.completed===true||String(row.completed).toLowerCase()==='true'||Number(row.completed)===1?1:0,text(row.last_attempt_at)||null,text(row.sent_at)||null,text(row.created_at)||new Date().toISOString()));
+      if(statements.length){await db.batch(statements);copied+=statements.length}
+    }
+    await saveSettingValue(db,OPERATIONAL_EVENTS_D1_MARKER,{migratedAt:new Date().toISOString(),copied});operationalEventsSeedReady=true;return true;
+  }catch(error){console.error('Provedor Plus: histórico operacional antigo não pôde ser preparado no D1.',error);return false}
+}
 
 async function attemptEvent(sql,env,row){
   const claimed=await sql`UPDATE pp_push_events SET attempts=attempts+1,last_attempt_at=now() WHERE id=${Number(row.id)} AND completed=false AND (attempts=0 OR (attempts=1 AND sent_count=0 AND failed_count>0 AND last_attempt_at<now()-interval '2 minutes')) RETURNING *`;
@@ -280,7 +312,7 @@ async function retryPending(sql,env){
 
 async function scanOperationalEvents(env){
   if(!env?.DATABASE_URL)return {scanned:false};
-  const sql=neon(env.DATABASE_URL),protocolStore=env.PROVEDOR_DB||sql;await ensureTables(sql);const state=await loadState(sql),settings=await loadSettings(env.PROVEDOR_DB||sql),events=[];
+  const sql=neon(env.DATABASE_URL),protocolStore=env.PROVEDOR_DB||sql;await ensureTables(sql);if(env?.PROVEDOR_DB)await seedOperationalEventsD1(env,sql);const state=await loadState(sql),settings=await loadSettings(env.PROVEDOR_DB||sql),events=[];
   events.push(...await statusAndPlanEvents(sql,state,settings,protocolStore,env));
   events.push(...trustEvents(state,settings));
   events.push(...await dueChangeEvents(protocolStore,settings));

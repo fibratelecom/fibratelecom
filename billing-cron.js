@@ -1,10 +1,9 @@
 import baseWorker from './worker.js';
 import { neon } from '@neondatabase/serverless';
-import { handleBankProxy } from './worker-bank-native.js';
+import { handleBankProxy,readBankSettingsRecord } from './worker-bank-native.js';
 import {paymentPriorityActive} from './state-write-lock.js';
 
 const STATE_KEY='web_state_v1017';
-const BANK_SETTINGS_KEY='bank_credentials_v1';
 const INVOICES_D1_KEY='billing_invoices_v1';
 const DAY=86400000;
 const utf8=new TextEncoder();
@@ -75,7 +74,7 @@ async function bankCryptoKey(env){
 }
 
 async function readBankSettings(env,sql){
-  const rows=await sql`SELECT value FROM pp_settings WHERE key=${BANK_SETTINGS_KEY} LIMIT 1`,record=Array.isArray(rows)?rows[0]?.value:null;
+  const stored=await readBankSettingsRecord(env,sql),record=stored?.record;
   if(!record?.iv||!record?.data)return {efi:{},mercadoPago:{}};
   const key=await bankCryptoKey(env),plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:bankB64Bytes(record.iv)},key,bankB64Bytes(record.data));
   const parsed=JSON.parse(new TextDecoder().decode(plain));

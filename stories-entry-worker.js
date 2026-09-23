@@ -8,6 +8,17 @@ const STATE_KEY='web_state_v1017';
 const FINANCIAL_REPAIR_PORTAL_ACTIONS=new Set(['refresh','payment-pix','payment-card','payment-status','payment-prepare','negotiate']);
 const text=value=>String(value??'').trim();
 function parseState(value){if(value&&typeof value==='object'&&!Array.isArray(value))return value;if(typeof value==='string')try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{}return {}}
+async function loadState(env,sql){
+  if(env?.PROVEDOR_DB)try{
+    const result=await env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY).all(),row=Array.isArray(result?.results)?result.results[0]:null;
+    if(row){
+      const stamps=await sql`SELECT updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,neonAt=stamps?.[0]?.updated_at instanceof Date?stamps[0].updated_at.toISOString():text(stamps?.[0]?.updated_at),d1Time=Date.parse(text(row.updated_at)),neonTime=Date.parse(neonAt);
+      if(!Number.isFinite(neonTime)||(Number.isFinite(d1Time)&&d1Time>=neonTime))return parseState(row.value);
+    }
+  }catch(error){console.error('Provedor Plus: leitura D1 do estado financeiro falhou; usando Neon.',error)}
+  const rows=await sql`SELECT value FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`;
+  return parseState(rows?.[0]?.value);
+}
 function balanceCents(client){const direct=Number(client?.cashback_balance_cents);if(Number.isFinite(direct))return Math.max(0,Math.round(direct));const amount=Number(client?.cashback_balance);return Number.isFinite(amount)?Math.max(0,Math.round(amount*100)):0}
 function paidStatus(value){const status=text(value).toLowerCase();return ['pago','paid','baixado','recebido','quitado'].some(item=>status.includes(item))}
 function conflictingBankStatus(value){const status=text(value).toLowerCase();return ['canceled','cancelled','cancelado','rejected','recusado','expired','expirado','removido','removida'].some(item=>status.includes(item))}
@@ -17,7 +28,7 @@ function cashbackRules(state){const settings=state?.settings||{},mode=text(setti
 
 async function repairFinancialConsistency(env){
   if(!env?.DATABASE_URL)return false;
-  const sql=neon(env.DATABASE_URL),rows=await sql`SELECT value FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,state=parseState(rows?.[0]?.value);
+  const sql=neon(env.DATABASE_URL),state=await loadState(env,sql);
   const invoices=Array.isArray(state.invoices)?state.invoices:[],clients=Array.isArray(state.clients)?state.clients:[];
   let transactions=Array.isArray(state.cashback_transactions)?state.cashback_transactions:[],changed=false;
   const now=new Date().toISOString(),rules=cashbackRules(state);
@@ -111,7 +122,7 @@ async function enhancePortalResponse(response,env){
   const data=body.data,hasPortalData=Boolean(data?.client||Array.isArray(data?.invoices)||data?.portal?.client||Array.isArray(data?.portal?.invoices));
   if(!hasPortalData)return response;
   try{
-    const sql=neon(env.DATABASE_URL),rows=await sql`SELECT value FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,state=parseState(rows?.[0]?.value);
+    const sql=neon(env.DATABASE_URL),state=await loadState(env,sql);
     if(data?.client||data?.invoices)enhancePortalObject(data,state);
     if(data?.portal)enhancePortalObject(data.portal,state);
     const headers=new Headers(response.headers);headers.set('Content-Type','application/json; charset=utf-8');headers.set('Cache-Control','no-store, max-age=0');

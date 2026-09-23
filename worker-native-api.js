@@ -139,6 +139,18 @@ export function finalizePaidNegotiations(state){
 }
 async function setSetting(sql,key,value){if(key===STATE_KEY)value=finalizePaidNegotiations(value);const updatedAt=new Date().toISOString(),raw=JSON.stringify(value??null);const rows=await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${key},${raw}::jsonb,${updatedAt}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at RETURNING value,updated_at`;return Array.isArray(rows)?rows[0]||null:null;}
 async function deleteSetting(sql,key){await sql`DELETE FROM pp_settings WHERE key=${key}`;}
+function stateObject(value){if(value&&typeof value==='object'&&!Array.isArray(value))return value;if(typeof value==='string')try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{}return {}}
+async function getStateD1(env,sql=null){
+  if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 do estado administrativo não configurado.'),{statusCode:503});
+  const result=await env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY).all(),row=result?.results?.[0];
+  if(row)return {value:stateObject(row.value),updated_at:row.updated_at||null};
+  if(sql)try{const legacy=await getSetting(sql,STATE_KEY);if(legacy){const seeded=await setStateD1(env,legacy.value,legacy.updated_at instanceof Date?legacy.updated_at.toISOString():text(legacy.updated_at));return seeded}}catch(error){console.error('Provedor Plus: cópia Neon do estado não pôde recompor o D1.',error)}
+  return null;
+}
+async function setStateD1(env,value,updatedAt=new Date().toISOString()){
+  if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 do estado administrativo não configurado.'),{statusCode:503});const next=finalizePaidNegotiations(value),at=text(updatedAt)||new Date().toISOString();
+  await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(STATE_KEY,JSON.stringify(next??{}),at).run();return {value:next,updated_at:at};
+}
 function profileValue(row){let value=row?.value;if(typeof value==='string')try{value=JSON.parse(value)}catch{value={}}return value&&typeof value==='object'&&!Array.isArray(value)?value:{}}
 function normalizeProfile(value,role){return {active:value?.active!==false,phone:text(value?.phone),permissions:normalizePermissions(value?.permissions,role)}}
 async function mirrorProfileToD1(env,id,profile){
@@ -351,7 +363,9 @@ async function upsertNativePlan(sql,data,env=null){
   if(saved&&env?.PROVEDOR_DB)try{await mirrorPlanRowToD1(env,saved)}catch(error){console.error(`Provedor Plus: não foi possível espelhar o plano ${plan.id} no D1.`,error)}
   return saved;
 }
-async function syncNativePlanCatalog(sql,state,env){for(const plan of Array.isArray(state?.plans)?state.plans:[]){if(num(plan?.id)&&text(plan?.name))await upsertNativePlan(sql,plan,env)}}
+async function syncNativePlanCatalog(sql,state,env){
+  for(const item of Array.isArray(state?.plans)?state.plans:[]){const plan=nativePlanPayload(item);if(!plan)continue;if(env?.PROVEDOR_DB){const conflict=await env.PROVEDOR_DB.prepare('SELECT id FROM pp_plans WHERE name=? AND id<>? LIMIT 1').bind(plan.name,plan.id).all();if(conflict?.results?.[0]?.id)throw Object.assign(new Error(`O plano ${plan.name} já existe no banco com outro identificador. Revise o cadastro de planos antes de vincular clientes.`),{statusCode:409});await mirrorPlanRowToD1(env,{id:plan.id,name:plan.name,speed_down_mbps:plan.speedDown,speed_up_mbps:plan.speedUp,price_cents:plan.priceCents,active:plan.active,description:plan.description,updated_at:plan.updatedAt})}if(env?.DATABASE_URL)try{await upsertNativePlan(sql,item,null)}catch(error){console.error(`Provedor Plus: cópia de recuperação do plano ${plan.id} no Neon falhou; D1 permanece confirmado.`,error)}}
+}
 function safePlanRow(row){if(!row||typeof row!=='object')return row;return {...row,id:Number(row.id),speed_down_mbps:Math.max(0,Number(row.speed_down_mbps)||0),speed_up_mbps:Math.max(0,Number(row.speed_up_mbps)||0),price_cents:Math.max(0,Math.round(Number(row.price_cents)||0)),active:bool(row.active,true)}}
 async function readPlanById(env,sql,planId){
   const id=num(planId);if(!id)return null;
@@ -369,10 +383,10 @@ async function ensureNativePlanForClient(sql,planId,env){
   return upsertNativePlan(sql,plan,env);
 }
 export async function handleNativeCloudState(request,env){
-  if(request.method!=='POST')return apiJson({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-native-state'});const sql=sqlFor(env);
-  try{await requireAuth(request,sql);const body=await bodyOf(request),action=text(body?.action),data=body?.data||{};let result;
+  if(request.method!=='POST')return apiJson({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-native-state'});const sql=authSqlFor(env);
+  try{await requireAuth(request,sql);const body=await bodyOf(request),action=text(body?.action),data=body?.data||{},recoverySql=env?.DATABASE_URL?sql:null;let result;
     if(action==='state.get'){
-      const row=await getSetting(sql,STATE_KEY);
+      const row=await getStateD1(env,recoverySql);
       if(!row)result={state:null,updated_at:null};
       else{
         const clean=sanitize(row.value||{}),ticketStore=await readTicketsD1(env,clean.tickets),legacyAudit=Array.isArray(clean.audit)?clean.audit:Array.isArray(clean.audit_log)?clean.audit_log:Array.isArray(clean.history)?clean.history:Array.isArray(clean.logs)?clean.logs:[],auditStore=await readAuditD1(env,legacyAudit);
@@ -382,19 +396,17 @@ export async function handleNativeCloudState(request,env){
     }
     else if(action==='state.save'){
       if(!data.state||typeof data.state!=='object'||Array.isArray(data.state))throw Object.assign(new Error('Estado do gerenciador inválido.'),{statusCode:400});
-      const previous=await getSetting(sql,STATE_KEY),expectedAt=text(data.baseUpdatedAt),actualAt=previous?.updated_at,expectedTime=Date.parse(expectedAt),actualTime=actualAt instanceof Date?actualAt.getTime():Date.parse(text(actualAt));
+      const previous=await getStateD1(env,recoverySql),expectedAt=text(data.baseUpdatedAt),actualAt=previous?.updated_at,expectedTime=Date.parse(expectedAt),actualTime=Date.parse(text(actualAt));
       if(expectedAt&&actualAt&&Number.isFinite(expectedTime)&&Number.isFinite(actualTime)&&expectedTime!==actualTime)throw Object.assign(new Error('O estado foi atualizado em outro acesso. Recarregando para mesclar as alterações.'),{statusCode:409});
       const merged=preservePortalState(data.state,previous?.value),clean=sanitize(merged);await syncNativePlanCatalog(sql,clean,env);
-      let ticketsOnD1=false;if(Array.isArray(clean.tickets)&&env?.PROVEDOR_DB)try{ticketsOnD1=await saveTicketsD1(env,clean.tickets)}catch(error){console.error('Provedor Plus: gravação D1 dos chamados falhou; mantendo gravação no Neon.',error)}
-      let auditOnD1=false;if(Array.isArray(clean.audit)&&env?.PROVEDOR_DB)try{auditOnD1=await saveAuditD1(env,clean.audit)}catch(error){console.error('Provedor Plus: gravação D1 da auditoria falhou; mantendo gravação no Neon.',error)}
-      const legacyTickets=Array.isArray(previous?.value?.tickets)?previous.value.tickets:[],legacyAudit=Array.isArray(previous?.value?.audit)?previous.value.audit:null;let neonState=clean;
-      if(ticketsOnD1)neonState={...neonState,tickets:legacyTickets};
-      if(auditOnD1){neonState={...neonState};if(legacyAudit)neonState.audit=legacyAudit;else delete neonState.audit}
-      const row=await setSetting(sql,STATE_KEY,neonState),savedState=row?.value||neonState;let resultState=savedState;
-      if(ticketsOnD1)resultState={...resultState,tickets:clean.tickets};if(auditOnD1)resultState={...resultState,audit:clean.audit};
+      let ticketsOnD1=false;if(Array.isArray(clean.tickets)&&env?.PROVEDOR_DB)ticketsOnD1=await saveTicketsD1(env,clean.tickets);
+      let auditOnD1=false;if(Array.isArray(clean.audit)&&env?.PROVEDOR_DB)auditOnD1=await saveAuditD1(env,clean.audit);
+      let d1State={...clean};if(ticketsOnD1)delete d1State.tickets;if(auditOnD1)delete d1State.audit;const row=await setStateD1(env,d1State),savedState=row?.value||d1State;
+      if(recoverySql)try{await setSetting(recoverySql,STATE_KEY,clean)}catch(error){console.error('Provedor Plus: cópia de recuperação do estado no Neon falhou; D1 permanece confirmado.',error)}
+      let resultState=savedState;if(ticketsOnD1)resultState={...resultState,tickets:clean.tickets};if(auditOnD1)resultState={...resultState,audit:clean.audit};
       result={state:resultState,updated_at:row?.updated_at||new Date().toISOString()};
     }
-    else if(action==='health'){const row=await getSetting(sql,STATE_KEY);result={online:true,hasState:Boolean(row?.value),updated_at:row?.updated_at||null};}
+    else if(action==='health'){const row=await getStateD1(env,recoverySql);result={online:true,hasState:Boolean(row?.value),updated_at:row?.updated_at||null};}
     else throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});return apiJson({ok:true,data:result},200,{'x-provedor-plus-edge':'cloudflare-native-state'});
   }catch(error){return apiJson({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,{'x-provedor-plus-edge':'cloudflare-native-state'});}
 }

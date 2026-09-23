@@ -3,6 +3,32 @@ import { Buffer } from 'node:buffer';
 import { connect as tlsConnect } from 'node:tls';
 import forge from 'node-forge';
 
+const BANK_SETTINGS_KEY='bank_credentials_v1';
+function storedBankRecord(value){if(value&&typeof value==='object'&&!Array.isArray(value))return value;if(typeof value==='string')try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:null}catch{}return null}
+export async function readBankSettingsRecord(env,sql=null){
+  if(env?.PROVEDOR_DB)try{
+    const result=await env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(BANK_SETTINGS_KEY).all(),row=result?.results?.[0],record=storedBankRecord(row?.value);
+    if(record?.iv&&record?.data)return {record,updatedAt:String(row?.updated_at||''),source:'d1'};
+  }catch(error){console.error('Provedor Plus: leitura D1 do cofre bancário falhou; tentando cópia de recuperação.',error)}
+  if(sql){
+    const rows=await sql`SELECT value,updated_at FROM pp_settings WHERE key=${BANK_SETTINGS_KEY} LIMIT 1`,row=Array.isArray(rows)?rows[0]:null,record=storedBankRecord(row?.value);
+    if(record?.iv&&record?.data){
+      const updatedAt=row?.updated_at instanceof Date?row.updated_at.toISOString():String(row?.updated_at||new Date().toISOString());
+      if(env?.PROVEDOR_DB)try{await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(BANK_SETTINGS_KEY,JSON.stringify(record),updatedAt).run()}catch(error){console.error('Provedor Plus: não foi possível recompor o cofre bancário no D1.',error)}
+      return {record,updatedAt,source:'neon'};
+    }
+  }
+  return {record:null,updatedAt:'',source:'none'};
+}
+export async function writeBankSettingsRecord(env,sql,record,updatedAt=new Date().toISOString()){
+  if(!record||typeof record!=='object'||Array.isArray(record))throw new Error('Cofre bancário inválido.');
+  const at=String(updatedAt||new Date().toISOString()),raw=JSON.stringify(record);let primary='';
+  if(env?.PROVEDOR_DB){await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(BANK_SETTINGS_KEY,raw,at).run();primary='d1'}
+  else if(!sql)throw Object.assign(new Error('Banco de dados do cofre bancário não configurado.'),{statusCode:503});
+  if(sql)try{await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${BANK_SETTINGS_KEY},${raw}::jsonb,${at}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at`}catch(error){if(!primary)throw error;console.error('Provedor Plus: cópia de recuperação do cofre bancário no Neon falhou; D1 permanece confirmado.',error)}
+  return {updatedAt:at,source:primary||'neon'};
+}
+
 function send(res,status,data){res.statusCode=status;res.setHeader('Content-Type','application/json; charset=utf-8');res.setHeader('Cache-Control','no-store');res.end(JSON.stringify(data));}
 function errMsg(provider,status,data){const vals=[data?.error_description,data?.message,data?.error?.message,data?.error,data?.nome,data?.mensagem,data?.detail,data?.title];const msg=vals.find(v=>typeof v==='string'&&v.trim());const text=String(msg||'').trim();if(provider==='Efí Cobranças'&&(Number(status)===401||/unauthorized|invalid[_ -]?client|invalid[_ -]?credentials/i.test(text)))return 'Efí Cobranças: autenticação recusada. Verifique Client ID, Client Secret e se o ambiente selecionado (Produção/Homologação) corresponde às credenciais da aplicação. Confirme também que a API de Emissões/Cobranças está habilitada na aplicação Efí.';return `${provider}: ${text||`API respondeu com status ${status}.`}`;}
 const pfxIdentityCache=new Map();

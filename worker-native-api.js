@@ -4,11 +4,14 @@ import { scrypt } from 'scrypt-js';
 const COOKIE='pp_session';
 const PROFILE_PREFIX='employee_access_v1_';
 const PROFILE_D1_CUTOVER_AT=Date.parse('2026-09-23T00:24:01Z');
+const AUTH_D1_MARKER='panel_auth_d1_v1';
 const STATE_KEY='web_state_v1017';
 const TICKETS_D1_KEY='support_tickets_v1';
 const AUDIT_D1_KEY='admin_audit_v1';
 const ALL_PERMISSIONS=['dashboard','clients','plans','finance','billing','tickets','network'];
 const utf8=new TextEncoder();
+const SQL_ENV=new WeakMap();
+let authD1Ready=false,authD1InitPromise=null;
 
 const text=value=>String(value??'').trim();
 const num=value=>{const n=Number(value);return Number.isFinite(n)&&n>0?Math.trunc(n):null};
@@ -17,7 +20,7 @@ const bool=(value,fallback=false)=>{if(value===undefined||value===null||value===
 const normalizeRole=value=>{const role=text(value).toLowerCase();return ['admin','tecnico','atendente'].includes(role)?role:'atendente'};
 function defaultPermissions(role){role=normalizeRole(role);if(role==='admin')return [...ALL_PERMISSIONS];if(role==='tecnico')return ['dashboard','clients','tickets','network'];return ['dashboard','clients','plans','finance','billing','tickets'];}
 function normalizePermissions(value,role){if(normalizeRole(role)==='admin')return [...ALL_PERMISSIONS];const list=Array.isArray(value)?value:defaultPermissions(role);return [...new Set(list.map(v=>text(v)).filter(v=>ALL_PERMISSIONS.includes(v)))];}
-function sqlFor(env){if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão nativa com o Neon não configurada na Cloudflare.'),{statusCode:503});return neon(env.DATABASE_URL);}
+function sqlFor(env){if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão nativa com o Neon não configurada na Cloudflare.'),{statusCode:503});const sql=neon(env.DATABASE_URL);SQL_ENV.set(sql,env);return sql;}
 function d1Bool(value){return value===null||value===undefined?null:(bool(value)?1:0)}
 async function mirrorClientRowToD1(env,row){
   if(!env?.PROVEDOR_DB||!row?.id)return false;
@@ -149,12 +152,40 @@ async function getProfileD1(env,sql,id,role){
   if(env?.PROVEDOR_DB)try{await mirrorProfileToD1(env,id,profile)}catch(error){console.error(`Provedor Plus: não foi possível recompor o perfil D1 do funcionário ${id}.`,error)}
   return profile;
 }
-async function saveProfile(sql,id,profile,env=null){const saved=await setSetting(sql,profileKey(id),profile);if(env?.PROVEDOR_DB)try{await mirrorProfileToD1(env,id,profile)}catch(error){console.error(`Provedor Plus: não foi possível espelhar o perfil do funcionário ${id} no D1.`,error)}return saved;}
-async function revokeSessions(sql,userId){await sql`DELETE FROM pp_sessions WHERE user_id=${Number(userId)}`;}
-async function deleteProfile(sql,id,env=null){await deleteSetting(sql,profileKey(id));if(env?.PROVEDOR_DB)try{await env.PROVEDOR_DB.prepare('DELETE FROM pp_settings WHERE key=?').bind(profileKey(id)).run()}catch(error){console.error(`Provedor Plus: não foi possível remover o perfil D1 do funcionário ${id}.`,error)}}
+async function saveProfile(sql,id,profile,env=null){
+  const updatedAt=text(profile?.updated_at)||new Date().toISOString(),next={...profile,updated_at:updatedAt};
+  if(env?.PROVEDOR_DB){await mirrorProfileToD1(env,id,next);try{return await setSetting(sql,profileKey(id),next)}catch(error){console.error(`Provedor Plus: cópia de recuperação do perfil ${id} no Neon falhou; D1 permanece confirmado.`,error);return {value:next,updated_at:updatedAt}}}
+  return setSetting(sql,profileKey(id),next);
+}
+async function initializeAuthD1(env,sql){
+  if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 de autenticação não configurado.'),{statusCode:503});const db=env.PROVEDOR_DB;
+  await db.batch([
+    db.prepare(`CREATE TABLE IF NOT EXISTS pp_users (id INTEGER PRIMARY KEY AUTOINCREMENT,email TEXT NOT NULL UNIQUE,name TEXT NOT NULL,role TEXT NOT NULL DEFAULT 'admin',password_hash TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS pp_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,token_hash TEXT NOT NULL UNIQUE,expires_at TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(user_id) REFERENCES pp_users(id) ON DELETE CASCADE)`)
+  ]);
+  const markerResult=await db.prepare('SELECT value FROM pp_settings WHERE key=? LIMIT 1').bind(AUTH_D1_MARKER).all();if(markerResult?.results?.[0])return db;
+  const now=new Date().toISOString(),users=await sql`SELECT id,email,name,role,password_hash,created_at FROM pp_users ORDER BY id ASC`,sessions=await sql`SELECT id,user_id,token_hash,expires_at,created_at FROM pp_sessions WHERE expires_at>${now} ORDER BY id ASC`,statements=[db.prepare('DELETE FROM pp_sessions'),db.prepare('DELETE FROM pp_users')];
+  for(const user of Array.isArray(users)?users:[])statements.push(db.prepare('INSERT INTO pp_users (id,email,name,role,password_hash,created_at) VALUES (?,?,?,?,?,?)').bind(Number(user.id),text(user.email),text(user.name),normalizeRole(user.role),text(user.password_hash),user.created_at instanceof Date?user.created_at.toISOString():text(user.created_at)||now));
+  for(const session of Array.isArray(sessions)?sessions:[])statements.push(db.prepare('INSERT INTO pp_sessions (id,user_id,token_hash,expires_at,created_at) VALUES (?,?,?,?,?)').bind(Number(session.id),Number(session.user_id),text(session.token_hash),session.expires_at instanceof Date?session.expires_at.toISOString():text(session.expires_at),session.created_at instanceof Date?session.created_at.toISOString():text(session.created_at)||now));
+  await db.batch(statements);
+  for(const user of Array.isArray(users)?users:[]){const row=await getSetting(sql,profileKey(user.id)),profile=normalizeProfile(profileValue(row),user.role);await mirrorProfileToD1(env,user.id,{...profile,updated_at:now})}
+  await db.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(AUTH_D1_MARKER,JSON.stringify({seededAt:now,users:Array.isArray(users)?users.length:0,sessions:Array.isArray(sessions)?sessions.length:0}),now).run();
+  await db.batch([db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS pp_users_email_d1_idx ON pp_users(email)'),db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS pp_sessions_token_d1_idx ON pp_sessions(token_hash)'),db.prepare('CREATE INDEX IF NOT EXISTS pp_sessions_user_d1_idx ON pp_sessions(user_id)'),db.prepare('CREATE INDEX IF NOT EXISTS pp_sessions_expires_d1_idx ON pp_sessions(expires_at)')]);
+  return db;
+}
+async function ensureAuthD1(env,sql){
+  if(authD1Ready)return env.PROVEDOR_DB;
+  if(!authD1InitPromise)authD1InitPromise=initializeAuthD1(env,sql);
+  try{const db=await authD1InitPromise;authD1Ready=true;return db}catch(error){authD1InitPromise=null;throw error}
+}
+async function mirrorUserToNeon(sql,user){try{const createdAt=user?.created_at instanceof Date?user.created_at.toISOString():text(user?.created_at)||new Date().toISOString();await sql`INSERT INTO pp_users (id,email,name,role,password_hash,created_at) VALUES (${Number(user.id)},${text(user.email)},${text(user.name)},${normalizeRole(user.role)},${text(user.password_hash)},${createdAt}) ON CONFLICT (id) DO UPDATE SET email=EXCLUDED.email,name=EXCLUDED.name,role=EXCLUDED.role,password_hash=EXCLUDED.password_hash`}catch(error){console.error(`Provedor Plus: cópia de recuperação do usuário ${user?.id} no Neon falhou; D1 permanece confirmado.`,error)}}
+async function removeUserFromNeon(sql,id){try{await sql`DELETE FROM pp_sessions WHERE user_id=${Number(id)}`;await sql`DELETE FROM pp_users WHERE id=${Number(id)}`}catch(error){console.error(`Provedor Plus: remoção da cópia de recuperação do usuário ${id} no Neon falhou; D1 permanece confirmado.`,error)}}
+async function mirrorSessionToNeon(sql,userId,tokenHash,expiresAt){try{await sql`INSERT INTO pp_sessions (user_id,token_hash,expires_at) VALUES (${Number(userId)},${tokenHash},${expiresAt}) ON CONFLICT (token_hash) DO UPDATE SET user_id=EXCLUDED.user_id,expires_at=EXCLUDED.expires_at`}catch(error){console.error(`Provedor Plus: cópia de recuperação da sessão do usuário ${userId} no Neon falhou; D1 permanece confirmado.`,error)}}
+async function revokeSessions(sql,userId){const env=SQL_ENV.get(sql),db=await ensureAuthD1(env,sql);await db.prepare('DELETE FROM pp_sessions WHERE user_id=?').bind(Number(userId)).run();try{await sql`DELETE FROM pp_sessions WHERE user_id=${Number(userId)}`}catch(error){console.error(`Provedor Plus: revogação da cópia de sessões do usuário ${userId} no Neon falhou.`,error)}}
+async function deleteProfile(sql,id,env=null){if(env?.PROVEDOR_DB)await env.PROVEDOR_DB.prepare('DELETE FROM pp_settings WHERE key=?').bind(profileKey(id)).run();try{await deleteSetting(sql,profileKey(id))}catch(error){if(!env?.PROVEDOR_DB)throw error;console.error(`Provedor Plus: remoção da cópia de recuperação do perfil ${id} no Neon falhou; D1 permanece confirmado.`,error)}}
 
-async function createSession(sql,userId){const token=randomToken(),tokenHash=await sha256Hex(token),expires=new Date(Date.now()+7*864e5).toISOString();await sql`INSERT INTO pp_sessions (user_id,token_hash,expires_at) VALUES (${Number(userId)},${tokenHash},${expires})`;return {token,expires_at:expires};}
-async function currentSession(request,sql){const token=cookies(request)[COOKIE];if(!token)return null;const tokenHash=await sha256Hex(token);const sessions=await sql`SELECT id,user_id,expires_at FROM pp_sessions WHERE token_hash=${tokenHash} LIMIT 1`;const session=Array.isArray(sessions)?sessions[0]:null;if(!session)return null;if(new Date(session.expires_at).getTime()<=Date.now()){await sql`DELETE FROM pp_sessions WHERE id=${Number(session.id)}`;return null}const users=await sql`SELECT id,email,name,role FROM pp_users WHERE id=${Number(session.user_id)} LIMIT 1`;const user=Array.isArray(users)?users[0]:null;if(!user)return null;const access=await getProfile(sql,user.id,user.role);if(!access.active){await sql`DELETE FROM pp_sessions WHERE id=${Number(session.id)}`;return null}return {session,user:{...safeUser(user),active:true,permissions:access.permissions,phone:access.phone}};}
+async function createSession(sql,userId){const env=SQL_ENV.get(sql),db=await ensureAuthD1(env,sql),token=randomToken(),tokenHash=await sha256Hex(token),expires=new Date(Date.now()+7*864e5).toISOString();await db.prepare('INSERT INTO pp_sessions (user_id,token_hash,expires_at) VALUES (?,?,?)').bind(Number(userId),tokenHash,expires).run();await mirrorSessionToNeon(sql,userId,tokenHash,expires);return {token,expires_at:expires};}
+async function currentSession(request,sql){const token=cookies(request)[COOKIE];if(!token)return null;const env=SQL_ENV.get(sql),db=await ensureAuthD1(env,sql),tokenHash=await sha256Hex(token),result=await db.prepare('SELECT id,user_id,expires_at FROM pp_sessions WHERE token_hash=? LIMIT 1').bind(tokenHash).all(),session=result?.results?.[0];if(!session)return null;if(new Date(session.expires_at).getTime()<=Date.now()){await db.prepare('DELETE FROM pp_sessions WHERE token_hash=?').bind(tokenHash).run();try{await sql`DELETE FROM pp_sessions WHERE token_hash=${tokenHash}`}catch{}return null}const users=await db.prepare('SELECT id,email,name,role,created_at FROM pp_users WHERE id=? LIMIT 1').bind(Number(session.user_id)).all(),user=users?.results?.[0];if(!user)return null;const access=await getProfileD1(env,sql,user.id,user.role);if(!access.active){await db.prepare('DELETE FROM pp_sessions WHERE token_hash=?').bind(tokenHash).run();try{await sql`DELETE FROM pp_sessions WHERE token_hash=${tokenHash}`}catch{}return null}return {session,user:{...safeUser(user),active:true,permissions:access.permissions,phone:access.phone}};}
 async function requireAuth(request,sql){const current=await currentSession(request,sql);if(!current)throw Object.assign(new Error('Sessão expirada, desativada ou não autenticada.'),{statusCode:401});return current;}
 async function requireAdmin(request,sql){const current=await requireAuth(request,sql);if(current.user.role!=='admin')throw Object.assign(new Error('Somente o administrador pode realizar esta ação.'),{statusCode:403});return current;}
 async function requirePermission(request,sql,permission){const current=await requireAuth(request,sql);if(current.user.role==='admin'||current.user.permissions.includes(String(permission)))return current;throw Object.assign(new Error('Seu usuário não possui permissão para esta área.'),{statusCode:403});}
@@ -163,32 +194,32 @@ export async function handleNativeAuth(request,env){
   if(request.method!=='POST')return apiJson({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-native-auth'});
   const sql=sqlFor(env);
   try{
-    const body=await bodyOf(request),action=text(body?.action),data=body?.data||{};
+    const db=await ensureAuthD1(env,sql),body=await bodyOf(request),action=text(body?.action),data=body?.data||{};
     if(action==='status'){
-      const current=await currentSession(request,sql),users=await sql`SELECT id FROM pp_users LIMIT 1`;
-      return apiJson({ok:true,data:{configured:Array.isArray(users)&&users.length>0,authenticated:Boolean(current),user:current?.user||null}},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
+      const current=await currentSession(request,sql),users=await db.prepare('SELECT id FROM pp_users LIMIT 1').all();
+      return apiJson({ok:true,data:{configured:Boolean(users?.results?.length),authenticated:Boolean(current),user:current?.user||null}},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
     }
     if(action==='setup'){
-      const existing=await sql`SELECT id FROM pp_users LIMIT 1`;if(existing.length)throw Object.assign(new Error('O administrador inicial já foi configurado.'),{statusCode:409});
+      const existing=await db.prepare('SELECT id FROM pp_users LIMIT 1').all();if(existing?.results?.length)throw Object.assign(new Error('O administrador inicial já foi configurado.'),{statusCode:409});
       const name=text(data.name),login=text(data.login).toLowerCase(),password=String(data.password||'');
       if(name.length<2)throw Object.assign(new Error('Informe o nome do administrador.'),{statusCode:400});if(login.length<3)throw Object.assign(new Error('Informe o usuário de acesso.'),{statusCode:400});if(password.length<8)throw Object.assign(new Error('A senha deve ter pelo menos 8 caracteres.'),{statusCode:400});
-      const hash=await passwordHash(password),created=await sql`INSERT INTO pp_users (email,name,role,password_hash) VALUES (${login},${name},'admin',${hash}) RETURNING id,email,name,role,created_at`;const user=created[0];if(!user?.id)throw new Error('Não foi possível criar o administrador.');const session=await createSession(sql,user.id);
+      const hash=await passwordHash(password),createdAt=new Date().toISOString(),insert=await db.prepare("INSERT INTO pp_users (email,name,role,password_hash,created_at) VALUES (?,?,?,?,?)").bind(login,name,'admin',hash,createdAt).run(),id=Number(insert?.meta?.last_row_id)||0;if(!id)throw new Error('Não foi possível criar o administrador.');const rows=await db.prepare('SELECT id,email,name,role,password_hash,created_at FROM pp_users WHERE id=? LIMIT 1').bind(id).all(),user=rows?.results?.[0];await mirrorUserToNeon(sql,user);const session=await createSession(sql,user.id);
       return apiJson({ok:true,data:{authenticated:true,user:{...safeUser(user),active:true,permissions:[...ALL_PERMISSIONS]}}},200,{'Set-Cookie':cookieHeader(session.token),'x-provedor-plus-edge':'cloudflare-native-auth'});
     }
     if(action==='login'){
-      const login=text(data.login).toLowerCase(),password=String(data.password||''),rows=await sql`SELECT id,email,name,role,password_hash,created_at FROM pp_users WHERE email=${login} LIMIT 1`,user=rows[0];
-      if(!user||!await passwordVerify(password,user.password_hash))throw Object.assign(new Error('Usuário ou senha inválidos.'),{statusCode:401});const access=await getProfile(sql,user.id,user.role);if(!access.active)throw Object.assign(new Error('Este acesso está desativado. Procure o administrador.'),{statusCode:403});const session=await createSession(sql,user.id);
+      const login=text(data.login).toLowerCase(),password=String(data.password||''),rows=await db.prepare('SELECT id,email,name,role,password_hash,created_at FROM pp_users WHERE email=? LIMIT 1').bind(login).all(),user=rows?.results?.[0];
+      if(!user||!await passwordVerify(password,user.password_hash))throw Object.assign(new Error('Usuário ou senha inválidos.'),{statusCode:401});const access=await getProfileD1(env,sql,user.id,user.role);if(!access.active)throw Object.assign(new Error('Este acesso está desativado. Procure o administrador.'),{statusCode:403});const session=await createSession(sql,user.id);
       return apiJson({ok:true,data:{authenticated:true,user:{...safeUser(user),active:true,permissions:access.permissions,phone:access.phone}}},200,{'Set-Cookie':cookieHeader(session.token),'x-provedor-plus-edge':'cloudflare-native-auth'});
     }
     if(action==='logout'){
-      const token=cookies(request)[COOKIE];if(token){const hash=await sha256Hex(token);await sql`DELETE FROM pp_sessions WHERE token_hash=${hash}`;}
+      const token=cookies(request)[COOKIE];if(token){const hash=await sha256Hex(token);await db.prepare('DELETE FROM pp_sessions WHERE token_hash=?').bind(hash).run();try{await sql`DELETE FROM pp_sessions WHERE token_hash=${hash}`}catch(error){console.error('Provedor Plus: remoção da cópia da sessão no Neon falhou.',error)}}
       return apiJson({ok:true,data:{authenticated:false}},200,{'Set-Cookie':clearCookieHeader(),'x-provedor-plus-edge':'cloudflare-native-auth'});
     }
     if(action==='employees.available'){
-      await requireAuth(request,sql);const users=await sql`SELECT id,name,role,created_at FROM pp_users ORDER BY name ASC`,out=[];for(const user of users){const profile=await getProfileD1(env,sql,user.id,user.role);if(profile.active)out.push({...safeUser(user),permissions:profile.permissions})}return apiJson({ok:true,data:out},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
+      await requireAuth(request,sql);const result=await db.prepare('SELECT id,name,role,created_at FROM pp_users ORDER BY name ASC').all(),users=result?.results||[],out=[];for(const user of users){const profile=await getProfileD1(env,sql,user.id,user.role);if(profile.active)out.push({...safeUser(user),permissions:profile.permissions})}return apiJson({ok:true,data:out},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
     }
     if(action==='employees.list'){
-      await requireAdmin(request,sql);const users=await sql`SELECT id,email,name,role,created_at FROM pp_users ORDER BY name ASC`,out=[];for(const user of users){const profile=await getProfileD1(env,sql,user.id,user.role);out.push({...safeUser(user),...profile})}return apiJson({ok:true,data:out},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
+      await requireAdmin(request,sql);const result=await db.prepare('SELECT id,email,name,role,created_at FROM pp_users ORDER BY name ASC').all(),users=result?.results||[],out=[];for(const user of users){const profile=await getProfileD1(env,sql,user.id,user.role);out.push({...safeUser(user),...profile})}return apiJson({ok:true,data:out},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
     }
     if(action==='employees.save'){
       const current=await requireAdmin(request,sql),id=Number(data.id)||0,name=text(data.name),login=text(data.login||data.email).toLowerCase(),role=normalizeRole(data.role),password=String(data.password||''),phone=text(data.phone);
@@ -196,22 +227,23 @@ export async function handleNativeAuth(request,env){
       const active=id===Number(current.user.id)?true:data.active!==false,permissions=normalizePermissions(data.permissions,role);if(role!=='admin'&&!permissions.length)throw Object.assign(new Error('Selecione pelo menos uma permissão de acesso.'),{statusCode:400});
       let user;
       if(id){
-        const found=await sql`SELECT id,email,name,role,password_hash,created_at FROM pp_users WHERE id=${id} LIMIT 1`;if(!found[0])throw Object.assign(new Error('Funcionário não encontrado.'),{statusCode:404});
-        if(password){const hash=await passwordHash(password);const rows=await sql`UPDATE pp_users SET email=${login},name=${name},role=${role},password_hash=${hash} WHERE id=${id} RETURNING id,email,name,role,created_at`;user=rows[0];}
-        else{const rows=await sql`UPDATE pp_users SET email=${login},name=${name},role=${role} WHERE id=${id} RETURNING id,email,name,role,created_at`;user=rows[0];}
+        const foundResult=await db.prepare('SELECT id,email,name,role,password_hash,created_at FROM pp_users WHERE id=? LIMIT 1').bind(id).all(),found=foundResult?.results?.[0];if(!found)throw Object.assign(new Error('Funcionário não encontrado.'),{statusCode:404});
+        if(password){const hash=await passwordHash(password);await db.prepare('UPDATE pp_users SET email=?,name=?,role=?,password_hash=? WHERE id=?').bind(login,name,role,hash,id).run();}
+        else await db.prepare('UPDATE pp_users SET email=?,name=?,role=? WHERE id=?').bind(login,name,role,id).run();
+        const saved=await db.prepare('SELECT id,email,name,role,password_hash,created_at FROM pp_users WHERE id=? LIMIT 1').bind(id).all();user=saved?.results?.[0];
       }else{
-        const hash=await passwordHash(password),rows=await sql`INSERT INTO pp_users (email,name,role,password_hash) VALUES (${login},${name},${role},${hash}) RETURNING id,email,name,role,created_at`;user=rows[0];
+        const hash=await passwordHash(password),createdAt=new Date().toISOString(),insert=await db.prepare('INSERT INTO pp_users (email,name,role,password_hash,created_at) VALUES (?,?,?,?,?)').bind(login,name,role,hash,createdAt).run(),newId=Number(insert?.meta?.last_row_id)||0;if(newId){const saved=await db.prepare('SELECT id,email,name,role,password_hash,created_at FROM pp_users WHERE id=? LIMIT 1').bind(newId).all();user=saved?.results?.[0]}
       }
-      if(!user?.id)throw Object.assign(new Error('Não foi possível salvar o funcionário.'),{statusCode:500});
-      try{await saveProfile(sql,user.id,{active,phone,permissions,updated_at:new Date().toISOString()},env);}catch(error){if(!id){try{await sql`DELETE FROM pp_users WHERE id=${Number(user.id)}`}catch{}try{await deleteProfile(sql,user.id,env)}catch{}}throw error}
+      if(!user?.id)throw Object.assign(new Error('Não foi possível salvar o funcionário.'),{statusCode:500});await mirrorUserToNeon(sql,user);
+      try{await saveProfile(sql,user.id,{active,phone,permissions,updated_at:new Date().toISOString()},env);}catch(error){if(!id){try{await db.prepare('DELETE FROM pp_users WHERE id=?').bind(Number(user.id)).run()}catch{}await removeUserFromNeon(sql,user.id);try{await deleteProfile(sql,user.id,env)}catch{}}throw error}
       if(id&&Number(id)!==Number(current.user.id))await revokeSessions(sql,id);
       return apiJson({ok:true,data:{...safeUser(user),active,phone,permissions}},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
     }
     if(action==='employees.toggle'){
-      const current=await requireAdmin(request,sql),id=Number(data.id)||0;if(!id)throw Object.assign(new Error('Funcionário inválido.'),{statusCode:400});if(id===Number(current.user.id))throw Object.assign(new Error('Você não pode desativar o próprio acesso.'),{statusCode:400});const rows=await sql`SELECT id,email,name,role,created_at FROM pp_users WHERE id=${id} LIMIT 1`,user=rows[0];if(!user)throw Object.assign(new Error('Funcionário não encontrado.'),{statusCode:404});const previous=await getProfile(sql,id,user.role),active=Boolean(data.active);await saveProfile(sql,id,{...previous,active,updated_at:new Date().toISOString()},env);if(!active)await revokeSessions(sql,id);return apiJson({ok:true,data:{...safeUser(user),...previous,active}},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
+      const current=await requireAdmin(request,sql),id=Number(data.id)||0;if(!id)throw Object.assign(new Error('Funcionário inválido.'),{statusCode:400});if(id===Number(current.user.id))throw Object.assign(new Error('Você não pode desativar o próprio acesso.'),{statusCode:400});const found=await db.prepare('SELECT id,email,name,role,created_at FROM pp_users WHERE id=? LIMIT 1').bind(id).all(),user=found?.results?.[0];if(!user)throw Object.assign(new Error('Funcionário não encontrado.'),{statusCode:404});const previous=await getProfileD1(env,sql,id,user.role),active=Boolean(data.active);await saveProfile(sql,id,{...previous,active,updated_at:new Date().toISOString()},env);if(!active)await revokeSessions(sql,id);return apiJson({ok:true,data:{...safeUser(user),...previous,active}},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
     }
     if(action==='employees.delete'){
-      const current=await requireAdmin(request,sql),id=Number(data.id)||0;if(!id)throw Object.assign(new Error('Funcionário inválido.'),{statusCode:400});if(id===Number(current.user.id))throw Object.assign(new Error('Você não pode excluir o próprio acesso.'),{statusCode:400});const rows=await sql`SELECT id FROM pp_users WHERE id=${id} LIMIT 1`;if(!rows[0])throw Object.assign(new Error('Funcionário não encontrado.'),{statusCode:404});await revokeSessions(sql,id);await sql`DELETE FROM pp_users WHERE id=${id}`;await deleteProfile(sql,id,env);return apiJson({ok:true,data:{deleted:true,id}},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
+      const current=await requireAdmin(request,sql),id=Number(data.id)||0;if(!id)throw Object.assign(new Error('Funcionário inválido.'),{statusCode:400});if(id===Number(current.user.id))throw Object.assign(new Error('Você não pode excluir o próprio acesso.'),{statusCode:400});const found=await db.prepare('SELECT id FROM pp_users WHERE id=? LIMIT 1').bind(id).all();if(!found?.results?.[0])throw Object.assign(new Error('Funcionário não encontrado.'),{statusCode:404});await revokeSessions(sql,id);await db.prepare('DELETE FROM pp_users WHERE id=?').bind(id).run();await deleteProfile(sql,id,env);await removeUserFromNeon(sql,id);return apiJson({ok:true,data:{deleted:true,id}},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
     }
     throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});
   }catch(error){return apiJson({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,{'x-provedor-plus-edge':'cloudflare-native-auth'});}
@@ -225,7 +257,7 @@ function preservePortalState(incoming,existing){
   if(localNegotiations.length)state.negotiations=localNegotiations;
   const localTransactions=Array.isArray(state.cashback_transactions)?[...state.cashback_transactions]:[],remoteTransactions=Array.isArray(remote.cashback_transactions)?remote.cashback_transactions:[],knownTransactions=new Set(localTransactions.map(item=>String(item?.id||'')).filter(Boolean));
   for(const item of remoteTransactions){const id=String(item?.id||'');if(id&&!knownTransactions.has(id)){localTransactions.push(item);knownTransactions.add(id)}}
-  if(localTransactions.length)state.cashback_transactions=localTransactions;
+  if(localTransactions.length)state.negotiations=localNegotiations;
   const localClients=Array.isArray(state.clients)?[...state.clients]:[],remoteClients=Array.isArray(remote.clients)?remote.clients:[],clientIndex=new Map(localClients.map((item,i)=>[String(item?.id??''),i]));
   for(const remoteClient of remoteClients){
     const position=clientIndex.get(String(remoteClient?.id??''));if(position===undefined)continue;

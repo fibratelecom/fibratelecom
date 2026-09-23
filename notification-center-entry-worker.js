@@ -1,5 +1,5 @@
 import baseWorker from './operations-entry-worker.js';
-import {runBillingCron} from './billing-cron.js';
+import {runBillingCron,mirrorInvoicesToD1} from './billing-cron.js';
 import {neon} from '@neondatabase/serverless';
 import {buildPushHTTPRequest} from '@pushforge/builder';
 import {resolveRouterForService,recordTrafficForService,mirrorClientToD1} from './worker-native-api.js';
@@ -36,6 +36,12 @@ function json(data,status=200,headers={}){return new Response(JSON.stringify(dat
 function clientCors(request){const origin=text(request.headers.get('origin')),headers={'Vary':'Origin','Access-Control-Allow-Methods':'POST,OPTIONS','Access-Control-Allow-Headers':'Content-Type','Access-Control-Max-Age':'86400'};if(CLIENT_ORIGINS.has(origin))headers['Access-Control-Allow-Origin']=origin;return headers}
 function parseState(value){if(value&&typeof value==='object'&&!Array.isArray(value))return value;if(typeof value==='string')try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{}return {}}
 async function loadState(sql){const rows=await sql`SELECT value FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`;return parseState(rows?.[0]?.value)}
+async function mirrorInvoicesSnapshotToD1(env){
+  if(!env?.DATABASE_URL||!env?.PROVEDOR_DB)return false;
+  const sql=neon(env.DATABASE_URL),rows=await sql`SELECT value,updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,row=rows?.[0];if(!row)return false;
+  const state=parseState(row.value),updatedAt=row.updated_at instanceof Date?row.updated_at.toISOString():text(row.updated_at);
+  return mirrorInvoicesToD1(env,state,updatedAt||new Date().toISOString());
+}
 async function d1Rows(statement){const result=await statement.all();return Array.isArray(result?.results)?result.results:[]}
 async function mirrorRecentClientsToD1(env,minutes=15){
   if(!env?.DATABASE_URL||!env?.PROVEDOR_DB)return {checked:0,mirrored:0,failed:0};
@@ -353,7 +359,7 @@ async function tryBackgroundStateLock(env,fn,label){
 }
 async function runScheduledStateMaintenance(env,scheduledAt){
   if(dueEvery(scheduledAt,PAYMENT_RECONCILIATION_INTERVAL_MINUTES)){
-    await tryBackgroundStateLock(env,async()=>{try{await reconcilePendingPayments(env)}catch(error){console.error('Provedor Plus: falha na conciliação automática de pagamentos pendentes.',error)}},'Provedor Plus: conciliação automática não pôde obter a trava de estado.');
+    await tryBackgroundStateLock(env,async()=>{try{await reconcilePendingPayments(env);await mirrorInvoicesSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha na conciliação automática de pagamentos pendentes.',error)}},'Provedor Plus: conciliação automática não pôde obter a trava de estado.');
   }
   if(!dueEvery(scheduledAt,BILLING_INTERVAL_MINUTES))return;
   await tryBackgroundStateLock(env,async()=>{await runBillingCron(env)},'Provedor Plus: geração automática de mensalidades aguardará a próxima checagem.');
@@ -397,7 +403,6 @@ async function allAuthorizedClients(sql,db){
   return (rows||[]).filter(row=>ids.has(Number(row?.id)));
 }
 async function subscriptionsFor(db,clientId){return d1Rows(db.prepare('SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=? AND active=1 ORDER BY id ASC').bind(Number(clientId)))}
-
 async function recordInbox(db,clientId,sourceKey,title,body,clickUrl,createdAt=null){
   if(!clientId||!sourceKey||!title||!body)return;
   await ensureTables(db);
@@ -551,10 +556,16 @@ export default {
       const mutation=await stateMutationRequest(request,path);
       if(mutation){
         const response=await withStateWriteLock(env,forward,priorityAction?60000:20000);
-        if(response?.ok&&env?.PROVEDOR_DB){const task=mirrorRecentClientsToD1(env).catch(error=>console.error('Provedor Plus: falha ao espelhar alterações recentes de clientes no D1.',error));if(typeof ctx?.waitUntil==='function')ctx.waitUntil(task);else await task}
+        if(response?.ok&&env?.PROVEDOR_DB){
+          const clientsTask=mirrorRecentClientsToD1(env).catch(error=>console.error('Provedor Plus: falha ao espelhar alterações recentes de clientes no D1.',error));
+          const invoicesTask=mirrorInvoicesSnapshotToD1(env).catch(error=>console.error('Provedor Plus: falha ao espelhar alteração de faturas no D1.',error));
+          if(typeof ctx?.waitUntil==='function'){ctx.waitUntil(clientsTask);ctx.waitUntil(invoicesTask)}else await Promise.all([clientsTask,invoicesTask]);
+        }
         return response;
       }
-      return await forward();
+      const response=await forward();
+      if(response?.ok&&priorityAction&&env?.PROVEDOR_DB){const task=mirrorInvoicesSnapshotToD1(env).catch(error=>console.error('Provedor Plus: falha ao espelhar pagamento de fatura no D1.',error));if(typeof ctx?.waitUntil==='function')ctx.waitUntil(task);else await task}
+      return response;
     }catch(error){return stateLockErrorResponse(request,error)}finally{if(priorityStop)await priorityStop()}
   },
   async scheduled(controller,env,ctx){

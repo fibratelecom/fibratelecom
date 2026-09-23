@@ -9,11 +9,12 @@ const VAPID_D1_KEY='push_vapid_d1_v1';
 const OPS_SETTINGS_KEY='push_operational_settings_v1';
 const CUSTOM_TEMPLATES_KEY='push_custom_templates_v1';
 const PROTOCOL_OBSERVER_D1_MARKER='push_protocol_observer_d1_v1';
+const CLIENT_OBSERVER_D1_MARKER='push_client_observer_d1_v1';
 const CLIENT_APP_ORIGIN='https://cliente.fibramais.workers.dev';
 const text=value=>String(value??'').trim();
 const normalize=value=>text(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
 const enc=new TextEncoder();
-let schemaReady=false,protocolObserverReady=false;
+let schemaReady=false,protocolObserverReady=false,clientObserverReady=false;
 
 const DEFAULT_SETTINGS={
   statusSuspended:true,
@@ -164,8 +165,34 @@ async function recentDueProtocol(store,clientId,newDay){
   }catch{return false}
 }
 
-async function statusAndPlanEvents(sql,state,settings,protocolStore=sql){
-  const rows=await sql`SELECT c.id,c.name,c.status,c.plan,c.plan_id,c.due_day,c.updated_at,o.client_id AS observer_id,o.last_status,o.last_plan,o.last_due_day FROM pp_clients c LEFT JOIN pp_push_observer_state o ON o.client_id=c.id WHERE o.client_id IS NULL OR o.last_status IS DISTINCT FROM c.status OR o.last_plan IS DISTINCT FROM (COALESCE(c.plan,'')||'|'||COALESCE(c.plan_id::text,'')) OR o.last_due_day IS DISTINCT FROM c.due_day ORDER BY c.id ASC`,locals=localClientMap(state),events=[];
+async function ensureClientObserverD1(env,sql){
+  if(!env?.PROVEDOR_DB)return null;const db=env.PROVEDOR_DB;
+  await db.prepare('CREATE TABLE IF NOT EXISTS pp_push_observer_state (client_id INTEGER PRIMARY KEY,last_status TEXT NULL,last_plan TEXT NULL,last_due_day INTEGER NULL,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)').run();
+  if(clientObserverReady)return db;
+  const marker=parseObject(await settingValue(db,CLIENT_OBSERVER_D1_MARKER));if(marker?.migratedAt){clientObserverReady=true;return db}
+  let copied=0;
+  try{const rows=await sql`SELECT client_id,last_status,last_plan,last_due_day,updated_at FROM pp_push_observer_state ORDER BY client_id ASC`;for(let start=0;start<(rows||[]).length;start+=50){const statements=rows.slice(start,start+50).map(row=>db.prepare('INSERT INTO pp_push_observer_state (client_id,last_status,last_plan,last_due_day,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(client_id) DO UPDATE SET last_status=excluded.last_status,last_plan=excluded.last_plan,last_due_day=excluded.last_due_day,updated_at=excluded.updated_at').bind(Number(row.client_id),text(row.last_status)||null,text(row.last_plan)||null,Number(row.last_due_day)||null,text(row.updated_at)||new Date().toISOString()));if(statements.length){await db.batch(statements);copied+=statements.length}}}catch(error){console.error('Provedor Plus: observador antigo de clientes não pôde ser copiado para o D1.',error)}
+  await saveSettingValue(db,CLIENT_OBSERVER_D1_MARKER,{migratedAt:new Date().toISOString(),copied});clientObserverReady=true;return db;
+}
+
+async function statusAndPlanEvents(sql,state,settings,protocolStore=sql,env=null){
+  const locals=localClientMap(state),events=[];
+  if(env?.PROVEDOR_DB){
+    const db=await ensureClientObserverD1(env,sql),rows=await sql`SELECT id,name,status,plan,plan_id,due_day,updated_at FROM pp_clients ORDER BY id ASC`,observerResult=await db.prepare('SELECT client_id,last_status,last_plan,last_due_day FROM pp_push_observer_state').all(),observers=new Map((observerResult?.results||[]).map(row=>[Number(row.client_id),row])),updates=[];
+    for(const row of rows||[]){
+      const clientId=Number(row.id)||0;if(!clientId)continue;const observer=observers.get(clientId),currentStatus=text(row.status),currentPlan=`${text(row.plan)}|${row.plan_id??''}`,currentDue=Number(row.due_day)||0;
+      if(!observer){updates.push({clientId,status:currentStatus,plan:currentPlan,due:currentDue});continue}
+      const oldStatus=text(observer.last_status),oldPlan=text(observer.last_plan),oldDue=Number(observer.last_due_day)||0,statusChanged=normalize(currentStatus)!==normalize(oldStatus),planChanged=currentPlan!==oldPlan,dueChanged=currentDue!==oldDue;if(!statusChanged&&!planChanged&&!dueChanged)continue;
+      const local=locals.get(clientId)||{},trustActive=recent(local?.trust_release_at,36)&&new Date(text(local?.trust_release_until)).getTime()>Date.now(),trustReblocked=recent(local?.trust_release_reblocked_at,36),stamp=text(row.updated_at)||Date.now();
+      if(statusChanged){const wasBlocked=blockedStatus(oldStatus),isBlocked=blockedStatus(currentStatus);if(!wasBlocked&&isBlocked&&settings.statusSuspended&&!trustReblocked)events.push({key:`status-blocked:${clientId}:${stamp}`,clientId,type:'internet suspensa',title:'Conexão suspensa',body:'Sua conexão foi suspensa. Consulte suas faturas e opções de regularização na Área do Cliente.',url:'/#conexao'});if(wasBlocked&&!isBlocked&&settings.statusRestored&&!trustActive)events.push({key:`status-restored:${clientId}:${stamp}`,clientId,type:'internet liberada',title:'Conexão liberada',body:'Seu acesso à internet foi liberado novamente.',url:'/#conexao'})}
+      if(planChanged&&settings.planChange){const name=planNameFor(row,state);events.push({key:`plan-change:${clientId}:${stamp}`,clientId,type:'plano alterado',title:'Plano atualizado',body:`Seu plano foi atualizado para ${name}. Consulte os detalhes na Área do Cliente.`,url:'/#perfil'})}
+      if(settings.dueChange&&oldDue>0&&currentDue>0&&dueChanged&&!await recentDueProtocol(protocolStore,clientId,currentDue))events.push({key:`due-admin:${clientId}:${stamp}:${oldDue}-${currentDue}`,clientId,type:'mudança de vencimento',title:'Vencimento alterado',body:`Seu vencimento foi alterado do dia ${oldDue} para o dia ${currentDue}. Consulte seus dados na Área do Cliente.`,url:'/#perfil'});
+      updates.push({clientId,status:currentStatus,plan:currentPlan,due:currentDue});
+    }
+    const now=new Date().toISOString();for(let start=0;start<updates.length;start+=50){const statements=updates.slice(start,start+50).map(item=>db.prepare('INSERT INTO pp_push_observer_state (client_id,last_status,last_plan,last_due_day,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(client_id) DO UPDATE SET last_status=excluded.last_status,last_plan=excluded.last_plan,last_due_day=excluded.last_due_day,updated_at=excluded.updated_at').bind(item.clientId,item.status||null,item.plan||null,item.due||null,now));if(statements.length)await db.batch(statements)}
+    return events;
+  }
+  const rows=await sql`SELECT c.id,c.name,c.status,c.plan,c.plan_id,c.due_day,c.updated_at,o.client_id AS observer_id,o.last_status,o.last_plan,o.last_due_day FROM pp_clients c LEFT JOIN pp_push_observer_state o ON o.client_id=c.id WHERE o.client_id IS NULL OR o.last_status IS DISTINCT FROM c.status OR o.last_plan IS DISTINCT FROM (COALESCE(c.plan,'')||'|'||COALESCE(c.plan_id::text,'')) OR o.last_due_day IS DISTINCT FROM c.due_day ORDER BY c.id ASC`;
   for(const row of rows||[]){
     if(!row.observer_id)continue;
     const clientId=Number(row.id),currentStatus=text(row.status),oldStatus=text(row.last_status),currentPlan=`${text(row.plan)}|${row.plan_id??''}`,oldPlan=text(row.last_plan),currentDue=Number(row.due_day)||0,oldDue=Number(row.last_due_day)||0,local=locals.get(clientId)||{},trustActive=recent(local?.trust_release_at,36)&&new Date(text(local?.trust_release_until)).getTime()>Date.now(),trustReblocked=recent(local?.trust_release_reblocked_at,36);
@@ -253,7 +280,7 @@ async function retryPending(sql,env){
 async function scanOperationalEvents(env){
   if(!env?.DATABASE_URL)return {scanned:false};
   const sql=neon(env.DATABASE_URL),protocolStore=env.PROVEDOR_DB||sql;await ensureTables(sql);const state=await loadState(sql),settings=await loadSettings(env.PROVEDOR_DB||sql),events=[];
-  events.push(...await statusAndPlanEvents(sql,state,settings,protocolStore));
+  events.push(...await statusAndPlanEvents(sql,state,settings,protocolStore,env));
   events.push(...trustEvents(state,settings));
   events.push(...await dueChangeEvents(protocolStore,settings));
   events.push(...negotiationEvents(state,settings));

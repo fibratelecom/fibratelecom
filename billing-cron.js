@@ -29,7 +29,7 @@ async function loadState(sql){
 async function mirrorInvoicesToD1(env,state,updatedAt=''){
   if(!env?.PROVEDOR_DB)return false;
   const invoices=Array.isArray(state?.invoices)?state.invoices:[],at=text(updatedAt)||new Date().toISOString();
-  await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(INVOICES_D1_KEY,JSON.stringify(invoices),at).run();
+  await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at WHERE excluded.updated_at>=pp_settings.updated_at').bind(INVOICES_D1_KEY,JSON.stringify(invoices),at).run();
   return true;
 }
 
@@ -356,7 +356,7 @@ async function runBillingCron(env,{force=false}={}){
   return {date:today,manual:force,enabled,generated,issued,skipped,failed,errors};
 }
 
-export { runBillingCron };
+export { runBillingCron,mirrorInvoicesToD1 };
 
 export default {
   async fetch(request,env,ctx){

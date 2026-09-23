@@ -131,10 +131,24 @@ export function finalizePaidNegotiations(state){
 }
 async function setSetting(sql,key,value){if(key===STATE_KEY)value=finalizePaidNegotiations(value);const updatedAt=new Date().toISOString(),raw=JSON.stringify(value??null);const rows=await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${key},${raw}::jsonb,${updatedAt}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at RETURNING value,updated_at`;return Array.isArray(rows)?rows[0]||null:null;}
 async function deleteSetting(sql,key){await sql`DELETE FROM pp_settings WHERE key=${key}`;}
-async function getProfile(sql,id,role){const row=await getSetting(sql,profileKey(id)),value=row?.value&&typeof row.value==='object'?row.value:{};return {active:value?.active!==false,phone:text(value?.phone),permissions:normalizePermissions(value?.permissions,role)};}
-async function saveProfile(sql,id,profile){return setSetting(sql,profileKey(id),profile);}
+function profileValue(row){let value=row?.value;if(typeof value==='string')try{value=JSON.parse(value)}catch{value={}}return value&&typeof value==='object'&&!Array.isArray(value)?value:{}}
+function normalizeProfile(value,role){return {active:value?.active!==false,phone:text(value?.phone),permissions:normalizePermissions(value?.permissions,role)}}
+async function mirrorProfileToD1(env,id,profile){
+  if(!env?.PROVEDOR_DB||!Number(id))return false;
+  const updatedAt=text(profile?.updated_at)||new Date().toISOString(),safe={active:profile?.active!==false,phone:text(profile?.phone),permissions:Array.isArray(profile?.permissions)?profile.permissions.map(item=>text(item)).filter(item=>ALL_PERMISSIONS.includes(item)):[],updated_at:updatedAt};
+  await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(profileKey(id),JSON.stringify(safe),updatedAt).run();
+  return true;
+}
+async function getProfile(sql,id,role){const row=await getSetting(sql,profileKey(id)),value=profileValue(row);return normalizeProfile(value,role);}
+async function getProfileD1(env,sql,id,role){
+  if(env?.PROVEDOR_DB)try{const result=await env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(profileKey(id)).all(),row=result?.results?.[0];if(row)return normalizeProfile(profileValue(row),role)}catch(error){console.error(`Provedor Plus: leitura D1 do perfil do funcionário ${id} falhou; usando Neon.`,error)}
+  const profile=await getProfile(sql,id,role);
+  if(env?.PROVEDOR_DB)try{await mirrorProfileToD1(env,id,profile)}catch(error){console.error(`Provedor Plus: não foi possível recompor o perfil D1 do funcionário ${id}.`,error)}
+  return profile;
+}
+async function saveProfile(sql,id,profile,env=null){const saved=await setSetting(sql,profileKey(id),profile);if(env?.PROVEDOR_DB)try{await mirrorProfileToD1(env,id,profile)}catch(error){console.error(`Provedor Plus: não foi possível espelhar o perfil do funcionário ${id} no D1.`,error)}return saved;}
 async function revokeSessions(sql,userId){await sql`DELETE FROM pp_sessions WHERE user_id=${Number(userId)}`;}
-async function deleteProfile(sql,id){await deleteSetting(sql,profileKey(id));}
+async function deleteProfile(sql,id,env=null){await deleteSetting(sql,profileKey(id));if(env?.PROVEDOR_DB)try{await env.PROVEDOR_DB.prepare('DELETE FROM pp_settings WHERE key=?').bind(profileKey(id)).run()}catch(error){console.error(`Provedor Plus: não foi possível remover o perfil D1 do funcionário ${id}.`,error)}}
 
 async function createSession(sql,userId){const token=randomToken(),tokenHash=await sha256Hex(token),expires=new Date(Date.now()+7*864e5).toISOString();await sql`INSERT INTO pp_sessions (user_id,token_hash,expires_at) VALUES (${Number(userId)},${tokenHash},${expires})`;return {token,expires_at:expires};}
 async function currentSession(request,sql){const token=cookies(request)[COOKIE];if(!token)return null;const tokenHash=await sha256Hex(token);const sessions=await sql`SELECT id,user_id,expires_at FROM pp_sessions WHERE token_hash=${tokenHash} LIMIT 1`;const session=Array.isArray(sessions)?sessions[0]:null;if(!session)return null;if(new Date(session.expires_at).getTime()<=Date.now()){await sql`DELETE FROM pp_sessions WHERE id=${Number(session.id)}`;return null}const users=await sql`SELECT id,email,name,role FROM pp_users WHERE id=${Number(session.user_id)} LIMIT 1`;const user=Array.isArray(users)?users[0]:null;if(!user)return null;const access=await getProfile(sql,user.id,user.role);if(!access.active){await sql`DELETE FROM pp_sessions WHERE id=${Number(session.id)}`;return null}return {session,user:{...safeUser(user),active:true,permissions:access.permissions,phone:access.phone}};}
@@ -168,10 +182,10 @@ export async function handleNativeAuth(request,env){
       return apiJson({ok:true,data:{authenticated:false}},200,{'Set-Cookie':clearCookieHeader(),'x-provedor-plus-edge':'cloudflare-native-auth'});
     }
     if(action==='employees.available'){
-      await requireAuth(request,sql);const users=await sql`SELECT id,name,role,created_at FROM pp_users ORDER BY name ASC`,out=[];for(const user of users){const profile=await getProfile(sql,user.id,user.role);if(profile.active)out.push({...safeUser(user),permissions:profile.permissions})}return apiJson({ok:true,data:out},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
+      await requireAuth(request,sql);const users=await sql`SELECT id,name,role,created_at FROM pp_users ORDER BY name ASC`,out=[];for(const user of users){const profile=await getProfileD1(env,sql,user.id,user.role);if(profile.active)out.push({...safeUser(user),permissions:profile.permissions})}return apiJson({ok:true,data:out},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
     }
     if(action==='employees.list'){
-      await requireAdmin(request,sql);const users=await sql`SELECT id,email,name,role,created_at FROM pp_users ORDER BY name ASC`,out=[];for(const user of users){const profile=await getProfile(sql,user.id,user.role);out.push({...safeUser(user),...profile})}return apiJson({ok:true,data:out},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
+      await requireAdmin(request,sql);const users=await sql`SELECT id,email,name,role,created_at FROM pp_users ORDER BY name ASC`,out=[];for(const user of users){const profile=await getProfileD1(env,sql,user.id,user.role);out.push({...safeUser(user),...profile})}return apiJson({ok:true,data:out},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
     }
     if(action==='employees.save'){
       const current=await requireAdmin(request,sql),id=Number(data.id)||0,name=text(data.name),login=text(data.login||data.email).toLowerCase(),role=normalizeRole(data.role),password=String(data.password||''),phone=text(data.phone);
@@ -186,15 +200,15 @@ export async function handleNativeAuth(request,env){
         const hash=await passwordHash(password),rows=await sql`INSERT INTO pp_users (email,name,role,password_hash) VALUES (${login},${name},${role},${hash}) RETURNING id,email,name,role,created_at`;user=rows[0];
       }
       if(!user?.id)throw Object.assign(new Error('Não foi possível salvar o funcionário.'),{statusCode:500});
-      try{await saveProfile(sql,user.id,{active,phone,permissions,updated_at:new Date().toISOString()});}catch(error){if(!id){try{await sql`DELETE FROM pp_users WHERE id=${Number(user.id)}`}catch{}try{await deleteProfile(sql,user.id)}catch{}}throw error}
+      try{await saveProfile(sql,user.id,{active,phone,permissions,updated_at:new Date().toISOString()},env);}catch(error){if(!id){try{await sql`DELETE FROM pp_users WHERE id=${Number(user.id)}`}catch{}try{await deleteProfile(sql,user.id,env)}catch{}}throw error}
       if(id&&Number(id)!==Number(current.user.id))await revokeSessions(sql,id);
       return apiJson({ok:true,data:{...safeUser(user),active,phone,permissions}},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
     }
     if(action==='employees.toggle'){
-      const current=await requireAdmin(request,sql),id=Number(data.id)||0;if(!id)throw Object.assign(new Error('Funcionário inválido.'),{statusCode:400});if(id===Number(current.user.id))throw Object.assign(new Error('Você não pode desativar o próprio acesso.'),{statusCode:400});const rows=await sql`SELECT id,email,name,role,created_at FROM pp_users WHERE id=${id} LIMIT 1`,user=rows[0];if(!user)throw Object.assign(new Error('Funcionário não encontrado.'),{statusCode:404});const previous=await getProfile(sql,id,user.role),active=Boolean(data.active);await saveProfile(sql,id,{...previous,active,updated_at:new Date().toISOString()});if(!active)await revokeSessions(sql,id);return apiJson({ok:true,data:{...safeUser(user),...previous,active}},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
+      const current=await requireAdmin(request,sql),id=Number(data.id)||0;if(!id)throw Object.assign(new Error('Funcionário inválido.'),{statusCode:400});if(id===Number(current.user.id))throw Object.assign(new Error('Você não pode desativar o próprio acesso.'),{statusCode:400});const rows=await sql`SELECT id,email,name,role,created_at FROM pp_users WHERE id=${id} LIMIT 1`,user=rows[0];if(!user)throw Object.assign(new Error('Funcionário não encontrado.'),{statusCode:404});const previous=await getProfileD1(env,sql,id,user.role),active=Boolean(data.active);await saveProfile(sql,id,{...previous,active,updated_at:new Date().toISOString()},env);if(!active)await revokeSessions(sql,id);return apiJson({ok:true,data:{...safeUser(user),...previous,active}},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
     }
     if(action==='employees.delete'){
-      const current=await requireAdmin(request,sql),id=Number(data.id)||0;if(!id)throw Object.assign(new Error('Funcionário inválido.'),{statusCode:400});if(id===Number(current.user.id))throw Object.assign(new Error('Você não pode excluir o próprio acesso.'),{statusCode:400});const rows=await sql`SELECT id FROM pp_users WHERE id=${id} LIMIT 1`;if(!rows[0])throw Object.assign(new Error('Funcionário não encontrado.'),{statusCode:404});await revokeSessions(sql,id);await sql`DELETE FROM pp_users WHERE id=${id}`;await deleteProfile(sql,id);return apiJson({ok:true,data:{deleted:true,id}},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
+      const current=await requireAdmin(request,sql),id=Number(data.id)||0;if(!id)throw Object.assign(new Error('Funcionário inválido.'),{statusCode:400});if(id===Number(current.user.id))throw Object.assign(new Error('Você não pode excluir o próprio acesso.'),{statusCode:400});const rows=await sql`SELECT id FROM pp_users WHERE id=${id} LIMIT 1`;if(!rows[0])throw Object.assign(new Error('Funcionário não encontrado.'),{statusCode:404});await revokeSessions(sql,id);await sql`DELETE FROM pp_users WHERE id=${id}`;await deleteProfile(sql,id,env);return apiJson({ok:true,data:{deleted:true,id}},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
     }
     throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});
   }catch(error){return apiJson({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,{'x-provedor-plus-edge':'cloudflare-native-auth'});}

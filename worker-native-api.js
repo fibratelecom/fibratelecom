@@ -257,7 +257,7 @@ function preservePortalState(incoming,existing){
   if(localNegotiations.length)state.negotiations=localNegotiations;
   const localTransactions=Array.isArray(state.cashback_transactions)?[...state.cashback_transactions]:[],remoteTransactions=Array.isArray(remote.cashback_transactions)?remote.cashback_transactions:[],knownTransactions=new Set(localTransactions.map(item=>String(item?.id||'')).filter(Boolean));
   for(const item of remoteTransactions){const id=String(item?.id||'');if(id&&!knownTransactions.has(id)){localTransactions.push(item);knownTransactions.add(id)}}
-  if(localTransactions.length)state.negotiations=localNegotiations;
+  if(localTransactions.length)state.cashback_transactions=localTransactions;
   const localClients=Array.isArray(state.clients)?[...state.clients]:[],remoteClients=Array.isArray(remote.clients)?remote.clients:[],clientIndex=new Map(localClients.map((item,i)=>[String(item?.id??''),i]));
   for(const remoteClient of remoteClients){
     const position=clientIndex.get(String(remoteClient?.id??''));if(position===undefined)continue;

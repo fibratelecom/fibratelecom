@@ -5,6 +5,7 @@ import {paymentPriorityActive} from './state-write-lock.js';
 
 const STATE_KEY='web_state_v1017';
 const BANK_SETTINGS_KEY='bank_credentials_v1';
+const INVOICES_D1_KEY='billing_invoices_v1';
 const DAY=86400000;
 const utf8=new TextEncoder();
 const text=value=>String(value??'').trim();
@@ -25,9 +26,17 @@ async function loadState(sql){
   return parseStateValue(Array.isArray(rows)?rows[0]?.value:null);
 }
 
-async function saveState(sql,state){
+async function mirrorInvoicesToD1(env,state,updatedAt=''){
+  if(!env?.PROVEDOR_DB)return false;
+  const invoices=Array.isArray(state?.invoices)?state.invoices:[],at=text(updatedAt)||new Date().toISOString();
+  await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(INVOICES_D1_KEY,JSON.stringify(invoices),at).run();
+  return true;
+}
+
+async function saveState(env,sql,state){
   const updatedAt=new Date().toISOString(),raw=JSON.stringify(state||{});
   await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${STATE_KEY},${raw}::jsonb,${updatedAt}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at`;
+  if(env?.PROVEDOR_DB)try{await mirrorInvoicesToD1(env,state,updatedAt)}catch(error){console.error('Provedor Plus: não foi possível espelhar mensalidades e faturas no D1.',error)}
   return updatedAt;
 }
 
@@ -288,7 +297,7 @@ async function issueAndSave(env,sql,state,invoice,client,vault,isExisting){
   const before=JSON.parse(JSON.stringify(invoice));
   const remoteIssued=await issueRealCharge(env,invoice,client,state,vault);
   if(!isExisting){state.invoices=Array.isArray(state.invoices)?state.invoices:[];state.invoices.push(invoice)}
-  try{await saveState(sql,state)}catch(error){
+  try{await saveState(env,sql,state)}catch(error){
     try{await cancelIssued(env,invoice,client,vault)}catch{}
     if(isExisting){for(const key of Object.keys(invoice))delete invoice[key];Object.assign(invoice,before)}
     else state.invoices=state.invoices.filter(row=>String(row?.id)!==String(invoice.id));
@@ -343,7 +352,7 @@ async function runBillingCron(env,{force=false}={}){
   const result={generated,issued,skipped,failed,at:new Date().toISOString(),errors:errors.slice(0,50)};
   if(force){state.settings.billing_manual_last_run=today;state.settings.billing_manual_last_result=result}
   else{state.settings.billing_auto_last_run=today;state.settings.billing_cloudflare_last_run=today;state.settings.billing_cloudflare_last_result=result}
-  await saveState(sql,state);
+  await saveState(env,sql,state);
   return {date:today,manual:force,enabled,generated,issued,skipped,failed,errors};
 }
 

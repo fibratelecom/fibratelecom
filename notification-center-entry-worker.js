@@ -524,7 +524,7 @@ async function sendOne(db,row,vapid,payload){
 async function sendRows(db,rows,vapid,payload){let sent=0,failed=0;for(let start=0;start<rows.length;start+=10){const results=await Promise.all(rows.slice(start,start+10).map(row=>sendOne(db,row,vapid,payload)));for(const result of results)result.ok?sent++:failed++}return {sent,failed,total:rows.length}}
 
 function localClient(state,clientId){return (Array.isArray(state?.clients)?state.clients:[]).find(row=>Number(row?.id)===Number(clientId))||{}}
-function planName(state,client,local){const direct=text(client?.plan||local?.plan);if(direct)return direct;const id=Number(client?.plan_id||local?.plan_id)||0,plan=(Array.isArray(state?.plans)?state.plans:[]).find(row=>id&&Number(row?.id)===id);return text(plan?.name)||'não disponível'}
+function planName(state,client,local){const direct=text(client?.plan||local?.plan);if(direct)return direct;const id=Number(client.plan_id||local?.plan_id)||0,plan=(Array.isArray(state?.plans)?state.plans:[]).find(row=>id&&Number(row?.id)===id);return text(plan?.name)||'não disponível'}
 function nextInvoice(state,clientId){return (Array.isArray(state?.invoices)?state.invoices:[]).filter(row=>Number(row?.client_id)===Number(clientId)&&invoiceOpen(row)&&row?.bank_issue_deferred!==true).sort((a,b)=>text(a?.due_date||a?.dueDate).localeCompare(text(b?.due_date||b?.dueDate)))[0]||null}
 function cashbackBalance(local){const cents=Number(local?.cashback_balance_cents);if(Number.isFinite(cents))return Math.max(0,Math.round(cents));const amount=Number(local?.cashback_balance);return Number.isFinite(amount)?Math.max(0,Math.round(amount*100)):0}
 function variableContext(state,client){
@@ -633,7 +633,7 @@ async function processDueSchedules(env){
 }
 
 async function handleInbox(request,env,data,cors){
-  if(!env.DATABASE_URL||!env.PROVEDOR_DB)throw Object.assign(new Error('Conexão com o Provedor Plus não configurada.'),{statusCode:503});
+  if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 das notificações não configurado.'),{statusCode:503});
   const session=await verifySession(data?.session,env),db=env.PROVEDOR_DB;await ensureTables(db);
   const action=text(data?._action);
   if(action==='inbox'){

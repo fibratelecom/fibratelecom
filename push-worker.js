@@ -254,11 +254,15 @@ async function handleCustomerPush(request,env,ctx){
   }catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,cors)}
 }
 
-async function resolveTargetClient(sql,identifier){const raw=text(identifier),doc=digits(raw),rows=await sql`SELECT id,name,contract_number,document FROM pp_clients WHERE contract_number=${raw} OR regexp_replace(COALESCE(contract_number,''),'[^0-9]','','g')=${doc} OR regexp_replace(COALESCE(document,''),'[^0-9]','','g')=${doc} ORDER BY id ASC LIMIT 1`;return rows?.[0]||null}
+async function resolveTargetClient(db,identifier){
+  const raw=text(identifier),doc=digits(raw);if(!raw&&!doc)return null;
+  const clean="replace(replace(replace(replace(replace(replace(COALESCE(%s,''),'.',''),'-',''),'/',''),'(',''),')',''),' ','')";
+  const rows=await d1Rows(db.prepare(`SELECT id,name,contract_number,document FROM pp_clients WHERE contract_number=? OR document=? OR ${clean.replace('%s','contract_number')}=? OR ${clean.replace('%s','document')}=? ORDER BY id ASC LIMIT 1`).bind(raw,raw,doc,doc));return rows?.[0]||null;
+}
 async function handleAdminPush(request,env,ctx){
   if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405);
   try{
-    const user=await requirePanelAdmin(request,env,ctx);if(!env.DATABASE_URL||!env.PROVEDOR_DB)throw Object.assign(new Error('Conexão com o Provedor Plus não configurada.'),{statusCode:503});let body={};try{body=await request.json()}catch{}const action=text(body?.action),data=body?.data||{},sql=neon(env.DATABASE_URL),db=env.PROVEDOR_DB;await ensurePushTables(db);
+    const user=await requirePanelAdmin(request,env,ctx);if(!env.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 das notificações não configurado.'),{statusCode:503});let body={};try{body=await request.json()}catch{}const action=text(body?.action),data=body?.data||{},db=env.PROVEDOR_DB;await ensurePushTables(db);
     if(action==='stats'){
       const stats=await d1Rows(db.prepare('SELECT SUM(CASE WHEN active=1 THEN 1 ELSE 0 END) AS devices,COUNT(DISTINCT CASE WHEN active=1 THEN client_id END) AS clients FROM pp_push_subscriptions')),history=await d1Rows(db.prepare('SELECT id,target_mode,title,body,sent_count,failed_count,created_by_name,created_at FROM pp_push_messages ORDER BY id DESC LIMIT 10'));
       return json({ok:true,data:{devices:Number(stats?.[0]?.devices)||0,clients:Number(stats?.[0]?.clients)||0,history:history||[]}});
@@ -266,9 +270,9 @@ async function handleAdminPush(request,env,ctx){
     if(action==='send'){
       const title=text(data?.title).slice(0,90),message=text(data?.body).slice(0,500),mode=data?.mode==='all'?'all':'client',clickUrl=normalizeClickUrl(data?.url);if(!title||!message)throw Object.assign(new Error('Informe o título e a mensagem da notificação.'),{statusCode:400});let targetClient=null,subscriptions=[];
       if(mode==='all')subscriptions=await d1Rows(db.prepare('SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE active=1 ORDER BY id ASC'));
-      else{targetClient=await resolveTargetClient(sql,data?.identifier);if(!targetClient)throw Object.assign(new Error('Cliente não encontrado pelo CPF/CNPJ ou contrato informado.'),{statusCode:404});subscriptions=await d1Rows(db.prepare('SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=? AND active=1 ORDER BY id ASC').bind(Number(targetClient.id)));}
+      else{targetClient=await resolveTargetClient(db,data?.identifier);if(!targetClient)throw Object.assign(new Error('Cliente não encontrado pelo CPF/CNPJ ou contrato informado.'),{statusCode:404});subscriptions=await d1Rows(db.prepare('SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=? AND active=1 ORDER BY id ASC').bind(Number(targetClient.id)));}
       if(!subscriptions.length)throw Object.assign(new Error(mode==='all'?'Nenhum dispositivo autorizou notificações ainda.':'Este cliente ainda não autorizou notificações em nenhum dispositivo.'),{statusCode:409});
-      const vapid=await vapidKeys(env,sql),payload=notificationPayload(title,message,clickUrl,`fibra-${Date.now().toString(36)}`),result=await sendRows(db,subscriptions,vapid,payload),createdBy=text(user?.name)||'Administrador';
+      const vapid=await vapidKeys(env),payload=notificationPayload(title,message,clickUrl,`fibra-${Date.now().toString(36)}`),result=await sendRows(db,subscriptions,vapid,payload),createdBy=text(user?.name)||'Administrador';
       await db.prepare('INSERT INTO pp_push_messages (target_client_id,target_mode,title,body,click_url,sent_count,failed_count,created_by_name,created_at) VALUES (?,?,?,?,?,?,?,?,?)').bind(targetClient?Number(targetClient.id):null,mode,title,message,clickUrl,result.sent,result.failed,createdBy,new Date().toISOString()).run();
       return json({ok:true,data:{...result,targetClient:targetClient?{id:Number(targetClient.id),name:text(targetClient.name),contract:text(targetClient.contract_number)}:null}});
     }

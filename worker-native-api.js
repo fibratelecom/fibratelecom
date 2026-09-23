@@ -354,10 +354,11 @@ async function syncNativePlanCatalog(sql,state,env){for(const plan of Array.isAr
 function safePlanRow(row){if(!row||typeof row!=='object')return row;return {...row,id:Number(row.id),speed_down_mbps:Math.max(0,Number(row.speed_down_mbps)||0),speed_up_mbps:Math.max(0,Number(row.speed_up_mbps)||0),price_cents:Math.max(0,Math.round(Number(row.price_cents)||0)),active:bool(row.active,true)}}
 async function readPlanById(env,sql,planId){
   const id=num(planId);if(!id)return null;
-  if(env?.PROVEDOR_DB)try{const result=await env.PROVEDOR_DB.prepare('SELECT id,name,speed_down_mbps,speed_up_mbps,price_cents,active,description,created_at,updated_at FROM pp_plans WHERE id=? LIMIT 1').bind(id).all(),row=result?.results?.[0];if(row)return safePlanRow(row)}catch(error){console.error(`Provedor Plus: leitura D1 do plano ${id} falhou; usando Neon.`,error)}
-  const rows=await sql`SELECT * FROM pp_plans WHERE id=${id} LIMIT 1`,row=Array.isArray(rows)?rows[0]:null;
-  if(row&&env?.PROVEDOR_DB)try{await mirrorPlanRowToD1(env,row)}catch(error){console.error(`Provedor Plus: não foi possível recompor o espelho D1 do plano ${id}.`,error)}
-  return safePlanRow(row);
+  if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 dos planos não configurado.'),{statusCode:503});
+  try{
+    const result=await env.PROVEDOR_DB.prepare('SELECT id,name,speed_down_mbps,speed_up_mbps,price_cents,active,description,created_at,updated_at FROM pp_plans WHERE id=? LIMIT 1').bind(id).all(),row=result?.results?.[0]||null;
+    return safePlanRow(row);
+  }catch(error){console.error(`Provedor Plus: leitura D1 do plano ${id} falhou.`,error);throw error}
 }
 async function ensureNativePlanForClient(sql,planId,env){
   const id=num(planId);if(!id)return null;

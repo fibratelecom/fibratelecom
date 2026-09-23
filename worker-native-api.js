@@ -5,6 +5,7 @@ const COOKIE='pp_session';
 const PROFILE_PREFIX='employee_access_v1_';
 const PROFILE_D1_CUTOVER_AT=Date.parse('2026-09-23T00:24:01Z');
 const STATE_KEY='web_state_v1017';
+const TICKETS_D1_KEY='support_tickets_v1';
 const ALL_PERMISSIONS=['dashboard','clients','plans','finance','billing','tickets','network'];
 const utf8=new TextEncoder();
 
@@ -272,6 +273,21 @@ function preservePortalState(incoming,existing){
   return state;
 }
 function sanitize(value,depth=0){if(depth>30)return null;if(Array.isArray(value))return value.slice(0,10000).map(v=>sanitize(v,depth+1));if(!value||typeof value!=='object')return value;const blocked=new Set(['password','router_password','mikrotik_password','pppoe_password','pppoePassword','clientSecret','client_secret','accessToken','access_token','certificatePassword','certificate_password','certificateBase64','certificate_base64','privateKey','private_key']);const out={};for(const [key,val] of Object.entries(value)){if(blocked.has(key))continue;out[key]=sanitize(val,depth+1)}return out;}
+async function saveTicketsD1(env,tickets){
+  if(!env?.PROVEDOR_DB)return false;
+  const safe=Array.isArray(tickets)?sanitize(tickets):[],updatedAt=new Date().toISOString();
+  await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(TICKETS_D1_KEY,JSON.stringify(safe),updatedAt).run();
+  return true;
+}
+async function readTicketsD1(env,legacyTickets=[]){
+  const fallback=Array.isArray(legacyTickets)?sanitize(legacyTickets):[];
+  if(!env?.PROVEDOR_DB)return {tickets:fallback,active:false};
+  try{
+    const result=await env.PROVEDOR_DB.prepare('SELECT value FROM pp_settings WHERE key=? LIMIT 1').bind(TICKETS_D1_KEY).all(),row=result?.results?.[0];
+    if(row){let value=row.value;if(typeof value==='string')try{value=JSON.parse(value)}catch{value=[]}return {tickets:Array.isArray(value)?sanitize(value):[],active:true}}
+    await saveTicketsD1(env,fallback);return {tickets:fallback,active:true};
+  }catch(error){console.error('Provedor Plus: leitura D1 dos chamados falhou; usando a cópia legado do Neon.',error);return {tickets:fallback,active:false}}
+}
 function nativePlanPayload(data={}){
   const id=num(data.id),name=text(data.name);
   if(!id||!name)return null;
@@ -304,12 +320,19 @@ async function ensureNativePlanForClient(sql,planId,env){
 export async function handleNativeCloudState(request,env){
   if(request.method!=='POST')return apiJson({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-native-state'});const sql=sqlFor(env);
   try{await requireAuth(request,sql);const body=await bodyOf(request),action=text(body?.action),data=body?.data||{};let result;
-    if(action==='state.get'){const row=await getSetting(sql,STATE_KEY);result=row?{state:sanitize(row.value||{}),updated_at:row.updated_at||null}:{state:null,updated_at:null};}
+    if(action==='state.get'){
+      const row=await getSetting(sql,STATE_KEY);
+      if(!row)result={state:null,updated_at:null};
+      else{const clean=sanitize(row.value||{}),ticketStore=await readTicketsD1(env,clean.tickets);if(ticketStore.active)clean.tickets=ticketStore.tickets;result={state:clean,updated_at:row.updated_at||null};}
+    }
     else if(action==='state.save'){
       if(!data.state||typeof data.state!=='object'||Array.isArray(data.state))throw Object.assign(new Error('Estado do gerenciador inválido.'),{statusCode:400});
       const previous=await getSetting(sql,STATE_KEY),expectedAt=text(data.baseUpdatedAt),actualAt=previous?.updated_at,expectedTime=Date.parse(expectedAt),actualTime=actualAt instanceof Date?actualAt.getTime():Date.parse(text(actualAt));
       if(expectedAt&&actualAt&&Number.isFinite(expectedTime)&&Number.isFinite(actualTime)&&expectedTime!==actualTime)throw Object.assign(new Error('O estado foi atualizado em outro acesso. Recarregando para mesclar as alterações.'),{statusCode:409});
-      const merged=preservePortalState(data.state,previous?.value),clean=sanitize(merged);await syncNativePlanCatalog(sql,clean,env);const row=await setSetting(sql,STATE_KEY,clean);result={state:row?.value||clean,updated_at:row?.updated_at||new Date().toISOString()};
+      const merged=preservePortalState(data.state,previous?.value),clean=sanitize(merged);await syncNativePlanCatalog(sql,clean,env);
+      let ticketsOnD1=false;if(Array.isArray(clean.tickets)&&env?.PROVEDOR_DB)try{ticketsOnD1=await saveTicketsD1(env,clean.tickets)}catch(error){console.error('Provedor Plus: gravação D1 dos chamados falhou; mantendo gravação no Neon.',error)}
+      const legacyTickets=Array.isArray(previous?.value?.tickets)?previous.value.tickets:[],neonState=ticketsOnD1?{...clean,tickets:legacyTickets}:clean,row=await setSetting(sql,STATE_KEY,neonState),savedState=row?.value||neonState;
+      result={state:ticketsOnD1?{...savedState,tickets:clean.tickets}:savedState,updated_at:row?.updated_at||new Date().toISOString()};
     }
     else if(action==='health'){const row=await getSetting(sql,STATE_KEY);result={online:true,hasState:Boolean(row?.value),updated_at:row?.updated_at||null};}
     else throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});return apiJson({ok:true,data:result},200,{'x-provedor-plus-edge':'cloudflare-native-state'});
@@ -395,7 +418,7 @@ async function trafficStored(env,key){
 }
 async function trafficSave(env,key,value){if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 do tráfego não configurado.'),{statusCode:503});const updatedAt=new Date().toISOString();await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(key,JSON.stringify(value??null),updatedAt).run();return {value,updated_at:updatedAt}}
 async function trafficRead(env,clientId,scope='primary'){const id=num(clientId);if(!id)throw Object.assign(new Error('Cliente inválido para consultar tráfego.'),{statusCode:400});const row=await trafficStored(env,trafficKey(id,scope)),all=row?.value&&typeof row.value==='object'?row.value:trafficEmpty(),x=trafficNormalized(all);return trafficView(x)}
-async function trafficRecord(env,data={}){const clientId=num(data.clientId);if(!clientId)throw Object.assign(new Error('Cliente inválido para registrar tráfego.'),{statusCode:400});const month=currentMonth(data.month),key=trafficKey(clientId,data.scope),row=await trafficStored(env,key),all=row?.value&&typeof row.value==='object'?row.value:trafficEmpty(month),live=data.live&&typeof data.live==='object'?data.live:{},t=Date.now(),day=trafficDateKey();let x=trafficNormalized(all,month),downloadBps=Number(live.downloadBps)||0,uploadBps=Number(live.uploadBps)||0;if(live.online&&live.sessionId){const d=Math.max(0,Number(live.downloadBytes)||0),u=Math.max(0,Number(live.uploadBytes)||0),same=x.lastSession===String(live.sessionId),dd=same?Math.max(0,d-(Number(x.lastDownload)||0)):d,du=same?Math.max(0,u-(Number(x.lastUpload)||0)):u;if(!downloadBps&&same&&x.lastAt){const seconds=Math.max(.25,(t-Number(x.lastAt))/1000);downloadBps=Math.round(dd*8/seconds);uploadBps=Math.round(du*8/seconds)}x.download_bytes=(Number(x.download_bytes)||0)+dd;x.upload_bytes=(Number(x.upload_bytes)||0)+du;const daily=trafficDaily(x.daily);let item=daily.find(entry=>entry.day===day);if(!item){item={day,download_bytes:0,upload_bytes:0};daily.push(item)}item.download_bytes=(Number(item.download_bytes)||0)+dd;item.upload_bytes=(Number(item.upload_bytes)||0)+du;x.daily=trafficDaily(daily);x.lastSession=String(live.sessionId);x.lastDownload=d;x.lastUpload=u;x.lastAt=t}await trafficSave(env,key,x);return {...trafficView(x),downloadBps,uploadBps}}
+async function trafficRecord(env,data={}){const clientId=num(data.clientId);if(!clientId)throw Object.assign(new Error('Cliente inválido para registrar tráfego.'),{statusCode:400});const month=currentMonth(data.month),key=trafficKey(clientId,data.scope),row=await trafficStored(env,key),all=row?.value&&typeof row.value==='object'?row.value:trafficEmpty(month),live=data.live&&typeof data.live==='object'?data.live:{},t=Date.now(),day=trafficDateKey();let x=trafficNormalized(all,month),downloadBps=Number(live.downloadBps)||0,uploadBps=Number(live.uploadBps)||0,same=x.lastSession===String(live.sessionId);if(live.online&&live.sessionId){const d=Math.max(0,Number(live.downloadBytes)||0),u=Math.max(0,Number(live.uploadBytes)||0),dd=same?Math.max(0,d-(Number(x.lastDownload)||0)):d,du=same?Math.max(0,u-(Number(x.lastUpload)||0)):u;if(!downloadBps&&same&&x.lastAt){const seconds=Math.max(.25,(t-Number(x.lastAt))/1000);downloadBps=Math.round(dd*8/seconds);uploadBps=Math.round(du*8/seconds)}x.download_bytes=(Number(x.download_bytes)||0)+dd;x.upload_bytes=(Number(x.upload_bytes)||0)+du;const daily=trafficDaily(x.daily);let item=daily.find(entry=>entry.day===day);if(!item){item={day,download_bytes:0,upload_bytes:0};daily.push(item)}item.download_bytes=(Number(item.download_bytes)||0)+dd;item.upload_bytes=(Number(item.upload_bytes)||0)+du;x.daily=trafficDaily(daily);x.lastSession=String(live.sessionId);x.lastDownload=d;x.lastUpload=u;x.lastAt=t}await trafficSave(env,key,x);return {...trafficView(x),downloadBps,uploadBps}}
 
 
 function cashbackClient(state,clientId){return (Array.isArray(state?.clients)?state.clients:[]).find(item=>Number(item?.id)===Number(clientId))||null}

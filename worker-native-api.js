@@ -470,7 +470,6 @@ async function trafficStored(env,key){
   if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 do tráfego não configurado.'),{statusCode:503});
   const result=await env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(key).all(),row=result?.results?.[0];
   if(row){let value=row.value;if(typeof value==='string')try{value=JSON.parse(value)}catch{value={}}return {value:value&&typeof value==='object'?value:{},updated_at:row.updated_at||null}}
-  if(env.DATABASE_URL){const legacy=await getSetting(sqlFor(env),key);if(legacy?.value&&typeof legacy.value==='object'){const updatedAt=legacy.updated_at instanceof Date?legacy.updated_at.toISOString():text(legacy.updated_at)||new Date().toISOString();await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(key,JSON.stringify(legacy.value),updatedAt).run();return {value:legacy.value,updated_at:updatedAt}}}
   return null;
 }
 async function trafficSave(env,key,value){if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 do tráfego não configurado.'),{statusCode:503});const updatedAt=new Date().toISOString();await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(key,JSON.stringify(value??null),updatedAt).run();return {value,updated_at:updatedAt}}

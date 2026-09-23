@@ -20,15 +20,17 @@ function parseStateValue(value){
   return {};
 }
 
-async function loadState(env,sql){
-  const rows=await sql`SELECT value,updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,row=Array.isArray(rows)?rows[0]:null,state=parseStateValue(row?.value),neonUpdatedAt=row?.updated_at instanceof Date?row.updated_at.toISOString():text(row?.updated_at);
-  if(!env?.PROVEDOR_DB)return state;
-  try{
-    const result=await env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY).all(),d1Row=Array.isArray(result?.results)?result.results[0]:null,d1Time=Date.parse(text(d1Row?.updated_at)),neonTime=Date.parse(neonUpdatedAt);
-    if(d1Row&&(!Number.isFinite(neonTime)||(Number.isFinite(d1Time)&&d1Time>=neonTime)))return parseStateValue(d1Row.value);
-    if(row)await mirrorInvoicesToD1(env,state,neonUpdatedAt||new Date().toISOString());
-  }catch(error){console.error('Provedor Plus: leitura do estado completo no D1 falhou; usando Neon.',error)}
-  return state;
+async function loadState(env,sql=null){
+  if(env?.PROVEDOR_DB)try{
+    const result=await env.PROVEDOR_DB.prepare('SELECT value FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY).all(),row=Array.isArray(result?.results)?result.results[0]:null;
+    if(row)return parseStateValue(row.value);
+  }catch(error){console.error('Provedor Plus: leitura D1 do estado de mensalidades falhou.',error);throw error}
+  if(sql){
+    const rows=await sql`SELECT value,updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,row=Array.isArray(rows)?rows[0]:null,state=parseStateValue(row?.value),updatedAt=row?.updated_at instanceof Date?row.updated_at.toISOString():text(row?.updated_at);
+    if(row&&env?.PROVEDOR_DB)await mirrorInvoicesToD1(env,state,updatedAt||new Date().toISOString());
+    return state;
+  }
+  throw Object.assign(new Error('Banco D1 das mensalidades não configurado.'),{statusCode:503});
 }
 
 async function mirrorInvoicesToD1(env,state,updatedAt=''){
@@ -43,8 +45,9 @@ async function mirrorInvoicesToD1(env,state,updatedAt=''){
 
 async function saveState(env,sql,state){
   const updatedAt=new Date().toISOString(),raw=JSON.stringify(state||{});
-  await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${STATE_KEY},${raw}::jsonb,${updatedAt}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at`;
-  if(env?.PROVEDOR_DB)try{await mirrorInvoicesToD1(env,state,updatedAt)}catch(error){console.error('Provedor Plus: não foi possível espelhar mensalidades e faturas no D1.',error)}
+  if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 das mensalidades não configurado.'),{statusCode:503});
+  await mirrorInvoicesToD1(env,state,updatedAt);
+  if(sql)try{await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${STATE_KEY},${raw}::jsonb,${updatedAt}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at`}catch(error){console.error('Provedor Plus: cópia de recuperação das mensalidades no Neon falhou; D1 permanece confirmado.',error)}
   return updatedAt;
 }
 
@@ -213,9 +216,8 @@ function bankSecrets(vault){
 }
 
 async function enrichPanelBankRequest(request,env){
-  if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Neon não configurada para a operação bancária.'),{statusCode:503});
   let body={};try{body=await request.clone().json()}catch{throw Object.assign(new Error('Operação bancária inválida.'),{statusCode:400})}
-  const sql=neon(env.DATABASE_URL),vault=await readBankSettings(env,sql),secrets=bankSecrets(vault),headers=new Headers(request.headers);
+  const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,vault=await readBankSettings(env,sql),secrets=bankSecrets(vault),headers=new Headers(request.headers);
   headers.delete('content-length');headers.set('Content-Type','application/json');
   return new Request(request.url,{method:'POST',headers,body:JSON.stringify({...body,efi:secrets.efi,mercadoPago:secrets.mercadoPago})});
 }
@@ -315,15 +317,15 @@ async function issueAndSave(env,sql,state,invoice,client,vault,isExisting){
 }
 
 async function runBillingCron(env,{force=false}={}){
-  if(!env.DATABASE_URL)throw new Error('DATABASE_URL não configurada para a geração automática.');
-  const sql=neon(env.DATABASE_URL),state=await loadState(env,sql);state.settings={...(state.settings||{})};
+  if(!env?.PROVEDOR_DB)throw new Error('Banco D1 não configurado para a geração automática.');
+  const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,state=await loadState(env,sql);state.settings={...(state.settings||{})};
   const enabled=state.settings.billing_auto_enabled!==false&&String(state.settings.billing_auto_enabled)!=='false';
   if(!enabled&&!force)return {enabled:false,generated:0,issued:0,skipped:0,failed:0,errors:[]};
   const todayParts=brazilParts(),today=keyFromParts(todayParts.year,todayParts.month,todayParts.day),daysBefore=Math.max(1,Math.min(30,Math.floor(num(state.settings.billing_auto_days_before)||7)));
   let vault={},bankSettingsError='';
   try{vault=await readBankSettings(env,sql)}catch(error){bankSettingsError=error instanceof Error?error.message:String(error)}
-  const rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code FROM pp_clients ORDER BY id ASC`;
-  const primaryClients=(Array.isArray(rows)?rows:[]).map(remote=>mergedClient(remote,state)),owners=new Map(primaryClients.map(item=>[Number(item.id),item])),extraContracts=Array.isArray(state?.client_contracts)?state.client_contracts:[],contractClients=extraContracts.map(item=>{const owner=owners.get(Number(item?.client_id));return owner?mergedContractClient(item,owner,state):null}).filter(Boolean),billable=[...primaryClients,...contractClients];
+  const clientResult=await env.PROVEDOR_DB.prepare('SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code FROM pp_clients ORDER BY id ASC').all(),rows=Array.isArray(clientResult?.results)?clientResult.results:[];
+  const primaryClients=rows.map(remote=>mergedClient(remote,state)),owners=new Map(primaryClients.map(item=>[Number(item.id),item])),extraContracts=Array.isArray(state?.client_contracts)?state.client_contracts:[],contractClients=extraContracts.map(item=>{const owner=owners.get(Number(item?.client_id));return owner?mergedContractClient(item,owner,state):null}).filter(Boolean),billable=[...primaryClients,...contractClients];
   let generated=0,issued=0,skipped=0,failed=0,yielded=false;const errors=[];
   for(const client of billable){
     if(!force&&await paymentPriorityActive(env,sql)){yielded=true;break}

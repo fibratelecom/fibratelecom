@@ -10,11 +10,12 @@ const OPS_SETTINGS_KEY='push_operational_settings_v1';
 const CUSTOM_TEMPLATES_KEY='push_custom_templates_v1';
 const PROTOCOL_OBSERVER_D1_MARKER='push_protocol_observer_d1_v1';
 const CLIENT_OBSERVER_D1_MARKER='push_client_observer_d1_v1';
+const OPERATIONAL_EVENTS_D1_MARKER='operational_push_events_d1_v1';
 const CLIENT_APP_ORIGIN='https://cliente.fibramais.workers.dev';
 const text=value=>String(value??'').trim();
 const normalize=value=>text(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
 const enc=new TextEncoder();
-let schemaReady=false,protocolObserverReady=false,clientObserverReady=false;
+let schemaReady=false,protocolObserverReady=false,clientObserverReady=false,operationalEventsReady=false;
 
 const DEFAULT_SETTINGS={
   statusSuspended:true,
@@ -138,21 +139,33 @@ async function sendOne(sql,row,vapid,payload,db=null){
 }
 async function sendRows(sql,rows,vapid,payload,db=null){let sent=0,failed=0;for(let start=0;start<rows.length;start+=10){const results=await Promise.all(rows.slice(start,start+10).map(row=>sendOne(sql,row,vapid,payload,db)));for(const result of results)result.ok?sent++:failed++}return {sent,failed,total:rows.length}}
 
-async function attemptEvent(sql,env,row){
-  const claimed=await sql`UPDATE pp_push_events SET attempts=attempts+1,last_attempt_at=now() WHERE id=${Number(row.id)} AND completed=false AND (attempts=0 OR (attempts=1 AND sent_count=0 AND failed_count>0 AND last_attempt_at<now()-interval '2 minutes')) RETURNING *`;
-  const event=claimed?.[0];if(!event)return {skipped:true};
+async function ensureOperationalEventsD1(env,sql){
+  if(!env?.PROVEDOR_DB)return null;const db=env.PROVEDOR_DB;if(operationalEventsReady)return db;
+  await db.prepare('SELECT id FROM pp_push_events LIMIT 1').all();await db.prepare('SELECT id FROM pp_push_messages LIMIT 1').all();
+  const marker=parseObject(await settingValue(db,OPERATIONAL_EVENTS_D1_MARKER));if(marker?.migratedAt){operationalEventsReady=true;return db}
+  let copied=0;
+  try{const rows=await sql`SELECT event_key,client_id,event_type,title,body,click_url,attempts,sent_count,failed_count,completed,last_attempt_at,sent_at,created_at FROM pp_push_events WHERE event_type LIKE 'operational:%' ORDER BY id ASC`;for(let start=0;start<(rows||[]).length;start+=40){const statements=rows.slice(start,start+40).map(row=>db.prepare('INSERT OR IGNORE INTO pp_push_events (event_key,client_id,event_type,title,body,click_url,attempts,sent_count,failed_count,completed,last_attempt_at,sent_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(text(row.event_key),Number(row.client_id),text(row.event_type),text(row.title),text(row.body),text(row.click_url)||null,Math.max(0,Number(row.attempts)||0),Math.max(0,Number(row.sent_count)||0),Math.max(0,Number(row.failed_count)||0,row.completed===true||String(row.completed).toLowerCase()==='true'||Number(row.completed)===1?1:0,text(row.last_attempt_at)||null,text(row.sent_at)||null,text(row.created_at)||new Date().toISOString()));if(statements.length){await db.batch(statements);copied+=statements.length}}}catch(error){console.error('Provedor Plus: fila operacional antiga não pôde ser copiada para o D1.',error)}
+  await saveSettingValue(db,OPERATIONAL_EVENTS_D1_MARKER,{migratedAt:new Date().toISOString(),copied});operationalEventsReady=true;return db;
+}
+
+async function attemptEvent(sql,env,row,eventDb=null){
+  let event=null;
+  if(eventDb){const cutoff=new Date(Date.now()-2*60*1000).toISOString(),attemptAt=new Date().toISOString(),claimed=await d1Rows(eventDb.prepare('UPDATE pp_push_events SET attempts=attempts+1,last_attempt_at=? WHERE id=? AND completed=0 AND (attempts=0 OR (attempts=1 AND sent_count=0 AND failed_count>0 AND (last_attempt_at IS NULL OR datetime(last_attempt_at)<datetime(?)))) RETURNING *').bind(attemptAt,Number(row.id),cutoff));event=claimed?.[0]||null}
+  else{const claimed=await sql`UPDATE pp_push_events SET attempts=attempts+1,last_attempt_at=now() WHERE id=${Number(row.id)} AND completed=false AND (attempts=0 OR (attempts=1 AND sent_count=0 AND failed_count>0 AND last_attempt_at<now()-interval '2 minutes')) RETURNING *`;event=claimed?.[0]||null}
+  if(!event)return {skipped:true};
   const db=env?.PROVEDOR_DB||null,subscriptions=db?await d1Rows(db.prepare('SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=? AND active=1 ORDER BY id ASC').bind(Number(event.client_id))):await sql`SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=${Number(event.client_id)} AND active=true ORDER BY id ASC`;if(!subscriptions.length)return {skipped:true,reason:'no-subscriptions'};
   const vapid=await readVapid(env,sql);if(!vapid?.privateJWK)return {skipped:true,reason:'no-vapid'};
   const payload=notificationPayload(event.title,event.body,event.click_url,`ops-${text(event.event_key).replace(/[^A-Za-z0-9_-]/g,'-').slice(-38)}`),result=await sendRows(sql,subscriptions,vapid,payload,db),completed=result.sent>0,sentAt=completed?new Date().toISOString():null;
-  await sql`UPDATE pp_push_events SET sent_count=sent_count+${result.sent},failed_count=failed_count+${result.failed},completed=${completed},sent_at=COALESCE(sent_at,${sentAt}) WHERE id=${Number(event.id)}`;
-  if(completed)await sql`INSERT INTO pp_push_messages (target_client_id,target_mode,title,body,click_url,sent_count,failed_count,created_by_name) VALUES (${Number(event.client_id)},'client',${text(event.title)},${text(event.body)},${text(event.click_url)},${result.sent},${result.failed},${`Automático · ${text(event.event_type).replace(/^operational:/,'')}`})`;
+  if(eventDb){await eventDb.prepare('UPDATE pp_push_events SET sent_count=sent_count+?,failed_count=failed_count+?,completed=?,sent_at=COALESCE(sent_at,?) WHERE id=?').bind(result.sent,result.failed,completed?1:0,sentAt,Number(event.id)).run();if(completed)await eventDb.prepare('INSERT INTO pp_push_messages (target_client_id,target_mode,title,body,click_url,sent_count,failed_count,created_by_name,created_at) VALUES (?,?,?,?,?,?,?,?,?)').bind(Number(event.client_id),'client',text(event.title),text(event.body),text(event.click_url),result.sent,result.failed,`Automático · ${text(event.event_type).replace(/^operational:/,'')}`,new Date().toISOString()).run()}
+  else{await sql`UPDATE pp_push_events SET sent_count=sent_count+${result.sent},failed_count=failed_count+${result.failed},completed=${completed},sent_at=COALESCE(sent_at,${sentAt}) WHERE id=${Number(event.id)}`;if(completed)await sql`INSERT INTO pp_push_messages (target_client_id,target_mode,title,body,click_url,sent_count,failed_count,created_by_name) VALUES (${Number(event.client_id)},'client',${text(event.title)},${text(event.body)},${text(event.click_url)},${result.sent},${result.failed},${`Automático · ${text(event.event_type).replace(/^operational:/,'')}`})`}
   return result;
 }
 
-async function sendAutomaticEvent(sql,env,event){
+async function sendAutomaticEvent(sql,env,event,eventDb=null){
   const clientId=Number(event?.clientId)||0,key=text(event?.key),type=`operational:${text(event?.type)||'aviso'}`,title=text(event?.title).slice(0,90),body=text(event?.body).slice(0,500),url=normalizeClickUrl(event?.url||'/');
   if(!clientId||!key||!title||!body)return {skipped:true};
   const subscriptions=env?.PROVEDOR_DB?await d1Rows(env.PROVEDOR_DB.prepare('SELECT id FROM pp_push_subscriptions WHERE client_id=? AND active=1 LIMIT 1').bind(clientId)):await sql`SELECT id FROM pp_push_subscriptions WHERE client_id=${clientId} AND active=true LIMIT 1`;if(!subscriptions.length)return {skipped:true,reason:'no-subscriptions'};
+  if(eventDb){await eventDb.prepare('INSERT OR IGNORE INTO pp_push_events (event_key,client_id,event_type,title,body,click_url,created_at) VALUES (?,?,?,?,?,?,?)').bind(key,clientId,type,title,body,url,new Date().toISOString()).run();const rows=await d1Rows(eventDb.prepare('SELECT * FROM pp_push_events WHERE event_key=? LIMIT 1').bind(key));return rows?.[0]?attemptEvent(sql,env,rows[0],eventDb):{skipped:true}}
   await sql`INSERT INTO pp_push_events (event_key,client_id,event_type,title,body,click_url) VALUES (${key},${clientId},${type},${title},${body},${url}) ON CONFLICT (event_key) DO NOTHING`;
   const rows=await sql`SELECT * FROM pp_push_events WHERE event_key=${key} LIMIT 1`;return rows?.[0]?attemptEvent(sql,env,rows[0]):{skipped:true};
 }
@@ -272,23 +285,24 @@ async function protocolEvents(sql,settings,env){
   }catch{return []}
 }
 
-async function retryPending(sql,env){
-  const rows=await sql`SELECT * FROM pp_push_events WHERE completed=false AND event_type LIKE 'operational:%' AND created_at>=now()-interval '7 days' AND attempts=1 AND sent_count=0 AND failed_count>0 AND last_attempt_at<now()-interval '2 minutes' ORDER BY id ASC LIMIT 40`;let sent=0,failed=0;
-  for(const row of rows||[]){try{const result=await attemptEvent(sql,env,row);sent+=Number(result?.sent)||0;failed+=Number(result?.failed)||0}catch{failed++}}
-  return {sent,failed};
+async function retryPending(sql,env,eventDb=null){
+  let rows=[];
+  if(eventDb){const cutoff7=new Date(Date.now()-7*24*60*60*1000).toISOString(),cutoff2=new Date(Date.now()-2*60*1000).toISOString();rows=await d1Rows(eventDb.prepare("SELECT * FROM pp_push_events WHERE completed=0 AND event_type LIKE 'operational:%' AND datetime(created_at)>=datetime(?) AND attempts=1 AND sent_count=0 AND failed_count>0 AND datetime(last_attempt_at)<datetime(?) ORDER BY id ASC LIMIT 40").bind(cutoff7,cutoff2))}
+  else rows=await sql`SELECT * FROM pp_push_events WHERE completed=false AND event_type LIKE 'operational:%' AND created_at>=now()-interval '7 days' AND attempts=1 AND sent_count=0 AND failed_count>0 AND last_attempt_at<now()-interval '2 minutes' ORDER BY id ASC LIMIT 40`;
+  let sent=0,failed=0;for(const row of rows||[]){try{const result=await attemptEvent(sql,env,row,eventDb);sent+=Number(result?.sent)||0;failed+=Number(result?.failed)||0}catch{failed++}}return {sent,failed};
 }
 
 async function scanOperationalEvents(env){
   if(!env?.DATABASE_URL)return {scanned:false};
-  const sql=neon(env.DATABASE_URL),protocolStore=env.PROVEDOR_DB||sql;await ensureTables(sql);const state=await loadState(sql),settings=await loadSettings(env.PROVEDOR_DB||sql),events=[];
+  const sql=neon(env.DATABASE_URL),protocolStore=env.PROVEDOR_DB||sql;await ensureTables(sql);const eventStore=env.PROVEDOR_DB?await ensureOperationalEventsD1(env,sql):null,state=await loadState(sql),settings=await loadSettings(env.PROVEDOR_DB||sql),events=[];
   events.push(...await statusAndPlanEvents(sql,state,settings,protocolStore,env));
   events.push(...trustEvents(state,settings));
   events.push(...await dueChangeEvents(protocolStore,settings));
   events.push(...negotiationEvents(state,settings));
   events.push(...await protocolEvents(sql,settings,env));
   const unique=[...new Map(events.filter(item=>item?.clientId&&item?.key).map(item=>[item.key,item])).values()].slice(0,250);let sent=0,failed=0,skipped=0;
-  for(const event of unique){try{const result=await sendAutomaticEvent(sql,env,event);if(result?.skipped)skipped++;else{sent+=Number(result?.sent)||0;failed+=Number(result?.failed)||0}}catch(error){failed++;console.error('Provedor Plus: falha em notificação operacional.',event?.type,error)}}
-  const retry=await retryPending(sql,env);return {scanned:true,events:unique.length,sent:sent+retry.sent,failed:failed+retry.failed,skipped};
+  for(const event of unique){try{const result=await sendAutomaticEvent(sql,env,event,eventStore);if(result?.skipped)skipped++;else{sent+=Number(result?.sent)||0;failed+=Number(result?.failed)||0}}catch(error){failed++;console.error('Provedor Plus: falha em notificação operacional.',event?.type,error)}}
+  const retry=await retryPending(sql,env,eventStore);return {scanned:true,events:unique.length,sent:sent+retry.sent,failed:failed+retry.failed,skipped};
 }
 
 async function verifyPanelAdmin(request,env,ctx){

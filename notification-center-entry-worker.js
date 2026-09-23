@@ -633,7 +633,7 @@ async function processDueSchedules(env){
 }
 
 async function handleInbox(request,env,data,cors){
-  if(!env.DATABASE_URL||!env.PROVEDOR_DB)throw Object.assign(new Error('Conexão com o Provedor Plus não configurada.'),{statusCode:503});
+  if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 das notificações não configurado.'),{statusCode:503});
   const session=await verifySession(data?.session,env),db=env.PROVEDOR_DB;await ensureTables(db);
   const action=text(data?._action);
   if(action==='inbox'){

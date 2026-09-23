@@ -156,9 +156,14 @@ async function sendAutomaticEvent(sql,env,event){
 
 function localClientMap(state){return new Map((Array.isArray(state?.clients)?state.clients:[]).map(item=>[Number(item?.id)||0,item]))}
 function planNameFor(row,state){const direct=text(row?.plan);if(direct)return direct;const plan=(Array.isArray(state?.plans)?state.plans:[]).find(item=>Number(item?.id)===Number(row?.plan_id));return text(plan?.name)||'seu novo plano'}
-async function recentDueProtocol(sql,clientId,newDay){try{const rows=await sql`SELECT id FROM pp_protocols WHERE client_id=${Number(clientId)} AND category='Vencimento' AND subject='Alteração de vencimento' AND status='Concluído' AND created_at>=now()-interval '10 minutes' AND COALESCE((details->>'newDay')::integer,0)=${Number(newDay)||0} ORDER BY id DESC LIMIT 1`;return Boolean(rows?.[0]?.id)}catch{return false}}
+async function recentDueProtocol(store,clientId,newDay){
+  try{
+    if(store?.prepare){const cutoff=new Date(Date.now()-10*60*1000).toISOString(),result=await store.prepare("SELECT details FROM pp_protocols WHERE client_id=? AND category='Vencimento' AND subject='Alteração de vencimento' AND status='Concluído' AND datetime(created_at)>=datetime(?) ORDER BY id DESC LIMIT 20").bind(Number(clientId),cutoff).all();return (result?.results||[]).some(row=>Number(parseObject(row?.details)?.newDay)===Number(newDay)||0)}
+    const rows=await store`SELECT id FROM pp_protocols WHERE client_id=${Number(clientId)} AND category='Vencimento' AND subject='Alteração de vencimento' AND status='Concluído' AND created_at>=now()-interval '10 minutes' AND COALESCE((details->>'newDay')::integer,0)=${Number(newDay)||0} ORDER BY id DESC LIMIT 1`;return Boolean(rows?.[0]?.id)
+  }catch{return false}
+}
 
-async function statusAndPlanEvents(sql,state,settings){
+async function statusAndPlanEvents(sql,state,settings,protocolStore=sql){
   const rows=await sql`SELECT c.id,c.name,c.status,c.plan,c.plan_id,c.due_day,c.updated_at,o.client_id AS observer_id,o.last_status,o.last_plan,o.last_due_day FROM pp_clients c LEFT JOIN pp_push_observer_state o ON o.client_id=c.id WHERE o.client_id IS NULL OR o.last_status IS DISTINCT FROM c.status OR o.last_plan IS DISTINCT FROM (COALESCE(c.plan,'')||'|'||COALESCE(c.plan_id::text,'')) OR o.last_due_day IS DISTINCT FROM c.due_day ORDER BY c.id ASC`,locals=localClientMap(state),events=[];
   for(const row of rows||[]){
     if(!row.observer_id)continue;
@@ -169,7 +174,7 @@ async function statusAndPlanEvents(sql,state,settings){
       if(wasBlocked&&!isBlocked&&settings.statusRestored&&!trustActive)events.push({key:`status-restored:${clientId}:${stamp}`,clientId,type:'internet liberada',title:'Conexão liberada',body:'Seu acesso à internet foi liberado novamente.',url:'/#conexao'});
     }
     if(currentPlan!==oldPlan&&settings.planChange){const stamp=text(row.updated_at)||Date.now(),name=planNameFor(row,state);events.push({key:`plan-change:${clientId}:${stamp}`,clientId,type:'plano alterado',title:'Plano atualizado',body:`Seu plano foi atualizado para ${name}. Consulte os detalhes na Área do Cliente.`,url:'/#perfil'})}
-    if(settings.dueChange&&oldDue>0&&currentDue>0&&currentDue!==oldDue&&!await recentDueProtocol(sql,clientId,currentDue)){const stamp=text(row.updated_at)||Date.now();events.push({key:`due-admin:${clientId}:${stamp}:${oldDue}-${currentDue}`,clientId,type:'mudança de vencimento',title:'Vencimento alterado',body:`Seu vencimento foi alterado do dia ${oldDue} para o dia ${currentDue}. Consulte seus dados na Área do Cliente.`,url:'/#perfil'})}
+    if(settings.dueChange&&oldDue>0&&currentDue>0&&currentDue!==oldDue&&!await recentDueProtocol(protocolStore,clientId,currentDue)){const stamp=text(row.updated_at)||Date.now();events.push({key:`due-admin:${clientId}:${stamp}:${oldDue}-${currentDue}`,clientId,type:'mudança de vencimento',title:'Vencimento alterado',body:`Seu vencimento foi alterado do dia ${oldDue} para o dia ${currentDue}. Consulte seus dados na Área do Cliente.`,url:'/#perfil'})}
   }
   await sql`INSERT INTO pp_push_observer_state (client_id,last_status,last_plan,last_due_day,updated_at) SELECT c.id,c.status,COALESCE(c.plan,'')||'|'||COALESCE(c.plan_id::text,''),c.due_day,now() FROM pp_clients c LEFT JOIN pp_push_observer_state o ON o.client_id=c.id WHERE o.client_id IS NULL OR o.last_status IS DISTINCT FROM c.status OR o.last_plan IS DISTINCT FROM (COALESCE(c.plan,'')||'|'||COALESCE(c.plan_id::text,'')) OR o.last_due_day IS DISTINCT FROM c.due_day ON CONFLICT (client_id) DO UPDATE SET last_status=EXCLUDED.last_status,last_plan=EXCLUDED.last_plan,last_due_day=EXCLUDED.last_due_day,updated_at=EXCLUDED.updated_at WHERE pp_push_observer_state.last_status IS DISTINCT FROM EXCLUDED.last_status OR pp_push_observer_state.last_plan IS DISTINCT FROM EXCLUDED.last_plan OR pp_push_observer_state.last_due_day IS DISTINCT FROM EXCLUDED.last_due_day`;
   return events;
@@ -187,10 +192,13 @@ function trustEvents(state,settings){
   return events;
 }
 
-async function dueChangeEvents(sql,settings){
+async function dueChangeEvents(store,settings){
   if(!settings.dueChange)return [];
   try{
-    const rows=await sql`SELECT id,protocol,client_id,status,details,created_at,closed_at FROM pp_protocols WHERE client_id IS NOT NULL AND category='Vencimento' AND subject='Alteração de vencimento' AND status='Concluído' AND created_at>=now()-interval '36 hours' ORDER BY id DESC LIMIT 100`,events=[];
+    let rows=[];
+    if(store?.prepare){const cutoff=new Date(Date.now()-36*60*60*1000).toISOString(),result=await store.prepare("SELECT id,protocol,client_id,status,details,created_at,closed_at FROM pp_protocols WHERE client_id IS NOT NULL AND category='Vencimento' AND subject='Alteração de vencimento' AND status='Concluído' AND datetime(created_at)>=datetime(?) ORDER BY id DESC LIMIT 100").bind(cutoff).all();rows=result?.results||[]}
+    else rows=await store`SELECT id,protocol,client_id,status,details,created_at,closed_at FROM pp_protocols WHERE client_id IS NOT NULL AND category='Vencimento' AND subject='Alteração de vencimento' AND status='Concluído' AND created_at>=now()-interval '36 hours' ORDER BY id DESC LIMIT 100`;
+    const events=[];
     for(const row of rows||[]){const details=parseObject(row.details),oldDay=Number(details.oldDay)||0,newDay=Number(details.newDay)||0,clientId=Number(row.client_id)||0;if(!clientId)continue;events.push({key:`due-change:${row.id}:${text(row.closed_at||row.created_at)}`,clientId,type:'mudança de vencimento',title:'Vencimento alterado',body:newDay?`Seu vencimento foi alterado${oldDay?` do dia ${oldDay}`:''} para o dia ${newDay}. Protocolo ${text(row.protocol)}.`:`Sua alteração de vencimento foi concluída. Protocolo ${text(row.protocol)}.`,url:'/#perfil'})}
     return events;
   }catch{return []}
@@ -227,10 +235,10 @@ async function retryPending(sql,env){
 
 async function scanOperationalEvents(env){
   if(!env?.DATABASE_URL)return {scanned:false};
-  const sql=neon(env.DATABASE_URL);await ensureTables(sql);const state=await loadState(sql),settings=await loadSettings(env.PROVEDOR_DB||sql),events=[];
-  events.push(...await statusAndPlanEvents(sql,state,settings));
+  const sql=neon(env.DATABASE_URL),protocolStore=env.PROVEDOR_DB||sql;await ensureTables(sql);const state=await loadState(sql),settings=await loadSettings(env.PROVEDOR_DB||sql),events=[];
+  events.push(...await statusAndPlanEvents(sql,state,settings,protocolStore));
   events.push(...trustEvents(state,settings));
-  events.push(...await dueChangeEvents(sql,settings));
+  events.push(...await dueChangeEvents(protocolStore,settings));
   events.push(...negotiationEvents(state,settings));
   events.push(...await protocolEvents(sql,settings));
   const unique=[...new Map(events.filter(item=>item?.clientId&&item?.key).map(item=>[item.key,item])).values()].slice(0,250);let sent=0,failed=0,skipped=0;

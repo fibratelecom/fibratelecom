@@ -21,7 +21,11 @@ function clientCors(request){const origin=text(request.headers.get('origin')),he
 function base64Url(bytes){const view=bytes instanceof Uint8Array?bytes:new Uint8Array(bytes);let raw='';for(let i=0;i<view.length;i+=0x8000)raw+=String.fromCharCode(...view.subarray(i,Math.min(i+0x8000,view.length)));return btoa(raw).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
 function base64UrlBytes(value){const raw=text(value).replace(/-/g,'+').replace(/_/g,'/'),padded=raw+'='.repeat((4-raw.length%4)%4),bin=atob(padded),out=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);return out}
 function parseState(value){if(value&&typeof value==='object'&&!Array.isArray(value))return value;if(typeof value==='string')try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{}return {}}
-async function loadState(sql){const rows=await sql`SELECT value FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`;return parseState(rows?.[0]?.value)}
+async function loadState(env,sql=null){
+  if(env?.PROVEDOR_DB)try{const rows=await d1Rows(env.PROVEDOR_DB.prepare('SELECT value FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY)),row=rows?.[0];if(row)return parseState(row.value)}catch(error){console.error('Provedor Plus: leitura D1 do estado para notificações falhou; usando cópia Neon.',error)}
+  if(sql){const rows=await sql`SELECT value FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`;return parseState(rows?.[0]?.value)}
+  throw Object.assign(new Error('Estado D1 das notificações não está disponível.'),{statusCode:503});
+}
 function normalizeStatus(value){return text(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')}
 function paidStatus(value){const status=normalizeStatus(value);return ['pago','paga','paid','baixado','recebido','recebida','quitado','quitada'].some(item=>status.includes(item))}
 function inactiveStatus(value){const status=normalizeStatus(value);return ['cancelado','canceled','renegociado','renegotiated','substituido','substituida'].some(item=>status.includes(item))}
@@ -205,8 +209,8 @@ function cashbackAutomaticEvents(state){
 }
 
 async function scanAutomaticEvents(env){
-  if(!env?.DATABASE_URL||!env?.PROVEDOR_DB)return {scanned:false};
-  const sql=neon(env.DATABASE_URL),db=env.PROVEDOR_DB;await ensurePushTables(db);const state=await loadState(sql),today=brazilDateKey(),tomorrow=addDaysKey(today,1),yesterday=addDaysKey(today,-1),events=[];
+  if(!env?.PROVEDOR_DB)return {scanned:false};
+  const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,db=env.PROVEDOR_DB;await ensurePushTables(db);const state=await loadState(env,sql),today=brazilDateKey(),tomorrow=addDaysKey(today,1),yesterday=addDaysKey(today,-1),events=[];
   for(const invoice of Array.isArray(state?.invoices)?state.invoices:[])events.push(...invoiceAutomaticEvents(invoice,today,tomorrow,yesterday));
   events.push(...cashbackAutomaticEvents(state));
   const unique=[...new Map(events.map(event=>[event.key,event])).values()].slice(0,250);let sent=0,failed=0,skipped=0;
@@ -281,7 +285,7 @@ async function handleAdminPush(request,env,ctx){
 }
 
 async function handleCoreFetch(request,env,ctx){
-  const scan=env?.DATABASE_URL&&env?.PROVEDOR_DB?await shouldScanAfterRequest(request):false;
+  const scan=env?.PROVEDOR_DB?await shouldScanAfterRequest(request):false;
   const response=await coreWorker.fetch(request,env,ctx);
   if(scan&&response?.ok){const task=scanAutomaticEvents(env).catch(error=>console.error('Provedor Plus: falha na verificação automática de notificações após ação.',error));if(typeof ctx?.waitUntil==='function')ctx.waitUntil(task)}
   return response;
@@ -289,5 +293,5 @@ async function handleCoreFetch(request,env,ctx){
 
 export default {
   fetch(request,env,ctx){const path=new URL(request.url).pathname;if(path===CLIENT_PUSH_PATH)return handleCustomerPush(request,env,ctx);if(path===ADMIN_PUSH_PATH)return handleAdminPush(request,env,ctx);return handleCoreFetch(request,env,ctx)},
-  scheduled(controller,env,ctx){const result=coreWorker.scheduled(controller,env,ctx);if(env?.DATABASE_URL&&env?.PROVEDOR_DB&&typeof ctx?.waitUntil==='function')ctx.waitUntil(scanAutomaticEvents(env).catch(error=>console.error('Provedor Plus: falha no ciclo automático de notificações.',error)));return result}
+  scheduled(controller,env,ctx){const result=coreWorker.scheduled(controller,env,ctx);if(env?.PROVEDOR_DB&&typeof ctx?.waitUntil==='function')ctx.waitUntil(scanAutomaticEvents(env).catch(error=>console.error('Provedor Plus: falha no ciclo automático de notificações.',error)));return result}
 };

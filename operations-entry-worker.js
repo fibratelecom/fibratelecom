@@ -170,14 +170,24 @@ async function seedOperationalEventsD1(env,sql){
   }catch(error){console.error('Provedor Plus: histórico operacional antigo não pôde ser preparado no D1.',error);return false}
 }
 
+async function mirrorOperationalEventD1(env,row){
+  const db=env?.PROVEDOR_DB;if(!db||!row?.event_key)return false;
+  try{
+    await db.prepare('INSERT INTO pp_push_events (event_key,client_id,event_type,title,body,click_url,attempts,sent_count,failed_count,completed,last_attempt_at,sent_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(event_key) DO UPDATE SET client_id=excluded.client_id,event_type=excluded.event_type,title=excluded.title,body=excluded.body,click_url=excluded.click_url,attempts=excluded.attempts,sent_count=excluded.sent_count,failed_count=excluded.failed_count,completed=excluded.completed,last_attempt_at=excluded.last_attempt_at,sent_at=excluded.sent_at,created_at=excluded.created_at').bind(text(row.event_key),Number(row.client_id),text(row.event_type),text(row.title),text(row.body),text(row.click_url)||null,Math.max(0,Number(row.attempts)||0),Math.max(0,Number(row.sent_count)||0),Math.max(0,Number(row.failed_count)||0),row.completed===true||String(row.completed).toLowerCase()==='true'||Number(row.completed)===1?1:0,text(row.last_attempt_at)||null,text(row.sent_at)||null,text(row.created_at)||new Date().toISOString()).run();
+    return true;
+  }catch(error){console.error('Provedor Plus: espelho D1 do evento operacional falhou; Neon continua ativo.',error);return false}
+}
+
 async function attemptEvent(sql,env,row){
   const claimed=await sql`UPDATE pp_push_events SET attempts=attempts+1,last_attempt_at=now() WHERE id=${Number(row.id)} AND completed=false AND (attempts=0 OR (attempts=1 AND sent_count=0 AND failed_count>0 AND last_attempt_at<now()-interval '2 minutes')) RETURNING *`;
   const event=claimed?.[0];if(!event)return {skipped:true};
+  if(env?.PROVEDOR_DB)await mirrorOperationalEventD1(env,event);
   const db=env?.PROVEDOR_DB||null,subscriptions=db?await d1Rows(db.prepare('SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=? AND active=1 ORDER BY id ASC').bind(Number(event.client_id))):await sql`SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=${Number(event.client_id)} AND active=true ORDER BY id ASC`;if(!subscriptions.length)return {skipped:true,reason:'no-subscriptions'};
   const vapid=await readVapid(env,sql);if(!vapid?.privateJWK)return {skipped:true,reason:'no-vapid'};
   const payload=notificationPayload(event.title,event.body,event.click_url,`ops-${text(event.event_key).replace(/[^A-Za-z0-9_-]/g,'-').slice(-38)}`),result=await sendRows(sql,subscriptions,vapid,payload,db),completed=result.sent>0,sentAt=completed?new Date().toISOString():null;
   await sql`UPDATE pp_push_events SET sent_count=sent_count+${result.sent},failed_count=failed_count+${result.failed},completed=${completed},sent_at=COALESCE(sent_at,${sentAt}) WHERE id=${Number(event.id)}`;
   if(completed)await sql`INSERT INTO pp_push_messages (target_client_id,target_mode,title,body,click_url,sent_count,failed_count,created_by_name) VALUES (${Number(event.client_id)},'client',${text(event.title)},${text(event.body)},${text(event.click_url)},${result.sent},${result.failed},${`Automático · ${text(event.event_type).replace(/^operational:/,'')}`})`;
+  if(env?.PROVEDOR_DB){const current=await sql`SELECT event_key,client_id,event_type,title,body,click_url,attempts,sent_count,failed_count,completed,last_attempt_at,sent_at,created_at FROM pp_push_events WHERE id=${Number(event.id)} LIMIT 1`;if(current?.[0])await mirrorOperationalEventD1(env,current[0])}
   return result;
 }
 

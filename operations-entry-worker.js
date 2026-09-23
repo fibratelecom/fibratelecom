@@ -8,11 +8,12 @@ const VAPID_KEY='push_vapid_v1';
 const VAPID_D1_KEY='push_vapid_d1_v1';
 const OPS_SETTINGS_KEY='push_operational_settings_v1';
 const CUSTOM_TEMPLATES_KEY='push_custom_templates_v1';
+const PROTOCOL_OBSERVER_D1_MARKER='push_protocol_observer_d1_v1';
 const CLIENT_APP_ORIGIN='https://cliente.fibramais.workers.dev';
 const text=value=>String(value??'').trim();
 const normalize=value=>text(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
 const enc=new TextEncoder();
-let schemaReady=false;
+let schemaReady=false,protocolObserverReady=false;
 
 const DEFAULT_SETTINGS={
   statusSuspended:true,
@@ -158,7 +159,7 @@ function localClientMap(state){return new Map((Array.isArray(state?.clients)?sta
 function planNameFor(row,state){const direct=text(row?.plan);if(direct)return direct;const plan=(Array.isArray(state?.plans)?state.plans:[]).find(item=>Number(item?.id)===Number(row?.plan_id));return text(plan?.name)||'seu novo plano'}
 async function recentDueProtocol(store,clientId,newDay){
   try{
-    if(store?.prepare){const cutoff=new Date(Date.now()-10*60*1000).toISOString(),result=await store.prepare("SELECT details FROM pp_protocols WHERE client_id=? AND category='Vencimento' AND subject='Alteração de vencimento' AND status='Concluído' AND datetime(created_at)>=datetime(?) ORDER BY id DESC LIMIT 20").bind(Number(clientId),cutoff).all();return (result?.results||[]).some(row=>Number(parseObject(row?.details)?.newDay)===Number(newDay)||0)}
+    if(store?.prepare){const cutoff=new Date(Date.now()-10*60*1000).toISOString(),result=await store.prepare("SELECT details FROM pp_protocols WHERE client_id=? AND category='Vencimento' AND subject='Alteração de vencimento' AND status='Concluído' AND datetime(created_at)>=datetime(?) ORDER BY id DESC LIMIT 20").bind(Number(clientId),cutoff).all();return (result?.results||[]).some(row=>Number(parseObject(row?.details)?.newDay)===(Number(newDay)||0))}
     const rows=await store`SELECT id FROM pp_protocols WHERE client_id=${Number(clientId)} AND category='Vencimento' AND subject='Alteração de vencimento' AND status='Concluído' AND created_at>=now()-interval '10 minutes' AND COALESCE((details->>'newDay')::integer,0)=${Number(newDay)||0} ORDER BY id DESC LIMIT 1`;return Boolean(rows?.[0]?.id)
   }catch{return false}
 }
@@ -217,9 +218,25 @@ function negotiationEvents(state,settings){
   return events;
 }
 
-async function protocolEvents(sql,settings){
+async function ensureProtocolObserverD1(env,sql){
+  if(!env?.PROVEDOR_DB)return null;const db=env.PROVEDOR_DB;
+  await db.prepare('CREATE TABLE IF NOT EXISTS pp_push_protocol_observer (protocol_id INTEGER PRIMARY KEY,last_status TEXT NULL,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)').run();
+  if(protocolObserverReady)return db;
+  const marker=parseObject(await settingValue(db,PROTOCOL_OBSERVER_D1_MARKER));if(marker?.migratedAt){protocolObserverReady=true;return db}
+  let copied=0;
+  try{const rows=await sql`SELECT protocol_id,last_status,updated_at FROM pp_push_protocol_observer ORDER BY protocol_id ASC`;for(let start=0;start<(rows||[]).length;start+=50){const statements=rows.slice(start,start+50).map(row=>db.prepare('INSERT INTO pp_push_protocol_observer (protocol_id,last_status,updated_at) VALUES (?,?,?) ON CONFLICT(protocol_id) DO UPDATE SET last_status=excluded.last_status,updated_at=excluded.updated_at').bind(Number(row.protocol_id),text(row.last_status)||null,text(row.updated_at)||new Date().toISOString()));if(statements.length){await db.batch(statements);copied+=statements.length}}}catch(error){console.error('Provedor Plus: observador antigo de protocolos não pôde ser copiado para o D1.',error)}
+  if(!copied){const now=new Date().toISOString();await db.prepare('INSERT OR IGNORE INTO pp_push_protocol_observer (protocol_id,last_status,updated_at) SELECT id,status,? FROM pp_protocols WHERE client_id IS NOT NULL').bind(now).run()}
+  await saveSettingValue(db,PROTOCOL_OBSERVER_D1_MARKER,{migratedAt:new Date().toISOString(),copied});protocolObserverReady=true;return db;
+}
+
+async function protocolEvents(sql,settings,env){
   if(!settings.protocols)return [];
   try{
+    if(env?.PROVEDOR_DB){
+      const db=await ensureProtocolObserverD1(env,sql),result=await db.prepare("SELECT p.id,p.protocol,p.client_id,p.category,p.subject,p.status,p.created_at,p.closed_at,o.protocol_id AS observer_id,o.last_status FROM pp_protocols p LEFT JOIN pp_push_protocol_observer o ON o.protocol_id=p.id WHERE p.client_id IS NOT NULL AND (lower(p.category) LIKE '%atendimento%' OR lower(p.category) LIKE '%suporte%' OR lower(p.category) LIKE '%chamado%') AND (o.protocol_id IS NULL OR COALESCE(o.last_status,'')<>COALESCE(p.status,'')) ORDER BY p.id DESC LIMIT 300").all(),rows=result?.results||[],events=[];
+      for(const row of rows){const current=text(row.status),hasObserver=row.observer_id!==null&&row.observer_id!==undefined,changed=hasObserver&&normalize(current)!==normalize(row.last_status),isNew=!hasObserver&&recent(row.created_at,36);if(!changed&&!isNew)continue;const status=normalize(current),done=status.includes('conclu')||status.includes('fech'),opened=status.includes('aberto'),title=done?'Protocolo concluído':opened?'Protocolo aberto':'Protocolo atualizado',body=`${text(row.protocol)||`Protocolo ${row.id}`} · ${text(row.subject)||text(row.category)} · Status: ${current||'Atualizado'}.`;events.push({key:`protocol:${row.id}:${status}:${text(row.closed_at||row.created_at)}`,clientId:Number(row.client_id),type:done?'protocolo concluído':opened?'protocolo aberto':'protocolo atualizado',title,body,url:'/'})}
+      const now=new Date().toISOString(),statements=rows.map(row=>db.prepare('INSERT INTO pp_push_protocol_observer (protocol_id,last_status,updated_at) VALUES (?,?,?) ON CONFLICT(protocol_id) DO UPDATE SET last_status=excluded.last_status,updated_at=excluded.updated_at').bind(Number(row.id),text(row.status)||null,now));if(statements.length)await db.batch(statements);return events;
+    }
     const rows=await sql`SELECT p.id,p.protocol,p.client_id,p.category,p.subject,p.status,p.created_at,p.closed_at,o.protocol_id AS observer_id,o.last_status FROM pp_protocols p LEFT JOIN pp_push_protocol_observer o ON o.protocol_id=p.id WHERE p.client_id IS NOT NULL AND (p.category ILIKE '%Atendimento%' OR p.category ILIKE '%Suporte%' OR p.category ILIKE '%Chamado%') AND (o.protocol_id IS NULL OR o.last_status IS DISTINCT FROM p.status) ORDER BY p.id DESC LIMIT 300`,events=[];
     for(const row of rows||[]){const current=text(row.status),changed=Boolean(row.observer_id)&&normalize(current)!==normalize(row.last_status),isNew=!row.observer_id&&recent(row.created_at,36);if(!changed&&!isNew)continue;const status=normalize(current),done=status.includes('conclu')||status.includes('fech'),opened=status.includes('aberto'),title=done?'Protocolo concluído':opened?'Protocolo aberto':'Protocolo atualizado',body=`${text(row.protocol)||`Protocolo ${row.id}`} · ${text(row.subject)||text(row.category)} · Status: ${current||'Atualizado'}.`;events.push({key:`protocol:${row.id}:${status}:${text(row.closed_at||row.created_at)}`,clientId:Number(row.client_id),type:done?'protocolo concluído':opened?'protocolo aberto':'protocolo atualizado',title,body,url:'/'})}
     await sql`INSERT INTO pp_push_protocol_observer (protocol_id,last_status,updated_at) SELECT p.id,p.status,now() FROM pp_protocols p LEFT JOIN pp_push_protocol_observer o ON o.protocol_id=p.id WHERE p.client_id IS NOT NULL AND (p.category ILIKE '%Atendimento%' OR p.category ILIKE '%Suporte%' OR p.category ILIKE '%Chamado%') AND (o.protocol_id IS NULL OR o.last_status IS DISTINCT FROM p.status) ON CONFLICT (protocol_id) DO UPDATE SET last_status=EXCLUDED.last_status,updated_at=EXCLUDED.updated_at WHERE pp_push_protocol_observer.last_status IS DISTINCT FROM EXCLUDED.last_status`;
@@ -240,7 +257,7 @@ async function scanOperationalEvents(env){
   events.push(...trustEvents(state,settings));
   events.push(...await dueChangeEvents(protocolStore,settings));
   events.push(...negotiationEvents(state,settings));
-  events.push(...await protocolEvents(sql,settings));
+  events.push(...await protocolEvents(sql,settings,env));
   const unique=[...new Map(events.filter(item=>item?.clientId&&item?.key).map(item=>[item.key,item])).values()].slice(0,250);let sent=0,failed=0,skipped=0;
   for(const event of unique){try{const result=await sendAutomaticEvent(sql,env,event);if(result?.skipped)skipped++;else{sent+=Number(result?.sent)||0;failed+=Number(result?.failed)||0}}catch(error){failed++;console.error('Provedor Plus: falha em notificação operacional.',event?.type,error)}}
   const retry=await retryPending(sql,env);return {scanned:true,events:unique.length,sent:sent+retry.sent,failed:failed+retry.failed,skipped};

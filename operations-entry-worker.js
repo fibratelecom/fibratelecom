@@ -28,6 +28,7 @@ const DEFAULT_SETTINGS={
 
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store, max-age=0'}})}
 function parseObject(value){if(value&&typeof value==='object'&&!Array.isArray(value))return value;if(typeof value==='string')try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{}return {}}
+async function d1Rows(statement){const result=await statement.all();return Array.isArray(result?.results)?result.results:[]}
 function base64UrlBytes(value){const raw=text(value).replace(/-/g,'+').replace(/_/g,'/'),padded=raw+'='.repeat((4-raw.length%4)%4),bin=atob(padded),out=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);return out}
 function recent(value,hours=36){const time=new Date(value).getTime();return Number.isFinite(time)&&Date.now()-time>=0&&Date.now()-time<=hours*3600000}
 function brl(cents){return new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format((Number(cents)||0)/100)}
@@ -127,22 +128,22 @@ async function readVapid(env,sql){
   if(!record?.iv||!record?.data)return null;const key=await pushCryptoKey(env),plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:base64UrlBytes(record.iv)},key,base64UrlBytes(record.data));return JSON.parse(new TextDecoder().decode(plain))
 }
 
-async function sendOne(sql,row,vapid,payload){
+async function sendOne(sql,row,vapid,payload,db=null){
   try{
     const built=await buildPushHTTPRequest({privateJWK:vapid.privateJWK,subscription:{endpoint:row.endpoint,keys:{p256dh:row.p256dh,auth:row.auth}},message:{payload,adminContact:vapid.subject||'mailto:adrianomoreirausuarios@gmail.com',options:{ttl:86400,urgency:'normal',topic:text(payload.tag).replace(/[^A-Za-z0-9_-]/g,'').slice(0,32)||'fibra-plus'}}});
     const response=await fetch(built.endpoint,{method:'POST',headers:built.headers,body:built.body,redirect:'manual'}),now=new Date().toISOString();
-    if(response.ok){await sql`UPDATE pp_push_subscriptions SET active=true,last_success_at=${now},last_error=NULL,updated_at=${now} WHERE id=${Number(row.id)}`;return {ok:true}}
-    const error=`Push HTTP ${response.status}`;if(response.status===404||response.status===410)await sql`UPDATE pp_push_subscriptions SET active=false,last_error=${error},updated_at=${now} WHERE id=${Number(row.id)}`;else await sql`UPDATE pp_push_subscriptions SET last_error=${error},updated_at=${now} WHERE id=${Number(row.id)}`;return {ok:false,error};
-  }catch(error){const message=error instanceof Error?error.message:String(error),now=new Date().toISOString();try{await sql`UPDATE pp_push_subscriptions SET last_error=${message.slice(0,500)},updated_at=${now} WHERE id=${Number(row.id)}`}catch{}return {ok:false,error:message}}
+    if(response.ok){if(db)await db.prepare('UPDATE pp_push_subscriptions SET active=1,last_success_at=?,last_error=NULL,updated_at=? WHERE id=?').bind(now,now,Number(row.id)).run();else await sql`UPDATE pp_push_subscriptions SET active=true,last_success_at=${now},last_error=NULL,updated_at=${now} WHERE id=${Number(row.id)}`;return {ok:true}}
+    const error=`Push HTTP ${response.status}`;if(db){if(response.status===404||response.status===410)await db.prepare('UPDATE pp_push_subscriptions SET active=0,last_error=?,updated_at=? WHERE id=?').bind(error,now,Number(row.id)).run();else await db.prepare('UPDATE pp_push_subscriptions SET last_error=?,updated_at=? WHERE id=?').bind(error,now,Number(row.id)).run()}else if(response.status===404||response.status===410)await sql`UPDATE pp_push_subscriptions SET active=false,last_error=${error},updated_at=${now} WHERE id=${Number(row.id)}`;else await sql`UPDATE pp_push_subscriptions SET last_error=${error},updated_at=${now} WHERE id=${Number(row.id)}`;return {ok:false,error};
+  }catch(error){const message=error instanceof Error?error.message:String(error),now=new Date().toISOString();try{if(db)await db.prepare('UPDATE pp_push_subscriptions SET last_error=?,updated_at=? WHERE id=?').bind(message.slice(0,500),now,Number(row.id)).run();else await sql`UPDATE pp_push_subscriptions SET last_error=${message.slice(0,500)},updated_at=${now} WHERE id=${Number(row.id)}`}catch{}return {ok:false,error:message}}
 }
-async function sendRows(sql,rows,vapid,payload){let sent=0,failed=0;for(let start=0;start<rows.length;start+=10){const results=await Promise.all(rows.slice(start,start+10).map(row=>sendOne(sql,row,vapid,payload)));for(const result of results)result.ok?sent++:failed++}return {sent,failed,total:rows.length}}
+async function sendRows(sql,rows,vapid,payload,db=null){let sent=0,failed=0;for(let start=0;start<rows.length;start+=10){const results=await Promise.all(rows.slice(start,start+10).map(row=>sendOne(sql,row,vapid,payload,db)));for(const result of results)result.ok?sent++:failed++}return {sent,failed,total:rows.length}}
 
 async function attemptEvent(sql,env,row){
   const claimed=await sql`UPDATE pp_push_events SET attempts=attempts+1,last_attempt_at=now() WHERE id=${Number(row.id)} AND completed=false AND (attempts=0 OR (attempts=1 AND sent_count=0 AND failed_count>0 AND last_attempt_at<now()-interval '2 minutes')) RETURNING *`;
   const event=claimed?.[0];if(!event)return {skipped:true};
-  const subscriptions=await sql`SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=${Number(event.client_id)} AND active=true ORDER BY id ASC`;if(!subscriptions.length)return {skipped:true,reason:'no-subscriptions'};
+  const db=env?.PROVEDOR_DB||null,subscriptions=db?await d1Rows(db.prepare('SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=? AND active=1 ORDER BY id ASC').bind(Number(event.client_id))):await sql`SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=${Number(event.client_id)} AND active=true ORDER BY id ASC`;if(!subscriptions.length)return {skipped:true,reason:'no-subscriptions'};
   const vapid=await readVapid(env,sql);if(!vapid?.privateJWK)return {skipped:true,reason:'no-vapid'};
-  const payload=notificationPayload(event.title,event.body,event.click_url,`ops-${text(event.event_key).replace(/[^A-Za-z0-9_-]/g,'-').slice(-38)}`),result=await sendRows(sql,subscriptions,vapid,payload),completed=result.sent>0,sentAt=completed?new Date().toISOString():null;
+  const payload=notificationPayload(event.title,event.body,event.click_url,`ops-${text(event.event_key).replace(/[^A-Za-z0-9_-]/g,'-').slice(-38)}`),result=await sendRows(sql,subscriptions,vapid,payload,db),completed=result.sent>0,sentAt=completed?new Date().toISOString():null;
   await sql`UPDATE pp_push_events SET sent_count=sent_count+${result.sent},failed_count=failed_count+${result.failed},completed=${completed},sent_at=COALESCE(sent_at,${sentAt}) WHERE id=${Number(event.id)}`;
   if(completed)await sql`INSERT INTO pp_push_messages (target_client_id,target_mode,title,body,click_url,sent_count,failed_count,created_by_name) VALUES (${Number(event.client_id)},'client',${text(event.title)},${text(event.body)},${text(event.click_url)},${result.sent},${result.failed},${`Automático · ${text(event.event_type).replace(/^operational:/,'')}`})`;
   return result;
@@ -151,7 +152,7 @@ async function attemptEvent(sql,env,row){
 async function sendAutomaticEvent(sql,env,event){
   const clientId=Number(event?.clientId)||0,key=text(event?.key),type=`operational:${text(event?.type)||'aviso'}`,title=text(event?.title).slice(0,90),body=text(event?.body).slice(0,500),url=normalizeClickUrl(event?.url||'/');
   if(!clientId||!key||!title||!body)return {skipped:true};
-  const subscriptions=await sql`SELECT id FROM pp_push_subscriptions WHERE client_id=${clientId} AND active=true LIMIT 1`;if(!subscriptions.length)return {skipped:true,reason:'no-subscriptions'};
+  const subscriptions=env?.PROVEDOR_DB?await d1Rows(env.PROVEDOR_DB.prepare('SELECT id FROM pp_push_subscriptions WHERE client_id=? AND active=1 LIMIT 1').bind(clientId)):await sql`SELECT id FROM pp_push_subscriptions WHERE client_id=${clientId} AND active=true LIMIT 1`;if(!subscriptions.length)return {skipped:true,reason:'no-subscriptions'};
   await sql`INSERT INTO pp_push_events (event_key,client_id,event_type,title,body,click_url) VALUES (${key},${clientId},${type},${title},${body},${url}) ON CONFLICT (event_key) DO NOTHING`;
   const rows=await sql`SELECT * FROM pp_push_events WHERE event_key=${key} LIMIT 1`;return rows?.[0]?attemptEvent(sql,env,rows[0]):{skipped:true};
 }

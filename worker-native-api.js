@@ -21,6 +21,7 @@ const normalizeRole=value=>{const role=text(value).toLowerCase();return ['admin'
 function defaultPermissions(role){role=normalizeRole(role);if(role==='admin')return [...ALL_PERMISSIONS];if(role==='tecnico')return ['dashboard','clients','tickets','network'];return ['dashboard','clients','plans','finance','billing','tickets'];}
 function normalizePermissions(value,role){if(normalizeRole(role)==='admin')return [...ALL_PERMISSIONS];const list=Array.isArray(value)?value:defaultPermissions(role);return [...new Set(list.map(v=>text(v)).filter(v=>ALL_PERMISSIONS.includes(v)))];}
 function sqlFor(env){if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão nativa com o Neon não configurada na Cloudflare.'),{statusCode:503});const sql=neon(env.DATABASE_URL);SQL_ENV.set(sql,env);return sql;}
+function authSqlFor(env){if(env?.DATABASE_URL)return sqlFor(env);const sql=()=>{throw Object.assign(new Error('Cópia Neon de recuperação da autenticação não configurada.'),{statusCode:503})};SQL_ENV.set(sql,env);return sql;}
 function d1Bool(value){return value===null||value===undefined?null:(bool(value)?1:0)}
 async function mirrorClientRowToD1(env,row){
   if(!env?.PROVEDOR_DB||!row?.id)return false;
@@ -193,7 +194,7 @@ async function requirePermission(request,sql,permission){const current=await req
 
 export async function handleNativeAuth(request,env){
   if(request.method!=='POST')return apiJson({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-native-auth'});
-  const sql=sqlFor(env);
+  const sql=authSqlFor(env);
   try{
     const db=await ensureAuthD1(env,sql),body=await bodyOf(request),action=text(body?.action),data=body?.data||{};
     if(action==='status'){

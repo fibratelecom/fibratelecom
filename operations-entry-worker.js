@@ -103,7 +103,11 @@ async function ensureTables(sql){
   schemaReady=true;
 }
 
-async function loadState(sql){const rows=await sql`SELECT value FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`;return parseObject(rows?.[0]?.value)}
+async function loadState(env,sql=null){
+  if(env?.PROVEDOR_DB)try{return parseObject(await settingValue(env.PROVEDOR_DB,STATE_KEY))}catch(error){console.error('Provedor Plus: leitura D1 do estado operacional falhou; usando cópia Neon.',error)}
+  if(sql)return parseObject(await settingValue(sql,STATE_KEY));
+  throw Object.assign(new Error('Estado D1 operacional não está disponível.'),{statusCode:503});
+}
 async function settingValue(store,key){
   if(store?.prepare){const row=await store.prepare('SELECT value FROM pp_settings WHERE key = ? LIMIT 1').bind(key).first();return row?.value}
   const rows=await store`SELECT value FROM pp_settings WHERE key=${key} LIMIT 1`;return rows?.[0]?.value;
@@ -120,12 +124,12 @@ async function saveTemplates(store,items){const safe=(Array.isArray(items)?items
 function newTemplateId(){const random=crypto.getRandomValues(new Uint32Array(1))[0].toString(36);return `tpl-${Date.now().toString(36)}-${random}`}
 
 async function pushCryptoKey(env){const secret=text(env.BANK_SECRET_KEY)||text(env.PORTAL_SESSION_SECRET)||text(env.DATABASE_URL);if(!secret)throw new Error('Chave de proteção das notificações não configurada.');const raw=await crypto.subtle.digest('SHA-256',enc.encode(`provedor-plus-push-v1|${secret}`));return crypto.subtle.importKey('raw',raw,{name:'AES-GCM'},false,['decrypt'])}
-async function readVapid(env,sql){
+async function readVapid(env,sql=null){
   let record=null;
   if(env?.PROVEDOR_DB){
     try{record=parseObject(await settingValue(env.PROVEDOR_DB,VAPID_D1_KEY))}catch(error){console.error('Provedor Plus: leitura D1 do VAPID operacional falhou; usando cópia legado.',error)}
   }
-  if(!record?.iv||!record?.data){const rows=await sql`SELECT value FROM pp_settings WHERE key=${VAPID_KEY} LIMIT 1`;record=rows?.[0]?.value}
+  if((!record?.iv||!record?.data)&&sql){const rows=await sql`SELECT value FROM pp_settings WHERE key=${VAPID_KEY} LIMIT 1`;record=rows?.[0]?.value}
   if(!record?.iv||!record?.data)return null;const key=await pushCryptoKey(env),plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:base64UrlBytes(record.iv)},key,base64UrlBytes(record.data));return JSON.parse(new TextDecoder().decode(plain))
 }
 
@@ -135,11 +139,11 @@ async function sendOne(sql,row,vapid,payload,db=null){
     const response=await fetch(built.endpoint,{method:'POST',headers:built.headers,body:built.body,redirect:'manual'}),now=new Date().toISOString();
     if(response.ok){if(db)await db.prepare('UPDATE pp_push_subscriptions SET active=1,last_success_at=?,last_error=NULL,updated_at=? WHERE id=?').bind(now,now,Number(row.id)).run();else await sql`UPDATE pp_push_subscriptions SET active=true,last_success_at=${now},last_error=NULL,updated_at=${now} WHERE id=${Number(row.id)}`;return {ok:true}}
     const error=`Push HTTP ${response.status}`;if(db){if(response.status===404||response.status===410)await db.prepare('UPDATE pp_push_subscriptions SET active=0,last_error=?,updated_at=? WHERE id=?').bind(error,now,Number(row.id)).run();else await db.prepare('UPDATE pp_push_subscriptions SET last_error=?,updated_at=? WHERE id=?').bind(error,now,Number(row.id)).run()}else if(response.status===404||response.status===410)await sql`UPDATE pp_push_subscriptions SET active=false,last_error=${error},updated_at=${now} WHERE id=${Number(row.id)}`;else await sql`UPDATE pp_push_subscriptions SET last_error=${error},updated_at=${now} WHERE id=${Number(row.id)}`;return {ok:false,error};
-  }catch(error){const message=error instanceof Error?error.message:String(error),now=new Date().toISOString();try{if(db)await db.prepare('UPDATE pp_push_subscriptions SET last_error=?,updated_at=? WHERE id=?').bind(message.slice(0,500),now,Number(row.id)).run();else await sql`UPDATE pp_push_subscriptions SET last_error=${message.slice(0,500)},updated_at=${now} WHERE id=${Number(row.id)}`}catch{}return {ok:false,error:message}}
+  }catch(error){const message=error instanceof Error?error.message:String(error),now=new Date().toISOString();try{if(db)await db.prepare('UPDATE pp_push_subscriptions SET last_error=?,updated_at=? WHERE id=?').bind(message.slice(0,500),now,Number(row.id)).run();else if(sql)await sql`UPDATE pp_push_subscriptions SET last_error=${message.slice(0,500)},updated_at=${now} WHERE id=${Number(row.id)}`}catch{}return {ok:false,error:message}}
 }
 async function sendRows(sql,rows,vapid,payload,db=null){let sent=0,failed=0;for(let start=0;start<rows.length;start+=10){const results=await Promise.all(rows.slice(start,start+10).map(row=>sendOne(sql,row,vapid,payload,db)));for(const result of results)result.ok?sent++:failed++}return {sent,failed,total:rows.length}}
 
-async function seedOperationalEventsD1(env,sql){
+async function seedOperationalEventsD1(env,sql=null){
   if(!env?.PROVEDOR_DB||operationalEventsSeedReady)return false;
   const db=env.PROVEDOR_DB;
   try{
@@ -160,11 +164,13 @@ async function seedOperationalEventsD1(env,sql){
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`).run();
     const marker=parseObject(await settingValue(db,OPERATIONAL_EVENTS_D1_MARKER));if(marker?.migratedAt){operationalEventsSeedReady=true;return true}
-    const rows=await sql`SELECT event_key,client_id,event_type,title,body,click_url,attempts,sent_count,failed_count,completed,last_attempt_at,sent_at,created_at FROM pp_push_events WHERE event_type LIKE 'operational:%' ORDER BY id ASC`;
     let copied=0;
-    for(let start=0;start<(rows||[]).length;start+=40){
-      const statements=rows.slice(start,start+40).map(row=>db.prepare('INSERT OR IGNORE INTO pp_push_events (event_key,client_id,event_type,title,body,click_url,attempts,sent_count,failed_count,completed,last_attempt_at,sent_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(text(row.event_key),Number(row.client_id),text(row.event_type),text(row.title),text(row.body),text(row.click_url)||null,Math.max(0,Number(row.attempts)||0),Math.max(0,Number(row.sent_count)||0),Math.max(0,Number(row.failed_count)||0),row.completed===true||String(row.completed).toLowerCase()==='true'||Number(row.completed)===1?1:0,text(row.last_attempt_at)||null,text(row.sent_at)||null,text(row.created_at)||new Date().toISOString()));
-      if(statements.length){await db.batch(statements);copied+=statements.length}
+    if(sql){
+      const rows=await sql`SELECT event_key,client_id,event_type,title,body,click_url,attempts,sent_count,failed_count,completed,last_attempt_at,sent_at,created_at FROM pp_push_events WHERE event_type LIKE 'operational:%' ORDER BY id ASC`;
+      for(let start=0;start<(rows||[]).length;start+=40){
+        const statements=rows.slice(start,start+40).map(row=>db.prepare('INSERT OR IGNORE INTO pp_push_events (event_key,client_id,event_type,title,body,click_url,attempts,sent_count,failed_count,completed,last_attempt_at,sent_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(text(row.event_key),Number(row.client_id),text(row.event_type),text(row.title),text(row.body),text(row.click_url)||null,Math.max(0,Number(row.attempts)||0),Math.max(0,Number(row.sent_count)||0),Math.max(0,Number(row.failed_count)||0),row.completed===true||String(row.completed).toLowerCase()==='true'||Number(row.completed)===1?1:0,text(row.last_attempt_at)||null,text(row.sent_at)||null,text(row.created_at)||new Date().toISOString()));
+        if(statements.length){await db.batch(statements);copied+=statements.length}
+      }
     }
     await saveSettingValue(db,OPERATIONAL_EVENTS_D1_MARKER,{migratedAt:new Date().toISOString(),copied});operationalEventsSeedReady=true;return true;
   }catch(error){console.error('Provedor Plus: histórico operacional antigo não pôde ser preparado no D1.',error);return false}
@@ -176,15 +182,15 @@ async function attemptEvent(sql,env,row){
   if(db){
     const now=new Date().toISOString(),retryBefore=new Date(Date.now()-2*60*1000).toISOString();
     const claimed=await d1Rows(db.prepare("UPDATE pp_push_events SET attempts=attempts+1,last_attempt_at=? WHERE id=? AND completed=0 AND (attempts=0 OR (attempts=1 AND sent_count=0 AND failed_count>0 AND datetime(last_attempt_at)<datetime(?))) RETURNING *").bind(now,Number(row.id),retryBefore));event=claimed?.[0]||null;
-  }else{const claimed=await sql`UPDATE pp_push_events SET attempts=attempts+1,last_attempt_at=now() WHERE id=${Number(row.id)} AND completed=false AND (attempts=0 OR (attempts=1 AND sent_count=0 AND failed_count>0 AND last_attempt_at<now()-interval '2 minutes')) RETURNING *`;event=claimed?.[0]||null}
+  }else if(sql){const claimed=await sql`UPDATE pp_push_events SET attempts=attempts+1,last_attempt_at=now() WHERE id=${Number(row.id)} AND completed=false AND (attempts=0 OR (attempts=1 AND sent_count=0 AND failed_count>0 AND last_attempt_at<now()-interval '2 minutes')) RETURNING *`;event=claimed?.[0]||null}
   if(!event)return {skipped:true};
-  const subscriptions=db?await d1Rows(db.prepare('SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=? AND active=1 ORDER BY id ASC').bind(Number(event.client_id))):await sql`SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=${Number(event.client_id)} AND active=true ORDER BY id ASC`;if(!subscriptions.length)return {skipped:true,reason:'no-subscriptions'};
+  const subscriptions=db?await d1Rows(db.prepare('SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=? AND active=1 ORDER BY id ASC').bind(Number(event.client_id))):sql?await sql`SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=${Number(event.client_id)} AND active=true ORDER BY id ASC`:[];if(!subscriptions.length)return {skipped:true,reason:'no-subscriptions'};
   const vapid=await readVapid(env,sql);if(!vapid?.privateJWK)return {skipped:true,reason:'no-vapid'};
   const payload=notificationPayload(event.title,event.body,event.click_url,`ops-${text(event.event_key).replace(/[^A-Za-z0-9_-]/g,'-').slice(-38)}`),result=await sendRows(sql,subscriptions,vapid,payload,db),completed=result.sent>0,sentAt=completed?new Date().toISOString():null;
   if(db){
     await db.prepare('UPDATE pp_push_events SET sent_count=sent_count+?,failed_count=failed_count+?,completed=?,sent_at=COALESCE(sent_at,?) WHERE id=?').bind(result.sent,result.failed,completed?1:0,sentAt,Number(event.id)).run();
     if(completed)try{await db.prepare('INSERT INTO pp_push_messages (target_client_id,target_mode,title,body,click_url,sent_count,failed_count,created_by_name) VALUES (?,?,?,?,?,?,?,?)').bind(Number(event.client_id),'client',text(event.title),text(event.body),text(event.click_url),result.sent,result.failed,`Automático · ${text(event.event_type).replace(/^operational:/,'')}`).run()}catch(error){console.error('Provedor Plus: histórico da notificação operacional não pôde ser gravado no D1.',error)}
-  }else{
+  }else if(sql){
     await sql`UPDATE pp_push_events SET sent_count=sent_count+${result.sent},failed_count=failed_count+${result.failed},completed=${completed},sent_at=COALESCE(sent_at,${sentAt}) WHERE id=${Number(event.id)}`;
     if(completed)await sql`INSERT INTO pp_push_messages (target_client_id,target_mode,title,body,click_url,sent_count,failed_count,created_by_name) VALUES (${Number(event.client_id)},'client',${text(event.title)},${text(event.body)},${text(event.click_url)},${result.sent},${result.failed},${`Automático · ${text(event.event_type).replace(/^operational:/,'')}`})`;
   }
@@ -194,10 +200,10 @@ async function attemptEvent(sql,env,row){
 async function sendAutomaticEvent(sql,env,event){
   const clientId=Number(event?.clientId)||0,key=text(event?.key),type=`operational:${text(event?.type)||'aviso'}`,title=text(event?.title).slice(0,90),body=text(event?.body).slice(0,500),url=normalizeClickUrl(event?.url||'/');
   if(!clientId||!key||!title||!body)return {skipped:true};
-  const db=env?.PROVEDOR_DB&&operationalEventsSeedReady?env.PROVEDOR_DB:null,subscriptions=db?await d1Rows(db.prepare('SELECT id FROM pp_push_subscriptions WHERE client_id=? AND active=1 LIMIT 1').bind(clientId)):await sql`SELECT id FROM pp_push_subscriptions WHERE client_id=${clientId} AND active=true LIMIT 1`;if(!subscriptions.length)return {skipped:true,reason:'no-subscriptions'};
+  const db=env?.PROVEDOR_DB&&operationalEventsSeedReady?env.PROVEDOR_DB:null,subscriptions=db?await d1Rows(db.prepare('SELECT id FROM pp_push_subscriptions WHERE client_id=? AND active=1 LIMIT 1').bind(clientId)):sql?await sql`SELECT id FROM pp_push_subscriptions WHERE client_id=${clientId} AND active=true LIMIT 1`:[];if(!subscriptions.length)return {skipped:true,reason:'no-subscriptions'};
   let row=null;
   if(db){await db.prepare('INSERT OR IGNORE INTO pp_push_events (event_key,client_id,event_type,title,body,click_url) VALUES (?,?,?,?,?,?)').bind(key,clientId,type,title,body,url).run();row=await db.prepare('SELECT * FROM pp_push_events WHERE event_key=? LIMIT 1').bind(key).first()}
-  else{await sql`INSERT INTO pp_push_events (event_key,client_id,event_type,title,body,click_url) VALUES (${key},${clientId},${type},${title},${body},${url}) ON CONFLICT (event_key) DO NOTHING`;const rows=await sql`SELECT * FROM pp_push_events WHERE event_key=${key} LIMIT 1`;row=rows?.[0]||null}
+  else if(sql){await sql`INSERT INTO pp_push_events (event_key,client_id,event_type,title,body,click_url) VALUES (${key},${clientId},${type},${title},${body},${url}) ON CONFLICT (event_key) DO NOTHING`;const rows=await sql`SELECT * FROM pp_push_events WHERE event_key=${key} LIMIT 1`;row=rows?.[0]||null}
   return row?attemptEvent(sql,env,row):{skipped:true};
 }
 
@@ -210,20 +216,21 @@ async function recentDueProtocol(store,clientId,newDay){
   }catch{return false}
 }
 
-async function ensureClientObserverD1(env,sql){
+async function ensureClientObserverD1(env,sql=null){
   if(!env?.PROVEDOR_DB)return null;const db=env.PROVEDOR_DB;
   await db.prepare('CREATE TABLE IF NOT EXISTS pp_push_observer_state (client_id INTEGER PRIMARY KEY,last_status TEXT NULL,last_plan TEXT NULL,last_due_day INTEGER NULL,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)').run();
   if(clientObserverReady)return db;
   const marker=parseObject(await settingValue(db,CLIENT_OBSERVER_D1_MARKER));if(marker?.migratedAt){clientObserverReady=true;return db}
   let copied=0;
-  try{const rows=await sql`SELECT client_id,last_status,last_plan,last_due_day,updated_at FROM pp_push_observer_state ORDER BY client_id ASC`;for(let start=0;start<(rows||[]).length;start+=50){const statements=rows.slice(start,start+50).map(row=>db.prepare('INSERT INTO pp_push_observer_state (client_id,last_status,last_plan,last_due_day,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(client_id) DO UPDATE SET last_status=excluded.last_status,last_plan=excluded.last_plan,last_due_day=excluded.last_due_day,updated_at=excluded.updated_at').bind(Number(row.client_id),text(row.last_status)||null,text(row.last_plan)||null,Number(row.last_due_day)||null,text(row.updated_at)||new Date().toISOString()));if(statements.length){await db.batch(statements);copied+=statements.length}}}catch(error){console.error('Provedor Plus: observador antigo de clientes não pôde ser copiado para o D1.',error)}
+  if(sql)try{const rows=await sql`SELECT client_id,last_status,last_plan,last_due_day,updated_at FROM pp_push_observer_state ORDER BY client_id ASC`;for(let start=0;start<(rows||[]).length;start+=50){const statements=rows.slice(start,start+50).map(row=>db.prepare('INSERT INTO pp_push_observer_state (client_id,last_status,last_plan,last_due_day,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(client_id) DO UPDATE SET last_status=excluded.last_status,last_plan=excluded.last_plan,last_due_day=excluded.last_due_day,updated_at=excluded.updated_at').bind(Number(row.client_id),text(row.last_status)||null,text(row.last_plan)||null,Number(row.last_due_day)||null,text(row.updated_at)||new Date().toISOString()));if(statements.length){await db.batch(statements);copied+=statements.length}}}catch(error){console.error('Provedor Plus: observador antigo de clientes não pôde ser copiado para o D1.',error)}
+  if(!copied){const now=new Date().toISOString();await db.prepare("INSERT OR IGNORE INTO pp_push_observer_state (client_id,last_status,last_plan,last_due_day,updated_at) SELECT id,status,COALESCE(plan,'')||'|'||COALESCE(CAST(plan_id AS TEXT),''),due_day,? FROM pp_clients").bind(now).run()}
   await saveSettingValue(db,CLIENT_OBSERVER_D1_MARKER,{migratedAt:new Date().toISOString(),copied});clientObserverReady=true;return db;
 }
 
-async function statusAndPlanEvents(sql,state,settings,protocolStore=sql,env=null){
+async function statusAndPlanEvents(sql,state,settings,protocolStore=null,env=null){
   const locals=localClientMap(state),events=[];
   if(env?.PROVEDOR_DB){
-    const db=await ensureClientObserverD1(env,sql),rows=await sql`SELECT id,name,status,plan,plan_id,due_day,updated_at FROM pp_clients ORDER BY id ASC`,observerResult=await db.prepare('SELECT client_id,last_status,last_plan,last_due_day FROM pp_push_observer_state').all(),observers=new Map((observerResult?.results||[]).map(row=>[Number(row.client_id),row])),updates=[];
+    const db=await ensureClientObserverD1(env,sql),clientResult=await db.prepare('SELECT id,name,status,plan,plan_id,due_day,updated_at FROM pp_clients ORDER BY id ASC').all(),rows=clientResult?.results||[],observerResult=await db.prepare('SELECT client_id,last_status,last_plan,last_due_day FROM pp_push_observer_state').all(),observers=new Map((observerResult?.results||[]).map(row=>[Number(row.client_id),row])),updates=[];
     for(const row of rows||[]){
       const clientId=Number(row.id)||0;if(!clientId)continue;const observer=observers.get(clientId),currentStatus=text(row.status),currentPlan=`${text(row.plan)}|${row.plan_id??''}`,currentDue=Number(row.due_day)||0;
       if(!observer){updates.push({clientId,status:currentStatus,plan:currentPlan,due:currentDue});continue}
@@ -231,12 +238,13 @@ async function statusAndPlanEvents(sql,state,settings,protocolStore=sql,env=null
       const local=locals.get(clientId)||{},trustActive=recent(local?.trust_release_at,36)&&new Date(text(local?.trust_release_until)).getTime()>Date.now(),trustReblocked=recent(local?.trust_release_reblocked_at,36),stamp=text(row.updated_at)||Date.now();
       if(statusChanged){const wasBlocked=blockedStatus(oldStatus),isBlocked=blockedStatus(currentStatus);if(!wasBlocked&&isBlocked&&settings.statusSuspended&&!trustReblocked)events.push({key:`status-blocked:${clientId}:${stamp}`,clientId,type:'internet suspensa',title:'Conexão suspensa',body:'Sua conexão foi suspensa. Consulte suas faturas e opções de regularização na Área do Cliente.',url:'/#conexao'});if(wasBlocked&&!isBlocked&&settings.statusRestored&&!trustActive)events.push({key:`status-restored:${clientId}:${stamp}`,clientId,type:'internet liberada',title:'Conexão liberada',body:'Seu acesso à internet foi liberado novamente.',url:'/#conexao'})}
       if(planChanged&&settings.planChange){const name=planNameFor(row,state);events.push({key:`plan-change:${clientId}:${stamp}`,clientId,type:'plano alterado',title:'Plano atualizado',body:`Seu plano foi atualizado para ${name}. Consulte os detalhes na Área do Cliente.`,url:'/#perfil'})}
-      if(settings.dueChange&&oldDue>0&&currentDue>0&&dueChanged&&!await recentDueProtocol(protocolStore,clientId,currentDue))events.push({key:`due-admin:${clientId}:${stamp}:${oldDue}-${currentDue}`,clientId,type:'mudança de vencimento',title:'Vencimento alterado',body:`Seu vencimento foi alterado do dia ${oldDue} para o dia ${currentDue}. Consulte seus dados na Área do Cliente.`,url:'/#perfil'});
+      if(settings.dueChange&&oldDue>0&&currentDue>0&&dueChanged&&!await recentDueProtocol(protocolStore||db,clientId,currentDue))events.push({key:`due-admin:${clientId}:${stamp}:${oldDue}-${currentDue}`,clientId,type:'mudança de vencimento',title:'Vencimento alterado',body:`Seu vencimento foi alterado do dia ${oldDue} para o dia ${currentDue}. Consulte seus dados na Área do Cliente.`,url:'/#perfil'});
       updates.push({clientId,status:currentStatus,plan:currentPlan,due:currentDue});
     }
     const now=new Date().toISOString();for(let start=0;start<updates.length;start+=50){const statements=updates.slice(start,start+50).map(item=>db.prepare('INSERT INTO pp_push_observer_state (client_id,last_status,last_plan,last_due_day,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(client_id) DO UPDATE SET last_status=excluded.last_status,last_plan=excluded.last_plan,last_due_day=excluded.last_due_day,updated_at=excluded.updated_at').bind(item.clientId,item.status||null,item.plan||null,item.due||null,now));if(statements.length)await db.batch(statements)}
     return events;
   }
+  if(!sql)return events;
   const rows=await sql`SELECT c.id,c.name,c.status,c.plan,c.plan_id,c.due_day,c.updated_at,o.client_id AS observer_id,o.last_status,o.last_plan,o.last_due_day FROM pp_clients c LEFT JOIN pp_push_observer_state o ON o.client_id=c.id WHERE o.client_id IS NULL OR o.last_status IS DISTINCT FROM c.status OR o.last_plan IS DISTINCT FROM (COALESCE(c.plan,'')||'|'||COALESCE(c.plan_id::text,'')) OR o.last_due_day IS DISTINCT FROM c.due_day ORDER BY c.id ASC`;
   for(const row of rows||[]){
     if(!row.observer_id)continue;
@@ -247,7 +255,7 @@ async function statusAndPlanEvents(sql,state,settings,protocolStore=sql,env=null
       if(wasBlocked&&!isBlocked&&settings.statusRestored&&!trustActive)events.push({key:`status-restored:${clientId}:${stamp}`,clientId,type:'internet liberada',title:'Conexão liberada',body:'Seu acesso à internet foi liberado novamente.',url:'/#conexao'});
     }
     if(currentPlan!==oldPlan&&settings.planChange){const stamp=text(row.updated_at)||Date.now(),name=planNameFor(row,state);events.push({key:`plan-change:${clientId}:${stamp}`,clientId,type:'plano alterado',title:'Plano atualizado',body:`Seu plano foi atualizado para ${name}. Consulte os detalhes na Área do Cliente.`,url:'/#perfil'})}
-    if(settings.dueChange&&oldDue>0&&currentDue>0&&currentDue!==oldDue&&!await recentDueProtocol(protocolStore,clientId,currentDue)){const stamp=text(row.updated_at)||Date.now();events.push({key:`due-admin:${clientId}:${stamp}:${oldDue}-${currentDue}`,clientId,type:'mudança de vencimento',title:'Vencimento alterado',body:`Seu vencimento foi alterado do dia ${oldDue} para o dia ${currentDue}. Consulte seus dados na Área do Cliente.`,url:'/#perfil'})}
+    if(settings.dueChange&&oldDue>0&&currentDue>0&&currentDue!==oldDue&&!await recentDueProtocol(protocolStore||sql,clientId,currentDue)){const stamp=text(row.updated_at)||Date.now();events.push({key:`due-admin:${clientId}:${stamp}:${oldDue}-${currentDue}`,clientId,type:'mudança de vencimento',title:'Vencimento alterado',body:`Seu vencimento foi alterado do dia ${oldDue} para o dia ${currentDue}. Consulte seus dados na Área do Cliente.`,url:'/#perfil'})}
   }
   await sql`INSERT INTO pp_push_observer_state (client_id,last_status,last_plan,last_due_day,updated_at) SELECT c.id,c.status,COALESCE(c.plan,'')||'|'||COALESCE(c.plan_id::text,''),c.due_day,now() FROM pp_clients c LEFT JOIN pp_push_observer_state o ON o.client_id=c.id WHERE o.client_id IS NULL OR o.last_status IS DISTINCT FROM c.status OR o.last_plan IS DISTINCT FROM (COALESCE(c.plan,'')||'|'||COALESCE(c.plan_id::text,'')) OR o.last_due_day IS DISTINCT FROM c.due_day ON CONFLICT (client_id) DO UPDATE SET last_status=EXCLUDED.last_status,last_plan=EXCLUDED.last_plan,last_due_day=EXCLUDED.last_due_day,updated_at=EXCLUDED.updated_at WHERE pp_push_observer_state.last_status IS DISTINCT FROM EXCLUDED.last_status OR pp_push_observer_state.last_plan IS DISTINCT FROM EXCLUDED.last_plan OR pp_push_observer_state.last_due_day IS DISTINCT FROM EXCLUDED.last_due_day`;
   return events;
@@ -290,13 +298,13 @@ function negotiationEvents(state,settings){
   return events;
 }
 
-async function ensureProtocolObserverD1(env,sql){
+async function ensureProtocolObserverD1(env,sql=null){
   if(!env?.PROVEDOR_DB)return null;const db=env.PROVEDOR_DB;
   await db.prepare('CREATE TABLE IF NOT EXISTS pp_push_protocol_observer (protocol_id INTEGER PRIMARY KEY,last_status TEXT NULL,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)').run();
   if(protocolObserverReady)return db;
   const marker=parseObject(await settingValue(db,PROTOCOL_OBSERVER_D1_MARKER));if(marker?.migratedAt){protocolObserverReady=true;return db}
   let copied=0;
-  try{const rows=await sql`SELECT protocol_id,last_status,updated_at FROM pp_push_protocol_observer ORDER BY protocol_id ASC`;for(let start=0;start<(rows||[]).length;start+=50){const statements=rows.slice(start,start+50).map(row=>db.prepare('INSERT INTO pp_push_protocol_observer (protocol_id,last_status,updated_at) VALUES (?,?,?) ON CONFLICT(protocol_id) DO UPDATE SET last_status=excluded.last_status,updated_at=excluded.updated_at').bind(Number(row.protocol_id),text(row.last_status)||null,text(row.updated_at)||new Date().toISOString()));if(statements.length){await db.batch(statements);copied+=statements.length}}}catch(error){console.error('Provedor Plus: observador antigo de protocolos não pôde ser copiado para o D1.',error)}
+  if(sql)try{const rows=await sql`SELECT protocol_id,last_status,updated_at FROM pp_push_protocol_observer ORDER BY protocol_id ASC`;for(let start=0;start<(rows||[]).length;start+=50){const statements=rows.slice(start,start+50).map(row=>db.prepare('INSERT INTO pp_push_protocol_observer (protocol_id,last_status,updated_at) VALUES (?,?,?) ON CONFLICT(protocol_id) DO UPDATE SET last_status=excluded.last_status,updated_at=excluded.updated_at').bind(Number(row.protocol_id),text(row.last_status)||null,text(row.updated_at)||new Date().toISOString()));if(statements.length){await db.batch(statements);copied+=statements.length}}}catch(error){console.error('Provedor Plus: observador antigo de protocolos não pôde ser copiado para o D1.',error)}
   if(!copied){const now=new Date().toISOString();await db.prepare('INSERT OR IGNORE INTO pp_push_protocol_observer (protocol_id,last_status,updated_at) SELECT id,status,? FROM pp_protocols WHERE client_id IS NOT NULL').bind(now).run()}
   await saveSettingValue(db,PROTOCOL_OBSERVER_D1_MARKER,{migratedAt:new Date().toISOString(),copied});protocolObserverReady=true;return db;
 }
@@ -309,6 +317,7 @@ async function protocolEvents(sql,settings,env){
       for(const row of rows){const current=text(row.status),hasObserver=row.observer_id!==null&&row.observer_id!==undefined,changed=hasObserver&&normalize(current)!==normalize(row.last_status),isNew=!hasObserver&&recent(row.created_at,36);if(!changed&&!isNew)continue;const status=normalize(current),done=status.includes('conclu')||status.includes('fech'),opened=status.includes('aberto'),title=done?'Protocolo concluído':opened?'Protocolo aberto':'Protocolo atualizado',body=`${text(row.protocol)||`Protocolo ${row.id}`} · ${text(row.subject)||text(row.category)} · Status: ${current||'Atualizado'}.`;events.push({key:`protocol:${row.id}:${status}:${text(row.closed_at||row.created_at)}`,clientId:Number(row.client_id),type:done?'protocolo concluído':opened?'protocolo aberto':'protocolo atualizado',title,body,url:'/'})}
       const now=new Date().toISOString(),statements=rows.map(row=>db.prepare('INSERT INTO pp_push_protocol_observer (protocol_id,last_status,updated_at) VALUES (?,?,?) ON CONFLICT(protocol_id) DO UPDATE SET last_status=excluded.last_status,updated_at=excluded.updated_at').bind(Number(row.id),text(row.status)||null,now));if(statements.length)await db.batch(statements);return events;
     }
+    if(!sql)return [];
     const rows=await sql`SELECT p.id,p.protocol,p.client_id,p.category,p.subject,p.status,p.created_at,p.closed_at,o.protocol_id AS observer_id,o.last_status FROM pp_protocols p LEFT JOIN pp_push_protocol_observer o ON o.protocol_id=p.id WHERE p.client_id IS NOT NULL AND (p.category ILIKE '%Atendimento%' OR p.category ILIKE '%Suporte%' OR p.category ILIKE '%Chamado%') AND (o.protocol_id IS NULL OR o.last_status IS DISTINCT FROM p.status) ORDER BY p.id DESC LIMIT 300`,events=[];
     for(const row of rows||[]){const current=text(row.status),changed=Boolean(row.observer_id)&&normalize(current)!==normalize(row.last_status),isNew=!row.observer_id&&recent(row.created_at,36);if(!changed&&!isNew)continue;const status=normalize(current),done=status.includes('conclu')||status.includes('fech'),opened=status.includes('aberto'),title=done?'Protocolo concluído':opened?'Protocolo aberto':'Protocolo atualizado',body=`${text(row.protocol)||`Protocolo ${row.id}`} · ${text(row.subject)||text(row.category)} · Status: ${current||'Atualizado'}.`;events.push({key:`protocol:${row.id}:${status}:${text(row.closed_at||row.created_at)}`,clientId:Number(row.client_id),type:done?'protocolo concluído':opened?'protocolo aberto':'protocolo atualizado',title,body,url:'/'})}
     await sql`INSERT INTO pp_push_protocol_observer (protocol_id,last_status,updated_at) SELECT p.id,p.status,now() FROM pp_protocols p LEFT JOIN pp_push_protocol_observer o ON o.protocol_id=p.id WHERE p.client_id IS NOT NULL AND (p.category ILIKE '%Atendimento%' OR p.category ILIKE '%Suporte%' OR p.category ILIKE '%Chamado%') AND (o.protocol_id IS NULL OR o.last_status IS DISTINCT FROM p.status) ON CONFLICT (protocol_id) DO UPDATE SET last_status=EXCLUDED.last_status,updated_at=EXCLUDED.updated_at WHERE pp_push_protocol_observer.last_status IS DISTINCT FROM EXCLUDED.last_status`;
@@ -319,14 +328,14 @@ async function protocolEvents(sql,settings,env){
 async function retryPending(sql,env){
   let rows=[];
   if(env?.PROVEDOR_DB&&operationalEventsSeedReady){const cutoff=new Date(Date.now()-7*24*60*60*1000).toISOString(),retryBefore=new Date(Date.now()-2*60*1000).toISOString();rows=await d1Rows(env.PROVEDOR_DB.prepare("SELECT * FROM pp_push_events WHERE completed=0 AND event_type LIKE 'operational:%' AND datetime(created_at)>=datetime(?) AND attempts=1 AND sent_count=0 AND failed_count>0 AND datetime(last_attempt_at)<datetime(?) ORDER BY id ASC LIMIT 40").bind(cutoff,retryBefore))}
-  else rows=await sql`SELECT * FROM pp_push_events WHERE completed=false AND event_type LIKE 'operational:%' AND created_at>=now()-interval '7 days' AND attempts=1 AND sent_count=0 AND failed_count>0 AND last_attempt_at<now()-interval '2 minutes' ORDER BY id ASC LIMIT 40`;
+  else if(sql)rows=await sql`SELECT * FROM pp_push_events WHERE completed=false AND event_type LIKE 'operational:%' AND created_at>=now()-interval '7 days' AND attempts=1 AND sent_count=0 AND failed_count>0 AND last_attempt_at<now()-interval '2 minutes' ORDER BY id ASC LIMIT 40`;
   let sent=0,failed=0;for(const row of rows||[]){try{const result=await attemptEvent(sql,env,row);sent+=Number(result?.sent)||0;failed+=Number(result?.failed)||0}catch{failed++}}
   return {sent,failed};
 }
 
 async function scanOperationalEvents(env){
-  if(!env?.DATABASE_URL)return {scanned:false};
-  const sql=neon(env.DATABASE_URL),protocolStore=env.PROVEDOR_DB||sql;await ensureTables(sql);if(env?.PROVEDOR_DB)await seedOperationalEventsD1(env,sql);const state=await loadState(sql),settings=await loadSettings(env.PROVEDOR_DB||sql),events=[];
+  if(!env?.PROVEDOR_DB)return {scanned:false};
+  const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,protocolStore=env.PROVEDOR_DB;if(sql)await ensureTables(sql);await seedOperationalEventsD1(env,sql);const state=await loadState(env,sql),settings=await loadSettings(env.PROVEDOR_DB),events=[];
   events.push(...await statusAndPlanEvents(sql,state,settings,protocolStore,env));
   events.push(...trustEvents(state,settings));
   events.push(...await dueChangeEvents(protocolStore,settings));
@@ -355,7 +364,7 @@ async function handleOperations(request,env,ctx){
     if(action==='delete-template'){
       const id=text(data?.id).slice(0,80);if(!id)throw Object.assign(new Error('Modelo inválido.'),{statusCode:400});const templates=await loadTemplates(settingsStore),next=templates.filter(item=>item.id!==id);if(next.length===templates.length)throw Object.assign(new Error('Modelo não encontrado.'),{statusCode:404});return json({ok:true,data:{templates:await saveTemplates(settingsStore,next)}})
     }
-    if(action==='scan-now'){if(!env?.DATABASE_URL)throw Object.assign(new Error('Conexão com o Neon não configurada.'),{statusCode:503});return json({ok:true,data:await scanOperationalEvents(env)})}
+    if(action==='scan-now'){if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 das notificações operacionais não configurado.'),{statusCode:503});return json({ok:true,data:await scanOperationalEvents(env)})}
     throw Object.assign(new Error('Ação de notificações operacionais não permitida.'),{statusCode:400});
   }catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500)}
 }
@@ -372,6 +381,6 @@ async function shouldScanAfterRequest(request){
 }
 
 export default {
-  async fetch(request,env,ctx){const path=new URL(request.url).pathname;if(path===OPS_PATH)return handleOperations(request,env,ctx);const scan=env?.DATABASE_URL?await shouldScanAfterRequest(request):false,response=await baseWorker.fetch(request,env,ctx);if(scan&&response?.ok){const task=scanOperationalEvents(env).catch(error=>console.error('Provedor Plus: falha ao verificar notificações operacionais.',error));if(typeof ctx?.waitUntil==='function')ctx.waitUntil(task)}return response},
-  scheduled(controller,env,ctx){const result=baseWorker.scheduled(controller,env,ctx);if(env?.DATABASE_URL&&typeof ctx?.waitUntil==='function')ctx.waitUntil(scanOperationalEvents(env).catch(error=>console.error('Provedor Plus: falha no ciclo de notificações operacionais.',error)));return result}
+  async fetch(request,env,ctx){const path=new URL(request.url).pathname;if(path===OPS_PATH)return handleOperations(request,env,ctx);const scan=env?.PROVEDOR_DB?await shouldScanAfterRequest(request):false,response=await baseWorker.fetch(request,env,ctx);if(scan&&response?.ok){const task=scanOperationalEvents(env).catch(error=>console.error('Provedor Plus: falha ao verificar notificações operacionais.',error));if(typeof ctx?.waitUntil==='function')ctx.waitUntil(task)}return response},
+  scheduled(controller,env,ctx){const result=baseWorker.scheduled(controller,env,ctx);if(env?.PROVEDOR_DB&&typeof ctx?.waitUntil==='function')ctx.waitUntil(scanOperationalEvents(env).catch(error=>console.error('Provedor Plus: falha no ciclo de notificações operacionais.',error)));return result}
 };

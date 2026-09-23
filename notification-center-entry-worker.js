@@ -10,6 +10,7 @@ const CLIENT_PUSH_PATH='/api/customer-push';
 const ADMIN_PUSH_PATH='/api/push-admin';
 const OPS_PATH='/api/push-operations';
 const STATE_KEY='web_state_v1017';
+const INVOICES_D1_KEY='billing_invoices_v1';
 const STATE_WRITE_LOCK_KEY='web_state_write_lock_v1';
 const STATE_WRITE_LOCK_TTL_MS=60000;
 const PORTAL_LOGIN_PATH='/api/customer-portal';
@@ -43,6 +44,35 @@ async function mirrorInvoicesSnapshotToD1(env){
   return mirrorInvoicesToD1(env,state,updatedAt||new Date().toISOString());
 }
 async function d1Rows(statement){const result=await statement.all();return Array.isArray(result?.results)?result.results:[]}
+async function currentStateUpdatedAt(env){
+  if(!env?.DATABASE_URL)return '';
+  try{const rows=await neon(env.DATABASE_URL)`SELECT updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,value=rows?.[0]?.updated_at;return value instanceof Date?value.toISOString():text(value)}catch{return ''}
+}
+async function readInvoicesSnapshotFromD1(env,fallback=[],minimumUpdatedAt=''){
+  const legacy=Array.isArray(fallback)?fallback:[];
+  if(!env?.PROVEDOR_DB)return {invoices:legacy,active:false};
+  try{
+    const rows=await d1Rows(env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(INVOICES_D1_KEY)),row=rows?.[0];if(!row)return {invoices:legacy,active:false};
+    let value=row.value;if(typeof value==='string')try{value=JSON.parse(value)}catch{return {invoices:legacy,active:false}};if(!Array.isArray(value))return {invoices:legacy,active:false};
+    const minimumTime=Date.parse(text(minimumUpdatedAt)),d1Time=Date.parse(text(row.updated_at));if(Number.isFinite(minimumTime)&&Number.isFinite(d1Time)&&d1Time<minimumTime)return {invoices:legacy,active:false};
+    return {invoices:value,active:true};
+  }catch(error){console.error('Provedor Plus: leitura D1 das faturas falhou; usando Neon.',error);return {invoices:legacy,active:false}}
+}
+async function invoiceReadAction(request,path){
+  if(request.method!=='POST'||(path!=='/api/cloud-state'&&path!=='/api/customer-portal'))return '';
+  let body={};try{body=await request.clone().json()}catch{return ''};return text(body?.action);
+}
+async function overlayInvoicesFromD1(response,env,path,action){
+  if(!response?.ok||!env?.PROVEDOR_DB)return response;
+  const panelRead=path==='/api/cloud-state'&&action==='state.get',portalRead=path==='/api/customer-portal'&&(action==='login'||action==='refresh');if(!panelRead&&!portalRead)return response;
+  let parsed={};try{parsed=await response.clone().json()}catch{return response};if(!parsed?.ok)return response;
+  let target=null,minimumUpdatedAt='';
+  if(panelRead){target=parsed?.data?.state;if(!target||typeof target!=='object'||Array.isArray(target))return response;minimumUpdatedAt=text(parsed?.data?.updated_at)}
+  else{target=parsed?.data;if(!target||typeof target!=='object'||Array.isArray(target)||!Array.isArray(target?.invoices))return response;minimumUpdatedAt=await currentStateUpdatedAt(env)}
+  const store=await readInvoicesSnapshotFromD1(env,target?.invoices,minimumUpdatedAt);if(!store.active)return response;
+  target.invoices=store.invoices;
+  const headers=new Headers(response.headers);headers.set('Content-Type','application/json; charset=utf-8');headers.set('Cache-Control','no-store, max-age=0');return new Response(JSON.stringify(parsed),{status:response.status,statusText:response.statusText,headers});
+}
 async function mirrorRecentClientsToD1(env,minutes=15){
   if(!env?.DATABASE_URL||!env?.PROVEDOR_DB)return {checked:0,mirrored:0,failed:0};
   const windowMinutes=Math.max(5,Math.min(60,Math.floor(Number(minutes)||15))),since=new Date(Date.now()-windowMinutes*60*1000).toISOString(),sql=neon(env.DATABASE_URL),rows=await sql`SELECT id FROM pp_clients WHERE updated_at IS NOT NULL AND updated_at>=${since} ORDER BY updated_at ASC LIMIT 500`;
@@ -551,8 +581,8 @@ export default {
     let portalLoginRate=null,priorityStop=null;
     try{portalLoginRate=await preparePortalLoginRate(request,env,path)}catch(error){if(Number(error?.statusCode)===429)return portalLoginRateResponse(request,error);console.error('Provedor Plus: proteção de tentativas do login não pôde ser preparada.',error)}
     try{
-      const priorityAction=await paymentPriorityAction(request,path);if(priorityAction)priorityStop=await beginPaymentPriority(env);
-      const forward=async()=>{let response=await baseWorker.fetch(request,env,ctx);if(portalLoginRate)response=await finishPortalLoginRate(request,response,portalLoginRate,ctx);return path==='/api/bank-settings'?await sanitizeBankResponse(response):response};
+      const priorityAction=await paymentPriorityAction(request,path),readAction=await invoiceReadAction(request,path);if(priorityAction)priorityStop=await beginPaymentPriority(env);
+      const forward=async()=>{let response=await baseWorker.fetch(request,env,ctx);if(portalLoginRate)response=await finishPortalLoginRate(request,response,portalLoginRate,ctx);if(path==='/api/bank-settings')response=await sanitizeBankResponse(response);return overlayInvoicesFromD1(response,env,path,readAction)};
       const mutation=await stateMutationRequest(request,path);
       if(mutation){
         const response=await withStateWriteLock(env,forward,priorityAction?60000:20000);

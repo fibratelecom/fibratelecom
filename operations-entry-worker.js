@@ -344,7 +344,8 @@ async function verifyPanelAdmin(request,env,ctx){
 async function handleOperations(request,env,ctx){
   if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405);
   try{
-    await verifyPanelAdmin(request,env,ctx);if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Neon não configurada.'),{statusCode:503});let body={};try{body=await request.json()}catch{}const action=text(body?.action),data=body?.data||{},sql=neon(env.DATABASE_URL),settingsStore=env.PROVEDOR_DB||sql;await ensureTables(sql);
+    await verifyPanelAdmin(request,env,ctx);let body={};try{body=await request.json()}catch{}const action=text(body?.action),data=body?.data||{},settingsStore=env?.PROVEDOR_DB||null;
+    if(['get','save','save-template','delete-template'].includes(action)&&!settingsStore)throw Object.assign(new Error('Banco D1 das configurações de notificações não configurado.'),{statusCode:503});
     if(action==='get')return json({ok:true,data:{settings:await loadSettings(settingsStore),templates:await loadTemplates(settingsStore),financialAutomatic:['Fatura gerada','Vence amanhã','Fatura vencida','Pagamento confirmado','Cashback recebido']}});
     if(action==='save'){const current=await loadSettings(settingsStore),next={...current};for(const key of Object.keys(DEFAULT_SETTINGS))if(data?.settings&&Object.prototype.hasOwnProperty.call(data.settings,key))next[key]=Boolean(data.settings[key]);return json({ok:true,data:{settings:await saveSettings(settingsStore,next)}})}
     if(action==='save-template'){
@@ -354,7 +355,7 @@ async function handleOperations(request,env,ctx){
     if(action==='delete-template'){
       const id=text(data?.id).slice(0,80);if(!id)throw Object.assign(new Error('Modelo inválido.'),{statusCode:400});const templates=await loadTemplates(settingsStore),next=templates.filter(item=>item.id!==id);if(next.length===templates.length)throw Object.assign(new Error('Modelo não encontrado.'),{statusCode:404});return json({ok:true,data:{templates:await saveTemplates(settingsStore,next)}})
     }
-    if(action==='scan-now')return json({ok:true,data:await scanOperationalEvents(env)});
+    if(action==='scan-now'){if(!env?.DATABASE_URL)throw Object.assign(new Error('Conexão com o Neon não configurada.'),{statusCode:503});return json({ok:true,data:await scanOperationalEvents(env)})}
     throw Object.assign(new Error('Ação de notificações operacionais não permitida.'),{statusCode:400});
   }catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500)}
 }

@@ -3,6 +3,7 @@ import { scrypt } from 'scrypt-js';
 
 const COOKIE='pp_session';
 const PROFILE_PREFIX='employee_access_v1_';
+const PROFILE_D1_CUTOVER_AT=Date.parse('2026-09-23T00:24:01Z');
 const STATE_KEY='web_state_v1017';
 const ALL_PERMISSIONS=['dashboard','clients','plans','finance','billing','tickets','network'];
 const utf8=new TextEncoder();
@@ -141,7 +142,7 @@ async function mirrorProfileToD1(env,id,profile){
 }
 async function getProfile(sql,id,role){const row=await getSetting(sql,profileKey(id)),value=profileValue(row);return normalizeProfile(value,role);}
 async function getProfileD1(env,sql,id,role){
-  if(env?.PROVEDOR_DB)try{const result=await env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(profileKey(id)).all(),row=result?.results?.[0];if(row)return normalizeProfile(profileValue(row),role)}catch(error){console.error(`Provedor Plus: leitura D1 do perfil do funcionário ${id} falhou; usando Neon.`,error)}
+  if(env?.PROVEDOR_DB)try{const result=await env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(profileKey(id)).all(),row=result?.results?.[0],updatedTime=Date.parse(text(row?.updated_at));if(row&&Number.isFinite(updatedTime)&&updatedTime>=PROFILE_D1_CUTOVER_AT)return normalizeProfile(profileValue(row),role)}catch(error){console.error(`Provedor Plus: leitura D1 do perfil do funcionário ${id} falhou; usando Neon.`,error)}
   const profile=await getProfile(sql,id,role);
   if(env?.PROVEDOR_DB)try{await mirrorProfileToD1(env,id,profile)}catch(error){console.error(`Provedor Plus: não foi possível recompor o perfil D1 do funcionário ${id}.`,error)}
   return profile;
@@ -205,7 +206,7 @@ export async function handleNativeAuth(request,env){
       return apiJson({ok:true,data:{...safeUser(user),active,phone,permissions}},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
     }
     if(action==='employees.toggle'){
-      const current=await requireAdmin(request,sql),id=Number(data.id)||0;if(!id)throw Object.assign(new Error('Funcionário inválido.'),{statusCode:400});if(id===Number(current.user.id))throw Object.assign(new Error('Você não pode desativar o próprio acesso.'),{statusCode:400});const rows=await sql`SELECT id,email,name,role,created_at FROM pp_users WHERE id=${id} LIMIT 1`,user=rows[0];if(!user)throw Object.assign(new Error('Funcionário não encontrado.'),{statusCode:404});const previous=await getProfileD1(env,sql,id,user.role),active=Boolean(data.active);await saveProfile(sql,id,{...previous,active,updated_at:new Date().toISOString()},env);if(!active)await revokeSessions(sql,id);return apiJson({ok:true,data:{...safeUser(user),...previous,active}},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
+      const current=await requireAdmin(request,sql),id=Number(data.id)||0;if(!id)throw Object.assign(new Error('Funcionário inválido.'),{statusCode:400});if(id===Number(current.user.id))throw Object.assign(new Error('Você não pode desativar o próprio acesso.'),{statusCode:400});const rows=await sql`SELECT id,email,name,role,created_at FROM pp_users WHERE id=${id} LIMIT 1`,user=rows[0];if(!user)throw Object.assign(new Error('Funcionário não encontrado.'),{statusCode:404});const previous=await getProfile(sql,id,user.role),active=Boolean(data.active);await saveProfile(sql,id,{...previous,active,updated_at:new Date().toISOString()},env);if(!active)await revokeSessions(sql,id);return apiJson({ok:true,data:{...safeUser(user),...previous,active}},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});
     }
     if(action==='employees.delete'){
       const current=await requireAdmin(request,sql),id=Number(data.id)||0;if(!id)throw Object.assign(new Error('Funcionário inválido.'),{statusCode:400});if(id===Number(current.user.id))throw Object.assign(new Error('Você não pode excluir o próprio acesso.'),{statusCode:400});const rows=await sql`SELECT id FROM pp_users WHERE id=${id} LIMIT 1`;if(!rows[0])throw Object.assign(new Error('Funcionário não encontrado.'),{statusCode:404});await revokeSessions(sql,id);await sql`DELETE FROM pp_users WHERE id=${id}`;await deleteProfile(sql,id,env);return apiJson({ok:true,data:{deleted:true,id}},200,{'x-provedor-plus-edge':'cloudflare-native-auth'});

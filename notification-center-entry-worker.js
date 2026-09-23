@@ -161,10 +161,10 @@ function trafficService(row,scope='primary'){
   return {clientId,routerId,username,scope:normalizedScope};
 }
 async function collectCustomerTraffic(env){
-  if(!env?.DATABASE_URL)return {routers:0,routerErrors:0,sessions:0,recorded:0,failed:0};
-  const sql=neon(env.DATABASE_URL),[clients,state]=await Promise.all([
-    sql`SELECT id,router_id,connection_type,pppoe_username,pppoe_user FROM pp_clients WHERE router_id IS NOT NULL AND COALESCE(NULLIF(pppoe_username,''),NULLIF(pppoe_user,'')) IS NOT NULL`,
-    loadState(env,sql)
+  if(!env?.PROVEDOR_DB)return {routers:0,routerErrors:0,sessions:0,recorded:0,failed:0};
+  const db=env.PROVEDOR_DB,[clients,state]=await Promise.all([
+    d1Rows(db.prepare("SELECT id,router_id,connection_type,pppoe_username,pppoe_user FROM pp_clients WHERE router_id IS NOT NULL AND COALESCE(NULLIF(pppoe_username,''),NULLIF(pppoe_user,'')) IS NOT NULL")),
+    loadState(env)
   ]),services=[],known=new Set();
   for(const client of clients||[]){const service=trafficService(client,'primary'),key=service?`${service.clientId}|${service.scope}`:'';if(service&&!known.has(key)){known.add(key);services.push(service)}}
   for(const contract of Array.isArray(state?.client_contracts)?state.client_contracts:[]){const scope=text(contract?.id);if(!scope)continue;const service=trafficService(contract,scope),key=service?`${service.clientId}|${service.scope}`:'';if(service&&!known.has(key)){known.add(key);services.push(service)}}
@@ -486,8 +486,8 @@ async function verifySession(token,env){
   try{const key=await portalKey(env),ok=await crypto.subtle.verify('HMAC',key,base64UrlBytes(parts[1]),enc.encode(parts[0]));if(!ok)throw new Error('assinatura');const payload=JSON.parse(new TextDecoder().decode(base64UrlBytes(parts[0]))),clientId=Number(payload?.clientId)||0,exp=Number(payload?.exp)||0;if(!clientId||exp<=Date.now())throw new Error('expirada');return {clientId}}catch{throw Object.assign(new Error('Sessão do cliente expirada ou inválida. Entre novamente.'),{statusCode:401})}
 }
 async function reconcilePendingPayments(env){
-  if(!env?.DATABASE_URL)return {checked:0,confirmed:0,failed:0};
-  const sql=neon(env.DATABASE_URL),state=await loadState(env,sql),candidates=(Array.isArray(state?.invoices)?state.invoices:[]).filter(row=>{
+  if(!env?.PROVEDOR_DB)return {checked:0,confirmed:0,failed:0};
+  const state=await loadState(env),candidates=(Array.isArray(state?.invoices)?state.invoices:[]).filter(row=>{
     if(!invoiceOpen(row))return false;
     const provider=text(row?.bank_provider).toLowerCase(),detail=normalize(row?.bank_status_detail),paymentId=text(row?.bank_payment_id||row?.bank_charge_id);
     return paymentId&&detail.includes('pix')&&(provider==='mercadopago'||provider==='efi');

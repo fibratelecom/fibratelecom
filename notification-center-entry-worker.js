@@ -11,6 +11,7 @@ const ADMIN_PUSH_PATH='/api/push-admin';
 const OPS_PATH='/api/push-operations';
 const STATE_KEY='web_state_v1017';
 const INVOICES_D1_KEY='billing_invoices_v1';
+const FINANCIAL_D1_KEY='cashback_negotiations_v1';
 const STATE_WRITE_LOCK_KEY='web_state_write_lock_v1';
 const STATE_WRITE_LOCK_TTL_MS=60000;
 const PORTAL_LOGIN_PATH='/api/customer-portal';
@@ -36,9 +37,40 @@ let schemaReady=false,portalLoginRateSchemaReady=false;
 function json(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store, max-age=0',...headers}})}
 function clientCors(request){const origin=text(request.headers.get('origin')),headers={'Vary':'Origin','Access-Control-Allow-Methods':'POST,OPTIONS','Access-Control-Allow-Headers':'Content-Type','Access-Control-Max-Age':'86400'};if(CLIENT_ORIGINS.has(origin))headers['Access-Control-Allow-Origin']=origin;return headers}
 function parseState(value){if(value&&typeof value==='object'&&!Array.isArray(value))return value;if(typeof value==='string')try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{}return {}}
+function cashbackBalanceSnapshot(row){const direct=Number(row?.cashback_balance_cents),amount=Number(row?.cashback_balance),cents=Number.isFinite(direct)?Math.max(0,Math.round(direct)):Number.isFinite(amount)?Math.max(0,Math.round(amount*100)):0;return {cashback_balance_cents:cents,cashback_balance:cents/100,cashback_updated_at:text(row?.cashback_updated_at)||null}}
+function financialSnapshotFromState(state={}){
+  const clients=(Array.isArray(state?.clients)?state.clients:[]).filter(row=>row?.id!==undefined&&row?.id!==null).map(row=>({id:row.id,...cashbackBalanceSnapshot(row)}));
+  const contracts=(Array.isArray(state?.client_contracts)?state.client_contracts:[]).filter(row=>row?.id!==undefined&&row?.id!==null||text(row?.contract_number)).map(row=>({id:row?.id??null,client_id:row?.client_id??null,contract_number:text(row?.contract_number),...cashbackBalanceSnapshot(row)}));
+  return {clients,contracts,cashback_transactions:Array.isArray(state?.cashback_transactions)?state.cashback_transactions:[],negotiations:Array.isArray(state?.negotiations)?state.negotiations:[]};
+}
+function applyFinancialSnapshot(state,snapshot={}){
+  if(!state||typeof state!=='object'||Array.isArray(state))return state;
+  const clientBalances=new Map((Array.isArray(snapshot?.clients)?snapshot.clients:[]).map(row=>[String(row?.id??''),row]));
+  if(Array.isArray(state.clients))state.clients=state.clients.map(row=>{const saved=clientBalances.get(String(row?.id??''));return saved?{...row,...cashbackBalanceSnapshot(saved)}:row});
+  const contractBalances=new Map(),contractNumbers=new Map();for(const row of Array.isArray(snapshot?.contracts)?snapshot.contracts:[]){if(row?.id!==undefined&&row?.id!==null)contractBalances.set(String(row.id),row);const number=text(row?.contract_number),clientId=String(row?.client_id??'');if(number)contractNumbers.set(`${clientId}|${number}`,row)}
+  if(Array.isArray(state.client_contracts))state.client_contracts=state.client_contracts.map(row=>{const saved=(row?.id!==undefined&&row?.id!==null?contractBalances.get(String(row.id)):null)||contractNumbers.get(`${String(row?.client_id??'')}|${text(row?.contract_number)}`);return saved?{...row,...cashbackBalanceSnapshot(saved)}:row});
+  state.cashback_transactions=Array.isArray(snapshot?.cashback_transactions)?snapshot.cashback_transactions:[];
+  state.negotiations=Array.isArray(snapshot?.negotiations)?snapshot.negotiations:[];
+  return state;
+}
+async function d1Rows(statement){const result=await statement.all();return Array.isArray(result?.results)?result.results:[]}
+async function readFinancialSnapshotFromD1(env,fallbackState={},minimumUpdatedAt=''){
+  const fallback=financialSnapshotFromState(fallbackState);
+  if(!env?.PROVEDOR_DB)return {snapshot:fallback,active:false,updatedAt:''};
+  try{
+    const rows=await d1Rows(env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(FINANCIAL_D1_KEY)),row=rows?.[0];if(!row)return {snapshot:fallback,active:false,updatedAt:''};
+    let value=row.value;if(typeof value==='string')try{value=JSON.parse(value)}catch{return {snapshot:fallback,active:false,updatedAt:''}};if(!value||typeof value!=='object'||Array.isArray(value))return {snapshot:fallback,active:false,updatedAt:''};
+    const snapshot={clients:Array.isArray(value.clients)?value.clients:[],contracts:Array.isArray(value.contracts)?value.contracts:[],cashback_transactions:Array.isArray(value.cashback_transactions)?value.cashback_transactions:[],negotiations:Array.isArray(value.negotiations)?value.negotiations:[]};
+    const minimumTime=Date.parse(text(minimumUpdatedAt)),d1Time=Date.parse(text(row.updated_at));if(Number.isFinite(minimumTime)&&Number.isFinite(d1Time)&&d1Time<minimumTime)return {snapshot:fallback,active:false,updatedAt:text(row.updated_at)};
+    return {snapshot,active:true,updatedAt:text(row.updated_at)};
+  }catch(error){console.error('Provedor Plus: leitura D1 do cashback e negociações falhou; usando Neon.',error);return {snapshot:fallback,active:false,updatedAt:''}}
+}
+async function saveFinancialSnapshotToD1(env,state,updatedAt=new Date().toISOString()){
+  if(!env?.PROVEDOR_DB)return false;const snapshot=financialSnapshotFromState(state),raw=JSON.stringify(snapshot),at=text(updatedAt)||new Date().toISOString();await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(FINANCIAL_D1_KEY,raw,at).run();return true;
+}
 async function loadState(sql,env=null){
   const rows=await sql`SELECT value,updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,row=rows?.[0],state=parseState(row?.value);
-  if(env?.PROVEDOR_DB){const minimumUpdatedAt=row?.updated_at instanceof Date?row.updated_at.toISOString():text(row?.updated_at),store=await readInvoicesSnapshotFromD1(env,state?.invoices,minimumUpdatedAt);if(store.active)state.invoices=store.invoices}
+  if(env?.PROVEDOR_DB){const minimumUpdatedAt=row?.updated_at instanceof Date?row.updated_at.toISOString():text(row?.updated_at),[invoiceStore,financialStore]=await Promise.all([readInvoicesSnapshotFromD1(env,state?.invoices,minimumUpdatedAt),readFinancialSnapshotFromD1(env,state,minimumUpdatedAt)]);if(invoiceStore.active)state.invoices=invoiceStore.invoices;if(financialStore.active)applyFinancialSnapshot(state,financialStore.snapshot)}
   return state;
 }
 async function mirrorInvoicesSnapshotToD1(env){
@@ -47,7 +79,11 @@ async function mirrorInvoicesSnapshotToD1(env){
   const state=parseState(row.value),updatedAt=row.updated_at instanceof Date?row.updated_at.toISOString():text(row.updated_at);
   return mirrorInvoicesToD1(env,state,updatedAt||new Date().toISOString());
 }
-async function d1Rows(statement){const result=await statement.all();return Array.isArray(result?.results)?result.results:[]}
+async function mirrorFinancialSnapshotToD1(env){
+  if(!env?.DATABASE_URL||!env?.PROVEDOR_DB)return false;
+  const sql=neon(env.DATABASE_URL),rows=await sql`SELECT value,updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,row=rows?.[0];if(!row)return false;
+  const state=parseState(row.value),updatedAt=row.updated_at instanceof Date?row.updated_at.toISOString():text(row.updated_at);return saveFinancialSnapshotToD1(env,state,updatedAt||new Date().toISOString());
+}
 async function currentStateUpdatedAt(env){
   if(!env?.DATABASE_URL)return '';
   try{const rows=await neon(env.DATABASE_URL)`SELECT updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,value=rows?.[0]?.updated_at;return value instanceof Date?value.toISOString():text(value)}catch{return ''}
@@ -62,14 +98,16 @@ async function readInvoicesSnapshotFromD1(env,fallback=[],minimumUpdatedAt=''){
     return {invoices:value,active:true,updatedAt:text(row.updated_at)};
   }catch(error){console.error('Provedor Plus: leitura D1 das faturas falhou; usando Neon.',error);return {invoices:legacy,active:false,updatedAt:''}}
 }
-async function syncInvoicesD1ToNeon(env){
+async function syncPrimarySnapshotsD1ToNeon(env,{invoices=false,financial=false}={}){
   if(!env?.DATABASE_URL||!env?.PROVEDOR_DB)return {active:false};
   const sql=neon(env.DATABASE_URL),rows=await sql`SELECT value,updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,row=rows?.[0];if(!row)return {active:false};
-  const state=parseState(row.value),neonUpdatedAt=row.updated_at instanceof Date?row.updated_at.toISOString():text(row.updated_at),store=await readInvoicesSnapshotFromD1(env,state?.invoices,neonUpdatedAt);
-  if(!store.active){await mirrorInvoicesToD1(env,state,neonUpdatedAt||new Date().toISOString());return {active:true,seeded:true}}
-  const current=Array.isArray(state?.invoices)?state.invoices:[];if(JSON.stringify(current)===JSON.stringify(store.invoices))return {active:true,changed:false};
-  const next={...state,invoices:store.invoices},raw=JSON.stringify(next),updatedAt=new Date().toISOString();await sql`UPDATE pp_settings SET value=${raw}::jsonb,updated_at=${updatedAt} WHERE key=${STATE_KEY}`;return {active:true,changed:true};
+  const state=parseState(row.value),neonUpdatedAt=row.updated_at instanceof Date?row.updated_at.toISOString():text(row.updated_at),stamp=neonUpdatedAt||new Date().toISOString();let changed=false,seededInvoices=false,seededFinancial=false;
+  if(invoices){const store=await readInvoicesSnapshotFromD1(env,state?.invoices,neonUpdatedAt);if(store.active){const current=Array.isArray(state?.invoices)?state.invoices:[];if(JSON.stringify(current)!==JSON.stringify(store.invoices)){state.invoices=store.invoices;changed=true}}else{await mirrorInvoicesToD1(env,state,stamp);seededInvoices=true}}
+  if(financial){const store=await readFinancialSnapshotFromD1(env,state,neonUpdatedAt);if(store.active){const before=JSON.stringify(financialSnapshotFromState(state));applyFinancialSnapshot(state,store.snapshot);if(before!==JSON.stringify(financialSnapshotFromState(state)))changed=true}else{await saveFinancialSnapshotToD1(env,state,stamp);seededFinancial=true}}
+  if(changed){const updatedAt=new Date().toISOString(),raw=JSON.stringify(state);await sql`UPDATE pp_settings SET value=${raw}::jsonb,updated_at=${updatedAt} WHERE key=${STATE_KEY}`;if(invoices)await mirrorInvoicesToD1(env,state,updatedAt);if(financial)await saveFinancialSnapshotToD1(env,state,updatedAt)}
+  return {active:true,changed,seededInvoices,seededFinancial};
 }
+async function syncInvoicesD1ToNeon(env){return syncPrimarySnapshotsD1ToNeon(env,{invoices:true})}
 async function invoiceReadAction(request,path){
   if(request.method!=='POST'||(path!=='/api/cloud-state'&&path!=='/api/customer-portal'))return '';
   let body={};try{body=await request.clone().json()}catch{return ''};return text(body?.action);
@@ -83,6 +121,14 @@ async function invoiceWorkingCopyRequest(request,path){
   if(path==='/api/customer-due-date'||path==='/api/customer-trust-release')return true;
   return false;
 }
+async function financialWorkingCopyRequest(request,path){
+  if(request.method!=='POST')return false;const url=new URL(request.url);if(path==='/api/customer-portal'&&url.searchParams.get('mp_webhook')==='1')return true;
+  let body={};try{body=await request.clone().json()}catch{return false};const action=text(body?.action);
+  if(path==='/api/cloud-state')return action==='state.save';
+  if(path==='/api/cloud-data')return new Set(['cashback.wallet.get','cashback.wallet.adjust','negotiation.support.options','negotiation.support.create']).has(action);
+  if(path==='/api/customer-portal')return new Set(['login','refresh','payment-config','payment-prepare','payment-pix','payment-card','payment-status','negotiation-options','negotiate']).has(action);
+  return false;
+}
 async function overlayInvoicesFromD1(response,env,path,action){
   if(!response?.ok||!env?.PROVEDOR_DB)return response;
   const panelRead=path==='/api/cloud-state'&&action==='state.get',portalRead=path==='/api/customer-portal'&&(action==='login'||action==='refresh');if(!panelRead&&!portalRead)return response;
@@ -90,8 +136,8 @@ async function overlayInvoicesFromD1(response,env,path,action){
   let target=null,minimumUpdatedAt='';
   if(panelRead){target=parsed?.data?.state;if(!target||typeof target!=='object'||Array.isArray(target))return response;minimumUpdatedAt=text(parsed?.data?.updated_at)}
   else{target=parsed?.data;if(!target||typeof target!=='object'||Array.isArray(target)||!Array.isArray(target?.invoices))return response;minimumUpdatedAt=await currentStateUpdatedAt(env)}
-  const store=await readInvoicesSnapshotFromD1(env,target?.invoices,minimumUpdatedAt);if(!store.active)return response;
-  target.invoices=store.invoices;
+  const store=await readInvoicesSnapshotFromD1(env,target?.invoices,minimumUpdatedAt);if(store.active)target.invoices=store.invoices;
+  if(panelRead){const financialStore=await readFinancialSnapshotFromD1(env,target,minimumUpdatedAt);if(financialStore.active)applyFinancialSnapshot(target,financialStore.snapshot)}
   const headers=new Headers(response.headers);headers.set('Content-Type','application/json; charset=utf-8');headers.set('Cache-Control','no-store, max-age=0');return new Response(JSON.stringify(parsed),{status:response.status,statusText:response.statusText,headers});
 }
 async function mirrorRecentClientsToD1(env,minutes=15){
@@ -298,7 +344,7 @@ async function stateMutationRequest(request,path){
   if(path==='/api/bank-settings')return action==='save-default';
   if(path==='/api/customer-trust-release')return action==='release';
   if(path==='/api/customer-due-date')return action==='change';
-  if(path==='/api/customer-portal')return new Set(['refresh','negotiate','payment-pix','payment-card','payment-status']).has(action);
+  if(path==='/api/customer-portal')return new Set(['login','refresh','payment-config','payment-prepare','negotiate','payment-pix','payment-card','payment-status']).has(action);
   return false;
 }
 async function acquireStateWriteLock(env,maxWaitMs=20000){
@@ -410,10 +456,10 @@ async function tryBackgroundStateLock(env,fn,label){
 }
 async function runScheduledStateMaintenance(env,scheduledAt){
   if(dueEvery(scheduledAt,PAYMENT_RECONCILIATION_INTERVAL_MINUTES)){
-    await tryBackgroundStateLock(env,async()=>{try{await syncInvoicesD1ToNeon(env);await reconcilePendingPayments(env);await mirrorInvoicesSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha na conciliação automática de pagamentos pendentes.',error)}},'Provedor Plus: conciliação automática não pôde obter a trava de estado.');
+    await tryBackgroundStateLock(env,async()=>{try{await syncPrimarySnapshotsD1ToNeon(env,{invoices:true,financial:true});await reconcilePendingPayments(env);await mirrorInvoicesSnapshotToD1(env);await mirrorFinancialSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha na conciliação automática de pagamentos pendentes.',error)}},'Provedor Plus: conciliação automática não pôde obter a trava de estado.');
   }
   if(!dueEvery(scheduledAt,BILLING_INTERVAL_MINUTES))return;
-  await tryBackgroundStateLock(env,async()=>{await syncInvoicesD1ToNeon(env);await runBillingCron(env)},'Provedor Plus: geração automática de mensalidades aguardará a próxima checagem.');
+  await tryBackgroundStateLock(env,async()=>{await syncPrimarySnapshotsD1ToNeon(env,{invoices:true,financial:true});await runBillingCron(env);await mirrorFinancialSnapshotToD1(env)},'Provedor Plus: geração automática de mensalidades aguardará a próxima checagem.');
 }
 
 async function pushCryptoKey(env){const secret=text(env.BANK_SECRET_KEY)||text(env.PORTAL_SESSION_SECRET)||text(env.DATABASE_URL);if(!secret)throw new Error('Chave de proteção das notificações não configurada.');const raw=await crypto.subtle.digest('SHA-256',enc.encode(`provedor-plus-push-v1|${secret}`));return crypto.subtle.importKey('raw',raw,{name:'AES-GCM'},false,['decrypt'])}
@@ -602,20 +648,18 @@ export default {
     let portalLoginRate=null,priorityStop=null;
     try{portalLoginRate=await preparePortalLoginRate(request,env,path)}catch(error){if(Number(error?.statusCode)===429)return portalLoginRateResponse(request,error);console.error('Provedor Plus: proteção de tentativas do login não pôde ser preparada.',error)}
     try{
-      const priorityAction=await paymentPriorityAction(request,path),readAction=await invoiceReadAction(request,path),invoiceWorkingCopy=await invoiceWorkingCopyRequest(request,path);if(priorityAction)priorityStop=await beginPaymentPriority(env);
-      const forward=async()=>{if(invoiceWorkingCopy)await syncInvoicesD1ToNeon(env);let response=await baseWorker.fetch(request,env,ctx);if(portalLoginRate)response=await finishPortalLoginRate(request,response,portalLoginRate,ctx);if(path==='/api/bank-settings')response=await sanitizeBankResponse(response);return overlayInvoicesFromD1(response,env,path,readAction)};
-      const mutation=await stateMutationRequest(request,path);
+      const priorityAction=await paymentPriorityAction(request,path),readAction=await invoiceReadAction(request,path),invoiceWorkingCopy=await invoiceWorkingCopyRequest(request,path),financialWorkingCopy=await financialWorkingCopyRequest(request,path),mutation=await stateMutationRequest(request,path);if(priorityAction)priorityStop=await beginPaymentPriority(env);
+      const forward=async()=>{if(mutation||invoiceWorkingCopy||financialWorkingCopy)await syncPrimarySnapshotsD1ToNeon(env,{invoices:mutation||invoiceWorkingCopy,financial:mutation||financialWorkingCopy});let response=await baseWorker.fetch(request,env,ctx);if(portalLoginRate)response=await finishPortalLoginRate(request,response,portalLoginRate,ctx);if(path==='/api/bank-settings')response=await sanitizeBankResponse(response);return overlayInvoicesFromD1(response,env,path,readAction)};
       if(mutation){
         const response=await withStateWriteLock(env,forward,priorityAction?60000:20000);
         if(response?.ok&&env?.PROVEDOR_DB){
           try{await mirrorInvoicesSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha ao confirmar alteração de faturas no D1; cópia Neon preservada para recuperação.',error)}
+          try{await mirrorFinancialSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha ao confirmar cashback e negociações no D1; cópia Neon preservada para recuperação.',error)}
           const clientsTask=mirrorRecentClientsToD1(env).catch(error=>console.error('Provedor Plus: falha ao espelhar alterações recentes de clientes no D1.',error));if(typeof ctx?.waitUntil==='function')ctx.waitUntil(clientsTask);else await clientsTask;
         }
         return response;
       }
-      const response=await forward();
-      if(response?.ok&&priorityAction&&env?.PROVEDOR_DB)try{await mirrorInvoicesSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha ao confirmar pagamento de fatura no D1; cópia Neon preservada para recuperação.',error)}
-      return response;
+      return forward();
     }catch(error){return stateLockErrorResponse(request,error)}finally{if(priorityStop)await priorityStop()}
   },
   async scheduled(controller,env,ctx){
@@ -634,10 +678,10 @@ export default {
       try{
         await withStateWriteLock(env,async()=>{
           if(await paymentPriorityActive(env))return;
-          await syncInvoicesD1ToNeon(env);
+          await syncPrimarySnapshotsD1ToNeon(env,{invoices:true,financial:true});
           const result=baseWorker.scheduled(controller,env,ctx);
           if(result&&typeof result.then==='function')await result;
-          if(env?.PROVEDOR_DB)try{await mirrorInvoicesSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha ao confirmar faturas da rotina agendada no D1.',error)}
+          if(env?.PROVEDOR_DB){try{await mirrorInvoicesSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha ao confirmar faturas da rotina agendada no D1.',error)}try{await mirrorFinancialSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha ao confirmar cashback e negociações da rotina agendada no D1.',error)}}
         },1000);
       }catch(error){if(Number(error?.statusCode)!==409)console.error('Provedor Plus: rotina agendada não pôde executar a gravação de estado.',error)}
     }

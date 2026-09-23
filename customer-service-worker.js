@@ -23,7 +23,17 @@ function parseStateValue(value){
   if(typeof value==='string')try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{}
   return {};
 }
-async function loadState(sql){const rows=await sql`SELECT value FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`;return parseStateValue(Array.isArray(rows)?rows[0]?.value:null)}
+async function loadState(env,sql){
+  if(env?.PROVEDOR_DB)try{
+    const result=await env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY).all(),row=Array.isArray(result?.results)?result.results[0]:null;
+    if(row){
+      const stamps=await sql`SELECT updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,neonAt=stamps?.[0]?.updated_at instanceof Date?stamps[0].updated_at.toISOString():text(stamps?.[0]?.updated_at),d1Time=Date.parse(text(row.updated_at)),neonTime=Date.parse(neonAt);
+      if(!Number.isFinite(neonTime)||(Number.isFinite(d1Time)&&d1Time>=neonTime))return parseStateValue(row.value);
+    }
+  }catch(error){console.error('Provedor Plus: leitura D1 do estado da Área do Cliente falhou; usando Neon.',error)}
+  const rows=await sql`SELECT value FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`;
+  return parseStateValue(Array.isArray(rows)?rows[0]?.value:null);
+}
 async function saveState(sql,state){const updatedAt=new Date().toISOString(),raw=JSON.stringify(state||{});await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${STATE_KEY},${raw}::jsonb,${updatedAt}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at`;return updatedAt}
 function localClientIndex(state,id){return (Array.isArray(state?.clients)?state.clients:[]).findIndex(row=>Number(row?.id)===Number(id))}
 function localClient(state,id){const index=localClientIndex(state,id);return index>=0?state.clients[index]:null}
@@ -103,7 +113,7 @@ async function remapAdditionalContractLogin(request,env,body={},action='',path='
   if(path!==PORTAL_PATH||action!=='login'||!env.DATABASE_URL)return {request,body};
   const contract=text(body?.data?.contract);if(!contract)return {request,body};const wanted=contract.replace(/\D/g,'');if(!wanted)return {request,body};
   try{
-    const sql=neon(env.DATABASE_URL),state=await loadState(sql),extra=(Array.isArray(state?.client_contracts)?state.client_contracts:[]).find(item=>{const number=text(item?.contract_number);return number===contract||number.replace(/\D/g,'')===wanted});
+    const sql=neon(env.DATABASE_URL),state=await loadState(env,sql),extra=(Array.isArray(state?.client_contracts)?state.client_contracts:[]).find(item=>{const number=text(item?.contract_number);return number===contract||number.replace(/\D/g,'')===wanted});
     if(!extra?.client_id)return {request,body};const owner=await portalClient(sql,extra.client_id);if(!owner?.contract_number)return {request,body};
     const nextBody={...body,data:{...(body?.data||{}),contract:text(owner.contract_number)}},headers=new Headers(request.headers),nextRequest=new Request(request.url,{method:request.method,headers,body:JSON.stringify(nextBody)});return {request:nextRequest,body:nextBody};
   }catch(error){console.error('Provedor Plus: não foi possível resolver o contrato adicional informado no login.',error);return {request,body}}
@@ -177,7 +187,7 @@ async function augmentPortalContractContext(response,env,requestBody={},action='
   const topPortal=body.data?.client&&Array.isArray(body.data?.invoices)?body.data:null,nestedPortal=body.data?.portal?.client&&Array.isArray(body.data.portal?.invoices)?body.data.portal:null,portal=topPortal||nestedPortal;if(!portal)return response;
   try{
     let clientId=Number(portal?.client?.id)||0;if(!clientId&&requestBody?.data?.session)clientId=(await verifySession(requestBody.data.session,env)).clientId;if(!clientId)return response;
-    const sql=neon(env.DATABASE_URL),client=await portalClient(sql,clientId);if(!client)return response;const state=await loadState(sql),contractId=action==='login'?'primary':text(requestBody?.data?.contractId)||'primary',live=!contractId.startsWith('primary')&&(action==='refresh'||isConnectionAction(action)),scoped=await scopePortalToContract(portal,client,state,env,contractId,live),contracts=portalContracts(client,state),selected=contracts.find(item=>text(item.id)===text(scoped?.selectedContractId||contractId))||contracts[0],firstBilling=firstBillingPreview(client,state,selected),accessBlock=portalAccessBlock(client,state,scoped,contractId),scopedWithBlock={...scoped,firstBillingPreview:firstBilling,accessBlock,client:{...(scoped?.client||{}),accessBlock}};
+    const sql=neon(env.DATABASE_URL),client=await portalClient(sql,clientId);if(!client)return response;const state=await loadState(env,sql),contractId=action==='login'?'primary':text(requestBody?.data?.contractId)||'primary',live=!contractId.startsWith('primary')&&(action==='refresh'||isConnectionAction(action)),scoped=await scopePortalToContract(portal,client,state,env,contractId,live),contracts=portalContracts(client,state),selected=contracts.find(item=>text(item.id)===text(scoped?.selectedContractId||contractId))||contracts[0],firstBilling=firstBillingPreview(client,state,selected),accessBlock=portalAccessBlock(client,state,scoped,contractId),scopedWithBlock={...scoped,firstBillingPreview:firstBilling,accessBlock,client:{...(scoped?.client||{}),accessBlock}};
     if(topPortal)body.data=scopedWithBlock;else body.data={...body.data,portal:scopedWithBlock};
     const headers=new Headers(response.headers);headers.delete('content-length');headers.delete('content-encoding');headers.delete('etag');return new Response(JSON.stringify(body),{status:response.status,statusText:response.statusText,headers});
   }catch(error){console.error('Provedor Plus: não foi possível aplicar o contexto do contrato na Área do Cliente.',error);return response}
@@ -234,7 +244,7 @@ async function handleDueDate(request,env){
   const cors=corsFor(request);if(request.method==='OPTIONS')return new Response(null,{status:204,headers:cors});if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405,cors);
   try{
     const origin=text(request.headers.get('origin'));if(!PORTAL_ORIGINS.has(origin))throw Object.assign(new Error('Origem não autorizada.'),{statusCode:403});if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Provedor Plus não configurada.'),{statusCode:503});
-    let body={};try{body=await request.json()}catch{}const action=text(body?.action),data=body?.data||{},session=await verifySession(data.session,env),sql=neon(env.DATABASE_URL),client=await portalClient(sql,session.clientId);if(!client)throw Object.assign(new Error('Cliente não encontrado.'),{statusCode:404});const state=await loadState(sql);
+    let body={};try{body=await request.json()}catch{}const action=text(body?.action),data=body?.data||{},session=await verifySession(data.session,env),sql=neon(env.DATABASE_URL),client=await portalClient(sql,session.clientId);if(!client)throw Object.assign(new Error('Cliente não encontrado.'),{statusCode:404});const state=await loadState(env,sql);
     if(action==='status')return json({ok:true,data:await dueEligibility(env,client,state)},200,cors);
     if(action==='preview')return json({ok:true,data:await previewFor(env,client,state,Number(data.day))},200,cors);
     if(action==='change')return json({ok:true,data:await changeDueDate(env,sql,client,state,Number(data.day))},200,cors);
@@ -246,7 +256,7 @@ async function handlePlanRequest(request,env,body={}){
   const cors=corsFor(request);if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405,cors);
   try{
     const origin=text(request.headers.get('origin'));if(!PORTAL_ORIGINS.has(origin))throw Object.assign(new Error('Origem não autorizada.'),{statusCode:403});if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Provedor Plus não configurada.'),{statusCode:503});
-    const data=body?.data||{};if(text(data.contractId)&&text(data.contractId)!=='primary')throw Object.assign(new Error('A mudança de plano está disponível somente no contrato principal.'),{statusCode:409});const session=await verifySession(data.session,env),sql=neon(env.DATABASE_URL),client=await portalClient(sql,session.clientId);if(!client)throw Object.assign(new Error('Cliente não encontrado.'),{statusCode:404});const state=await loadState(sql),planId=Number(data.planId)||0,target=planById(state,planId);if(!target||target.active===false||target.portal_visible===false)throw Object.assign(new Error('Este plano não está disponível para solicitação no momento.'),{statusCode:409});
+    const data=body?.data||{};if(text(data.contractId)&&text(data.contractId)!=='primary')throw Object.assign(new Error('A mudança de plano está disponível somente no contrato principal.'),{statusCode:409});const session=await verifySession(data.session,env),sql=neon(env.DATABASE_URL),client=await portalClient(sql,session.clientId);if(!client)throw Object.assign(new Error('Cliente não encontrado.'),{statusCode:404});const state=await loadState(env,sql),planId=Number(data.planId)||0,target=planById(state,planId);if(!target||target.active===false||target.portal_visible===false)throw Object.assign(new Error('Este plano não está disponível para solicitação no momento.'),{statusCode:409});
     if(Number(client.plan_id)===planId||(!client.plan_id&&normalize(client.plan)===normalize(target.name)))throw Object.assign(new Error('Este já é o seu plano atual.'),{statusCode:409});
     const db=await ensureProtocolTable(env),pendingResult=await db.prepare("SELECT id,protocol,client_id,category,subject,source,status,details,created_at,closed_at FROM pp_protocols WHERE client_id=? AND category='Plano' AND subject='Solicitação de mudança de plano' AND status='Aguardando aprovação' ORDER BY datetime(created_at) DESC,id DESC LIMIT 10").bind(Number(client.id)).all(),pending=(pendingResult?.results||[]).map(safeProtocol),same=pending.find(item=>Number(item?.details?.planId)===planId);
     if(same){const context=await planActivity(env,client.id);return json({ok:true,data:{requested:true,existing:true,protocol:same.protocol,protocolRecord:same,message:`Sua solicitação para o plano ${text(target.name)||`#${planId}`} já está aguardando aprovação.`,...context}},200,cors)}
@@ -264,7 +274,7 @@ async function handleConnectionRestart(request,env,body={}){
     const origin=text(request.headers.get('origin'));if(!PORTAL_ORIGINS.has(origin))throw Object.assign(new Error('Origem não autorizada.'),{statusCode:403});
     if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão com o Provedor Plus não configurada.'),{statusCode:503});
     const session=await verifySession(body?.data?.session,env),sql=neon(env.DATABASE_URL),client=await portalClient(sql,session.clientId);if(!client)throw Object.assign(new Error('Cliente não encontrado.'),{statusCode:404});
-    const state=await loadState(sql),contractId=text(body?.data?.contractId)||'primary',raw=contractId==='primary'?null:rawContractFor(client,state,contractId);if(contractId!=='primary'&&!raw)throw Object.assign(new Error('Contrato selecionado não foi encontrado.'),{statusCode:404});
+    const state=await loadState(env,sql),contractId=text(body?.data?.contractId)||'primary',raw=contractId==='primary'?null:rawContractFor(client,state,contractId);if(contractId!=='primary'&&!raw)throw Object.assign(new Error('Contrato selecionado não foi encontrado.'),{statusCode:404});
     const service=contractId==='primary'?{...(localClient(state,client.id)||{}),...client}:{...raw,name:text(client.name),document:text(client.document)};
     if(normalize(service?.connection_type)!=='pppoe')throw Object.assign(new Error('O reinício automático está disponível somente para conexões PPPoE.'),{statusCode:409});
     if(!Number(service?.router_id)||!text(service?.pppoe_username||service?.pppoe_user))throw Object.assign(new Error('A conexão ainda não possui MikroTik e usuário PPPoE vinculados.'),{statusCode:409});

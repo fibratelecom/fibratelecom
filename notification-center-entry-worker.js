@@ -20,6 +20,7 @@ const PORTAL_LOGIN_BLOCK_MS=15*60*1000;
 const PORTAL_LOGIN_PAIR_LIMIT=6;
 const PORTAL_LOGIN_IP_LIMIT=30;
 const VAPID_KEY='push_vapid_v1';
+const VAPID_D1_KEY='push_vapid_d1_v1';
 const CLIENT_APP_ORIGIN='https://cliente.fibramais.workers.dev';
 const CLIENT_ORIGINS=new Set(['https://cliente.fibramais.workers.dev','https://client.fibramais.workers.dev']);
 const VARIABLE_NAMES=['{nome}','{valor}','{vencimento}','{plano}','{contrato}','{cashback}'];
@@ -68,10 +69,13 @@ async function readFinancialSnapshotFromD1(env,fallbackState={},minimumUpdatedAt
 async function saveFinancialSnapshotToD1(env,state,updatedAt=new Date().toISOString()){
   if(!env?.PROVEDOR_DB)return false;const snapshot=financialSnapshotFromState(state),raw=JSON.stringify(snapshot),at=text(updatedAt)||new Date().toISOString();await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(FINANCIAL_D1_KEY,raw,at).run();return true;
 }
-async function loadState(sql,env=null){
-  const rows=await sql`SELECT value,updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,row=rows?.[0],state=parseState(row?.value);
-  if(env?.PROVEDOR_DB){const minimumUpdatedAt=row?.updated_at instanceof Date?row.updated_at.toISOString():text(row?.updated_at),[invoiceStore,financialStore]=await Promise.all([readInvoicesSnapshotFromD1(env,state?.invoices,minimumUpdatedAt),readFinancialSnapshotFromD1(env,state,minimumUpdatedAt)]);if(invoiceStore.active)state.invoices=invoiceStore.invoices;if(financialStore.active)applyFinancialSnapshot(state,financialStore.snapshot)}
-  return state;
+async function loadState(env,sql=null){
+  if(env?.PROVEDOR_DB)try{
+    const result=await env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY).all(),row=result?.results?.[0];
+    if(row){const state=parseState(row.value),minimumUpdatedAt=text(row.updated_at),[invoiceStore,financialStore]=await Promise.all([readInvoicesSnapshotFromD1(env,state?.invoices,minimumUpdatedAt),readFinancialSnapshotFromD1(env,state,minimumUpdatedAt)]);if(invoiceStore.active)state.invoices=invoiceStore.invoices;if(financialStore.active)applyFinancialSnapshot(state,financialStore.snapshot);return state}
+  }catch(error){console.error('Provedor Plus: leitura D1 do estado central falhou.',error);throw error}
+  if(sql){const rows=await sql`SELECT value,updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,row=rows?.[0],state=parseState(row?.value);return state}
+  throw Object.assign(new Error('Estado D1 do Provedor Plus não configurado.'),{statusCode:503});
 }
 async function mirrorInvoicesSnapshotToD1(env){
   if(!env?.DATABASE_URL||!env?.PROVEDOR_DB)return false;
@@ -103,7 +107,7 @@ async function syncPrimarySnapshotsD1ToNeon(env,{invoices=false,financial=false}
   const sql=neon(env.DATABASE_URL),rows=await sql`SELECT value,updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,row=rows?.[0];if(!row)return {active:false};
   const state=parseState(row.value),neonUpdatedAt=row.updated_at instanceof Date?row.updated_at.toISOString():text(row.updated_at),stamp=neonUpdatedAt||new Date().toISOString();let changed=false,seededInvoices=false,seededFinancial=false;
   if(invoices){const store=await readInvoicesSnapshotFromD1(env,state?.invoices,neonUpdatedAt);if(store.active){const current=Array.isArray(state?.invoices)?state.invoices:[];if(JSON.stringify(current)!==JSON.stringify(store.invoices)){state.invoices=store.invoices;changed=true}}else{await mirrorInvoicesToD1(env,state,stamp);seededInvoices=true}}
-  if(financial){const store=await readFinancialSnapshotFromD1(env,state,neonUpdatedAt);if(store.active){const before=JSON.stringify(financialSnapshotFromState(state));applyFinancialSnapshot(state,store.snapshot);if(before!==JSON.stringify(financialSnapshotFromState(state)))changed=true}else{await saveFinancialSnapshotToD1(env,state,stamp);seededFinancial=true}}
+  if(financial){const store=await readFinancialSnapshotFromD1(env,state,neonUpdatedAt);if(store.active){const before=JSON.stringify(financialSnapshotFromState(state));applyFinancialSnapshot(state,financialStore.snapshot);if(before!==JSON.stringify(financialSnapshotFromState(state)))changed=true}else{await saveFinancialSnapshotToD1(env,state,stamp);seededFinancial=true}}
   if(changed){const updatedAt=new Date().toISOString(),raw=JSON.stringify(state);await sql`UPDATE pp_settings SET value=${raw}::jsonb,updated_at=${updatedAt} WHERE key=${STATE_KEY}`;if(invoices)await mirrorInvoicesToD1(env,state,updatedAt);if(financial)await saveFinancialSnapshotToD1(env,state,updatedAt)}
   return {active:true,changed,seededInvoices,seededFinancial};
 }
@@ -160,7 +164,7 @@ async function collectCustomerTraffic(env){
   if(!env?.DATABASE_URL)return {routers:0,routerErrors:0,sessions:0,recorded:0,failed:0};
   const sql=neon(env.DATABASE_URL),[clients,state]=await Promise.all([
     sql`SELECT id,router_id,connection_type,pppoe_username,pppoe_user FROM pp_clients WHERE router_id IS NOT NULL AND COALESCE(NULLIF(pppoe_username,''),NULLIF(pppoe_user,'')) IS NOT NULL`,
-    loadState(sql,env)
+    loadState(env,sql)
   ]),services=[],known=new Set();
   for(const client of clients||[]){const service=trafficService(client,'primary'),key=service?`${service.clientId}|${service.scope}`:'';if(service&&!known.has(key)){known.add(key);services.push(service)}}
   for(const contract of Array.isArray(state?.client_contracts)?state.client_contracts:[]){const scope=text(contract?.id);if(!scope)continue;const service=trafficService(contract,scope),key=service?`${service.clientId}|${service.scope}`:'';if(service&&!known.has(key)){known.add(key);services.push(service)}}
@@ -483,7 +487,7 @@ async function verifySession(token,env){
 }
 async function reconcilePendingPayments(env){
   if(!env?.DATABASE_URL)return {checked:0,confirmed:0,failed:0};
-  const sql=neon(env.DATABASE_URL),state=await loadState(sql,env),candidates=(Array.isArray(state?.invoices)?state.invoices:[]).filter(row=>{
+  const sql=neon(env.DATABASE_URL),state=await loadState(env,sql),candidates=(Array.isArray(state?.invoices)?state.invoices:[]).filter(row=>{
     if(!invoiceOpen(row))return false;
     const provider=text(row?.bank_provider).toLowerCase(),detail=normalize(row?.bank_status_detail),paymentId=text(row?.bank_payment_id||row?.bank_charge_id);
     return paymentId&&detail.includes('pix')&&(provider==='mercadopago'||provider==='efi');
@@ -511,7 +515,12 @@ async function runScheduledStateMaintenance(env,scheduledAt){
 }
 
 async function pushCryptoKey(env){const secret=text(env.BANK_SECRET_KEY)||text(env.PORTAL_SESSION_SECRET)||text(env.DATABASE_URL);if(!secret)throw new Error('Chave de proteção das notificações não configurada.');const raw=await crypto.subtle.digest('SHA-256',enc.encode(`provedor-plus-push-v1|${secret}`));return crypto.subtle.importKey('raw',raw,{name:'AES-GCM'},false,['decrypt'])}
-async function readVapid(env,sql){const rows=await sql`SELECT value FROM pp_settings WHERE key=${VAPID_KEY} LIMIT 1`,record=rows?.[0]?.value;if(!record?.iv||!record?.data)return null;const key=await pushCryptoKey(env),plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:base64UrlBytes(record.iv)},key,base64UrlBytes(record.data));return JSON.parse(new TextDecoder().decode(plain))}
+async function readVapid(env,sql=null){
+  let record=null;
+  if(env?.PROVEDOR_DB)try{const rows=await d1Rows(env.PROVEDOR_DB.prepare('SELECT value FROM pp_settings WHERE key=? LIMIT 1').bind(VAPID_D1_KEY));record=parseState(rows?.[0]?.value)}catch(error){console.error('Provedor Plus: leitura D1 do VAPID falhou; usando cópia de recuperação.',error)}
+  if((!record?.iv||!record?.data)&&sql){const rows=await sql`SELECT value FROM pp_settings WHERE key=${VAPID_KEY} LIMIT 1`;record=rows?.[0]?.value}
+  if(!record?.iv||!record?.data)return null;const key=await pushCryptoKey(env),plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:base64UrlBytes(record.iv)},key,base64UrlBytes(record.data));return JSON.parse(new TextDecoder().decode(plain))
+}
 
 async function sendOne(db,row,vapid,payload){
   try{
@@ -540,13 +549,13 @@ function variableContext(state,client){
 }
 function renderVariables(value,context){return text(value).replace(/\{(nome|valor|vencimento|plano|contrato|cashback)\}/gi,(_,key)=>context[String(key).toLowerCase()]??'')}
 
-async function resolveClient(sql,identifier){const raw=text(identifier),doc=digits(raw);if(!raw&&!doc)return null;const rows=await sql`SELECT id,name,contract_number,document,plan,plan_id,due_day FROM pp_clients WHERE contract_number=${raw} OR regexp_replace(COALESCE(contract_number,''),'[^0-9]','','g')=${doc} OR regexp_replace(COALESCE(document,''),'[^0-9]','','g')=${doc} ORDER BY id ASC LIMIT 1`;return rows?.[0]||null}
-async function clientById(sql,id){const rows=await sql`SELECT id,name,contract_number,document,plan,plan_id,due_day FROM pp_clients WHERE id=${Number(id)} LIMIT 1`;return rows?.[0]||null}
-async function allAuthorizedClients(sql,db){
-  const authorized=await d1Rows(db.prepare('SELECT DISTINCT client_id FROM pp_push_subscriptions WHERE active=1 ORDER BY client_id ASC')),ids=new Set(authorized.map(row=>Number(row?.client_id)).filter(Boolean));if(!ids.size)return [];
-  const rows=await sql`SELECT id,name,contract_number,document,plan,plan_id,due_day FROM pp_clients ORDER BY id ASC`;
-  return (rows||[]).filter(row=>ids.has(Number(row?.id)));
+async function resolveClient(db,identifier){
+  const raw=text(identifier),doc=digits(raw);if(!raw&&!doc)return null;
+  const clean="replace(replace(replace(replace(replace(replace(COALESCE(%s,''),'.',''),'-',''),'/',''),'(',''),')',''),' ','')";
+  const rows=await d1Rows(db.prepare(`SELECT id,name,contract_number,document,plan,plan_id,due_day FROM pp_clients WHERE contract_number=? OR document=? OR ${clean.replace('%s','contract_number')}=? OR ${clean.replace('%s','document')}=? ORDER BY id ASC LIMIT 1`).bind(raw,raw,doc,doc));return rows?.[0]||null;
 }
+async function clientById(db,id){const rows=await d1Rows(db.prepare('SELECT id,name,contract_number,document,plan,plan_id,due_day FROM pp_clients WHERE id=? LIMIT 1').bind(Number(id)));return rows?.[0]||null}
+async function allAuthorizedClients(db){return d1Rows(db.prepare('SELECT id,name,contract_number,document,plan,plan_id,due_day FROM pp_clients WHERE id IN (SELECT DISTINCT client_id FROM pp_push_subscriptions WHERE active=1) ORDER BY id ASC'))}
 async function subscriptionsFor(db,clientId){return d1Rows(db.prepare('SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=? AND active=1 ORDER BY id ASC').bind(Number(clientId)))}
 async function recordInbox(db,clientId,sourceKey,title,body,clickUrl,createdAt=null){
   if(!clientId||!sourceKey||!title||!body)return;
@@ -571,14 +580,14 @@ async function deliver(db,sql,env,{mode='client',identifier='',clientId=null,tit
   const templateTitle=text(title).slice(0,90),templateBody=text(body).slice(0,500),clickUrl=normalizeClickUrl(url);
   if(!templateTitle||!templateBody)throw Object.assign(new Error('Informe o título e a mensagem da notificação.'),{statusCode:400});
   let clients=[],targetClient=null;
-  if(mode==='all')clients=await allAuthorizedClients(sql,db);
+  if(mode==='all')clients=await allAuthorizedClients(db);
   else{
-    targetClient=clientId?await clientById(sql,clientId):await resolveClient(sql,identifier);
+    targetClient=clientId?await clientById(db,clientId):await resolveClient(db,identifier);
     if(!targetClient)throw Object.assign(new Error('Cliente não encontrado pelo CPF/CNPJ ou contrato informado.'),{statusCode:404});
     clients=[targetClient];
   }
   if(!clients.length)throw Object.assign(new Error(mode==='all'?'Nenhum dispositivo autorizou notificações ainda.':'Cliente não encontrado.'),{statusCode:409});
-  const state=await loadState(sql,env),vapid=await readVapid(env,sql);
+  const state=await loadState(env,sql),vapid=await readVapid(env,sql);
   if(!vapid?.privateJWK)throw Object.assign(new Error('As chaves de notificação não estão disponíveis.'),{statusCode:503});
   const deliveryKey=`${source}:${crypto.randomUUID()}`,perClient=[];let sent=0,failed=0,total=0;
   for(const client of clients){
@@ -598,13 +607,13 @@ async function listSchedules(db){
 }
 
 async function createSchedule(request,env,ctx,data){
-  const user=await requireAdmin(request,env,ctx);if(!env?.DATABASE_URL||!env?.PROVEDOR_DB)throw Object.assign(new Error('Conexão com o Provedor Plus não configurada.'),{statusCode:503});const sql=neon(env.DATABASE_URL),db=env.PROVEDOR_DB;await ensureTables(db);
+  const user=await requireAdmin(request,env,ctx);if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 das notificações não configurado.'),{statusCode:503});const db=env.PROVEDOR_DB;await ensureTables(db);
   const mode=data?.mode==='all'?'all':'client',title=text(data?.title).slice(0,90),body=text(data?.body).slice(0,500),url=normalizeClickUrl(data?.url),identifier=text(data?.identifier).slice(0,120),when=new Date(data?.scheduledFor),now=Date.now();
   if(!title||!body)throw Object.assign(new Error('Informe o título e a mensagem da notificação.'),{statusCode:400});
   if(Number.isNaN(when.getTime())||when.getTime()<now+15000)throw Object.assign(new Error('Escolha uma data e hora futura para o agendamento.'),{statusCode:400});
   if(when.getTime()>now+366*86400000)throw Object.assign(new Error('O agendamento pode ser feito para até 1 ano.'),{statusCode:400});
   let targetClient=null;
-  if(mode==='client'){targetClient=await resolveClient(sql,identifier);if(!targetClient)throw Object.assign(new Error('Cliente não encontrado pelo CPF/CNPJ ou contrato informado.'),{statusCode:404})}
+  if(mode==='client'){targetClient=await resolveClient(db,identifier);if(!targetClient)throw Object.assign(new Error('Cliente não encontrado pelo CPF/CNPJ ou contrato informado.'),{statusCode:404})}
   const createdAt=new Date().toISOString(),inserted=await db.prepare('INSERT INTO pp_notification_schedules (target_mode,target_client_id,target_identifier,title,body,click_url,scheduled_for,status,created_by_name,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(mode,targetClient?Number(targetClient.id):null,mode==='client'?identifier:null,title,body,url,when.toISOString(),'pending',text(user?.name)||'Administrador',createdAt).run(),id=Number(inserted?.meta?.last_row_id)||0,schedule=id?(await d1Rows(db.prepare('SELECT * FROM pp_notification_schedules WHERE id=? LIMIT 1').bind(id)))?.[0]||null:null;
   return {schedule,schedules:await listSchedules(db)};
 }
@@ -617,8 +626,8 @@ async function cancelSchedule(request,env,ctx,data){
 }
 
 async function processDueSchedules(env){
-  if(!env?.DATABASE_URL||!env?.PROVEDOR_DB)return {processed:0,sent:0,failed:0};
-  const sql=neon(env.DATABASE_URL),db=env.PROVEDOR_DB;await ensureTables(db);const now=new Date().toISOString(),rows=await d1Rows(db.prepare("SELECT * FROM pp_notification_schedules WHERE status='pending' AND datetime(scheduled_for)<=datetime(?) ORDER BY scheduled_for ASC LIMIT 20").bind(now));
+  if(!env?.PROVEDOR_DB)return {processed:0,sent:0,failed:0};
+  const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,db=env.PROVEDOR_DB;await ensureTables(db);const now=new Date().toISOString(),rows=await d1Rows(db.prepare("SELECT * FROM pp_notification_schedules WHERE status='pending' AND datetime(scheduled_for)<=datetime(?) ORDER BY scheduled_for ASC LIMIT 20").bind(now));
   let processed=0,sent=0,failed=0;
   for(const row of rows||[]){
     const claimed=await db.prepare("UPDATE pp_notification_schedules SET status='sending' WHERE id=? AND status='pending'").bind(Number(row.id)).run();if(!(Number(claimed?.meta?.changes)||0))continue;processed++;
@@ -665,8 +674,8 @@ async function handleCustomerPush(request,env){
 async function handleAdminSend(request,env,ctx){
   if(request.method!=='POST')return null;let body={};try{body=await request.clone().json()}catch{return null};if(text(body?.action)!=='send')return null;
   try{
-    const user=await requireAdmin(request,env,ctx);if(!env.DATABASE_URL||!env.PROVEDOR_DB)throw Object.assign(new Error('Conexão com o Provedor Plus não configurada.'),{statusCode:503});
-    const sql=neon(env.DATABASE_URL),db=env.PROVEDOR_DB,data=body?.data||{},result=await deliver(db,sql,env,{mode:data?.mode==='all'?'all':'client',identifier:data?.identifier,title:data?.title,body:data?.body,url:data?.url,createdBy:text(user?.name)||'Administrador',source:'manual'});
+    const user=await requireAdmin(request,env,ctx);if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 das notificações não configurado.'),{statusCode:503});
+    const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,db=env.PROVEDOR_DB,data=body?.data||{},result=await deliver(db,sql,env,{mode:data?.mode==='all'?'all':'client',identifier:data?.identifier,title:data?.title,body:data?.body,url:data?.url,createdBy:text(user?.name)||'Administrador',source:'manual'});
     return json({ok:true,data:result});
   }catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500)}
 }
@@ -713,7 +722,7 @@ export default {
   async scheduled(controller,env,ctx){
     const cron=text(controller?.cron);
     if(cron===ECONOMY_CRON){
-      if(env?.DATABASE_URL&&typeof ctx?.waitUntil==='function'){
+      if(typeof ctx?.waitUntil==='function'){
         const scheduledAt=Number(controller?.scheduledTime)||Date.now();
         if(dueEvery(scheduledAt,NOTIFICATION_SCHEDULE_INTERVAL_MINUTES)&&env?.PROVEDOR_DB)ctx.waitUntil(processDueSchedules(env).catch(error=>console.error('Provedor Plus: falha nos agendamentos de notificações.',error)));
         if(dueEvery(scheduledAt,TRAFFIC_COLLECTION_INTERVAL_MINUTES))ctx.waitUntil(collectCustomerTraffic(env).catch(error=>console.error('Provedor Plus: falha na coleta automática do consumo PPPoE.',error)));

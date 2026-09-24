@@ -1,6 +1,5 @@
 import baseWorker from './operations-entry-worker.js';
 import {runBillingCron,mirrorInvoicesToD1} from './billing-cron.js';
-import {neon} from '@neondatabase/serverless';
 import {buildPushHTTPRequest} from '@pushforge/builder';
 import {resolveRouterForService,recordTrafficForService} from './worker-native-api.js';
 import {handleMikrotikProxy} from './worker-mikrotik-native.js';
@@ -64,7 +63,7 @@ async function readFinancialSnapshotFromD1(env,fallbackState={},minimumUpdatedAt
     const snapshot={clients:Array.isArray(value.clients)?value.clients:[],contracts:Array.isArray(value.contracts)?value.contracts:[],cashback_transactions:Array.isArray(value.cashback_transactions)?value.cashback_transactions:[],negotiations:Array.isArray(value.negotiations)?value.negotiations:[]};
     const minimumTime=Date.parse(text(minimumUpdatedAt)),d1Time=Date.parse(text(row.updated_at));if(Number.isFinite(minimumTime)&&Number.isFinite(d1Time)&&d1Time<minimumTime)return {snapshot:fallback,active:false,updatedAt:text(row.updated_at)};
     return {snapshot,active:true,updatedAt:text(row.updated_at)};
-  }catch(error){console.error('Provedor Plus: leitura D1 do cashback e negociações falhou; usando Neon.',error);return {snapshot:fallback,active:false,updatedAt:''}}
+  }catch(error){console.error('Provedor Plus: leitura D1 do cashback e negociações falhou; usando o estado de referência D1.',error);return {snapshot:fallback,active:false,updatedAt:''}}
 }
 async function saveFinancialSnapshotToD1(env,state,updatedAt=new Date().toISOString()){
   if(!env?.PROVEDOR_DB)return false;const snapshot=financialSnapshotFromState(state),raw=JSON.stringify(snapshot),at=text(updatedAt)||new Date().toISOString();await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(FINANCIAL_D1_KEY,raw,at).run();return true;
@@ -74,7 +73,6 @@ async function loadState(env,sql=null){
     const result=await env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY).all(),row=result?.results?.[0];
     if(row){const state=parseState(row.value),minimumUpdatedAt=text(row.updated_at),[invoiceStore,financialStore]=await Promise.all([readInvoicesSnapshotFromD1(env,state?.invoices,minimumUpdatedAt),readFinancialSnapshotFromD1(env,state,minimumUpdatedAt)]);if(invoiceStore.active)state.invoices=invoiceStore.invoices;if(financialStore.active)applyFinancialSnapshot(state,financialStore.snapshot);return state}
   }catch(error){console.error('Provedor Plus: leitura D1 do estado central falhou.',error);throw error}
-  if(sql){const rows=await sql`SELECT value,updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,row=rows?.[0],state=parseState(row?.value);return state}
   throw Object.assign(new Error('Estado D1 do Provedor Plus não configurado.'),{statusCode:503});
 }
 async function mirrorInvoicesSnapshotToD1(env){
@@ -100,7 +98,7 @@ async function readInvoicesSnapshotFromD1(env,fallback=[],minimumUpdatedAt=''){
     let value=row.value;if(typeof value==='string')try{value=JSON.parse(value)}catch{return {invoices:legacy,active:false,updatedAt:''}};if(!Array.isArray(value))return {invoices:legacy,active:false,updatedAt:''};
     const minimumTime=Date.parse(text(minimumUpdatedAt)),d1Time=Date.parse(text(row.updated_at));if(Number.isFinite(minimumTime)&&Number.isFinite(d1Time)&&d1Time<minimumTime)return {invoices:legacy,active:false,updatedAt:text(row.updated_at)};
     return {invoices:value,active:true,updatedAt:text(row.updated_at)};
-  }catch(error){console.error('Provedor Plus: leitura D1 das faturas falhou; usando Neon.',error);return {invoices:legacy,active:false,updatedAt:''}}
+  }catch(error){console.error('Provedor Plus: leitura D1 das faturas falhou; usando o estado de referência D1.',error);return {invoices:legacy,active:false,updatedAt:''}}
 }
 async function invoiceReadAction(request,path){
   if(request.method!=='POST'||(path!=='/api/cloud-state'&&path!=='/api/customer-portal'))return '';
@@ -441,7 +439,7 @@ async function pushCryptoKey(env){const secret=text(env.BANK_SECRET_KEY)||text(e
 async function readVapid(env,sql=null){
   let record=null;
   if(env?.PROVEDOR_DB)try{const rows=await d1Rows(env.PROVEDOR_DB.prepare('SELECT value FROM pp_settings WHERE key=? LIMIT 1').bind(VAPID_D1_KEY));record=parseState(rows?.[0]?.value)}catch(error){console.error('Provedor Plus: leitura D1 do VAPID falhou; usando cópia de recuperação.',error)}
-  if((!record?.iv||!record?.data)&&sql){const rows=await sql`SELECT value FROM pp_settings WHERE key=${VAPID_KEY} LIMIT 1`;record=rows?.[0]?.value}
+  if((!record?.iv||!record?.data)&&env?.PROVEDOR_DB){const rows=await d1Rows(env.PROVEDOR_DB.prepare('SELECT value FROM pp_settings WHERE key=? LIMIT 1').bind(VAPID_KEY));record=parseState(rows?.[0]?.value)}
   if(!record?.iv||!record?.data)return null;const key=await pushCryptoKey(env),plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:base64UrlBytes(record.iv)},key,base64UrlBytes(record.data));return JSON.parse(new TextDecoder().decode(plain))
 }
 
@@ -550,7 +548,7 @@ async function cancelSchedule(request,env,ctx,data){
 
 async function processDueSchedules(env){
   if(!env?.PROVEDOR_DB)return {processed:0,sent:0,failed:0};
-  const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,db=env.PROVEDOR_DB;await ensureTables(db);const now=new Date().toISOString(),rows=await d1Rows(db.prepare("SELECT * FROM pp_notification_schedules WHERE status='pending' AND datetime(scheduled_for)<=datetime(?) ORDER BY scheduled_for ASC LIMIT 20").bind(now));
+  const sql=null,db=env.PROVEDOR_DB;await ensureTables(db);const now=new Date().toISOString(),rows=await d1Rows(db.prepare("SELECT * FROM pp_notification_schedules WHERE status='pending' AND datetime(scheduled_for)<=datetime(?) ORDER BY scheduled_for ASC LIMIT 20").bind(now));
   let processed=0,sent=0,failed=0;
   for(const row of rows||[]){
     const claimed=await db.prepare("UPDATE pp_notification_schedules SET status='sending' WHERE id=? AND status='pending'").bind(Number(row.id)).run();if(!(Number(claimed?.meta?.changes)||0))continue;processed++;
@@ -598,7 +596,7 @@ async function handleAdminSend(request,env,ctx){
   if(request.method!=='POST')return null;let body={};try{body=await request.clone().json()}catch{return null};if(text(body?.action)!=='send')return null;
   try{
     const user=await requireAdmin(request,env,ctx);if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 das notificações não configurado.'),{statusCode:503});
-    const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,db=env.PROVEDOR_DB,data=body?.data||{},result=await deliver(db,sql,env,{mode:data?.mode==='all'?'all':'client',identifier:data?.identifier,title:data?.title,body:data?.body,url:data?.url,createdBy:text(user?.name)||'Administrador',source:'manual'});
+    const sql=null,db=env.PROVEDOR_DB,data=body?.data||{},result=await deliver(db,sql,env,{mode:data?.mode==='all'?'all':'client',identifier:data?.identifier,title:data?.title,body:data?.body,url:data?.url,createdBy:text(user?.name)||'Administrador',source:'manual'});
     return json({ok:true,data:result});
   }catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500)}
 }
@@ -633,8 +631,8 @@ export default {
       if(mutation){
         const response=await withStateWriteLock(env,forward,priorityAction?60000:20000);
         if(response?.ok&&env?.PROVEDOR_DB){
-          try{await mirrorInvoicesSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha ao confirmar alteração de faturas no D1; cópia Neon preservada para recuperação.',error)}
-          try{await mirrorFinancialSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha ao confirmar cashback e negociações no D1; cópia Neon preservada para recuperação.',error)}
+          try{await mirrorInvoicesSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha ao confirmar alteração de faturas no D1; estado principal D1 preservado.',error)}
+          try{await mirrorFinancialSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha ao confirmar cashback e negociações no D1; estado principal D1 preservado.',error)}
         }
         return response;
       }

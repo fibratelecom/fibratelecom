@@ -3,7 +3,6 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@neondatabase/serverless": "^1.0.2",
     "@pushforge/builder": "2.0.5",
     "scrypt-js": "^3.0.1",
     "node-forge": "^1.3.1"

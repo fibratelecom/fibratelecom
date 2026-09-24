@@ -1,4 +1,3 @@
-import { neon } from '@neondatabase/serverless';
 import { scrypt } from 'scrypt-js';
 
 const COOKIE='pp_session';
@@ -20,8 +19,7 @@ const bool=(value,fallback=false)=>{if(value===undefined||value===null||value===
 const normalizeRole=value=>{const role=text(value).toLowerCase();return ['admin','tecnico','atendente'].includes(role)?role:'atendente'};
 function defaultPermissions(role){role=normalizeRole(role);if(role==='admin')return [...ALL_PERMISSIONS];if(role==='tecnico')return ['dashboard','clients','tickets','network'];return ['dashboard','clients','plans','finance','billing','tickets'];}
 function normalizePermissions(value,role){if(normalizeRole(role)==='admin')return [...ALL_PERMISSIONS];const list=Array.isArray(value)?value:defaultPermissions(role);return [...new Set(list.map(v=>text(v)).filter(v=>ALL_PERMISSIONS.includes(v)))];}
-function sqlFor(env){if(!env.DATABASE_URL)throw Object.assign(new Error('Conexão nativa com o Neon não configurada na Cloudflare.'),{statusCode:503});const sql=neon(env.DATABASE_URL);SQL_ENV.set(sql,env);return sql;}
-function authSqlFor(env){const sql=()=>{throw Object.assign(new Error('Acesso legado Neon da autenticação desativado.'),{statusCode:503})};SQL_ENV.set(sql,env);return sql;}
+function authSqlFor(env){const sql=()=>{throw Object.assign(new Error('Operação SQL legada desativada; use o D1.'),{statusCode:503})};SQL_ENV.set(sql,env);return sql;}
 function d1Bool(value){return value===null||value===undefined?null:(bool(value)?1:0)}
 async function mirrorClientRowToD1(env,row){
   if(!env?.PROVEDOR_DB||!row?.id)return false;
@@ -89,7 +87,6 @@ async function passwordVerify(password,stored){try{const [kind,saltHex,expectedH
 const profileKey=id=>`${PROFILE_PREFIX}${Number(id)}`;
 const safeUser=user=>user?{id:Number(user.id),email:text(user.email),name:text(user.name),role:normalizeRole(user.role),created_at:user.created_at||null}:null;
 
-async function getSetting(sql,key){const rows=await sql`SELECT value,updated_at FROM pp_settings WHERE key=${key} LIMIT 1`;return Array.isArray(rows)?rows[0]||null:null;}
 export function finalizePaidNegotiations(state){
   if(!state||typeof state!=='object'||Array.isArray(state))return state;
   const invoices=Array.isArray(state.invoices)?state.invoices:[],agreements=Array.isArray(state.negotiations)?state.negotiations:[];
@@ -108,8 +105,6 @@ export function finalizePaidNegotiations(state){
   }
   return state;
 }
-async function setSetting(sql,key,value){if(key===STATE_KEY)value=finalizePaidNegotiations(value);const updatedAt=new Date().toISOString(),raw=JSON.stringify(value??null);const rows=await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${key},${raw}::jsonb,${updatedAt}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at RETURNING value,updated_at`;return Array.isArray(rows)?rows[0]||null:null;}
-async function deleteSetting(sql,key){await sql`DELETE FROM pp_settings WHERE key=${key}`;}
 function stateObject(value){if(value&&typeof value==='object'&&!Array.isArray(value))return value;if(typeof value==='string')try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{}return {}}
 async function getStateD1(env){
   if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 do estado administrativo não configurado.'),{statusCode:503});
@@ -129,7 +124,6 @@ async function mirrorProfileToD1(env,id,profile){
   await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(profileKey(id),JSON.stringify(safe),updatedAt).run();
   return true;
 }
-async function getProfile(sql,id,role){const row=await getSetting(sql,profileKey(id)),value=profileValue(row);return normalizeProfile(value,role);}
 async function getProfileD1(env,sql,id,role){
   if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 dos perfis de funcionário não configurado.'),{statusCode:503});
   const result=await env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(profileKey(id)).all(),row=result?.results?.[0];
@@ -445,45 +439,22 @@ async function routerSecretD1Save(env,key,value){
   await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(key,JSON.stringify(value??null),updatedAt).run();
   return {value,updated_at:updatedAt};
 }
-async function legacyRouterSecret(sql,routerId){
-  const id=num(routerId);if(!id)return '';
-  const users=await sql`SELECT id,password_hash,role FROM pp_users ORDER BY CASE WHEN role='admin' THEN 0 ELSE 1 END,id ASC`;
-  for(const user of Array.isArray(users)?users:[]){
-    const userId=Number(user?.id)||0,passwordHash=text(user?.password_hash);if(!userId||!passwordHash)continue;
-    const row=await getSetting(sql,`router_secret_v1_${userId}_${id}`),record=row?.value;if(!record||typeof record!=='object')continue;
-    const key=await sha256Bytes(`provedor-plus-router-secret-v1|${userId}|${passwordHash}`),password=await decryptSecret(record,key);if(password)return password;
-  }
-  return '';
-}
-async function sharedRouterSecret(env,sql,routerId,{migrateLegacy=true}={}){
+async function sharedRouterSecret(env,sql,routerId){
   const id=num(routerId);if(!id)return '';
   const settingKey=routerSecretV2SettingKey(id),key=await routerSharedSecretKey(env),d1Row=await routerSecretD1Get(env,settingKey),d1Record=d1Row?.value;
   if(d1Record?.deleted===true)return '';
   const stored=await decryptSecret(d1Record,key);if(stored)return stored;
-  if(!migrateLegacy||!env?.DATABASE_URL)return '';
-  const recoverySql=sqlFor(env),legacyV2=await getSetting(recoverySql,settingKey),legacyRecord=legacyV2?.value,recovered=await decryptSecret(legacyRecord,key);
-  if(recovered){await routerSecretD1Save(env,settingKey,legacyRecord);return recovered}
-  const legacy=await legacyRouterSecret(recoverySql,id);if(!legacy)return '';
-  const encrypted=await encryptSecret(legacy,key);await routerSecretD1Save(env,settingKey,encrypted);
-  try{await setSetting(recoverySql,settingKey,encrypted)}catch(error){console.error(`Provedor Plus: cópia de recuperação da credencial MikroTik ${id} no Neon falhou; D1 permanece confirmado.`,error)}
-  return legacy;
-}
-async function deleteLegacyRouterSecrets(sql,routerId){
-  const id=num(routerId);if(!id)return;
-  const users=await sql`SELECT id FROM pp_users ORDER BY id ASC`;
-  for(const user of Array.isArray(users)?users:[]){const userId=Number(user?.id)||0;if(userId)await deleteSetting(sql,`router_secret_v1_${userId}_${id}`)}
+  return '';
 }
 async function routerSecretGet(env,sql,routerId){const id=num(routerId);if(!id)throw Object.assign(new Error('MikroTik inválido.'),{statusCode:400});const password=await sharedRouterSecret(env,sql,id);return {configured:Boolean(password),password};}
 async function routerSecretSave(env,sql,routerId,password){
   const id=num(routerId),value=String(password||'');if(!id)throw Object.assign(new Error('MikroTik inválido.'),{statusCode:400});if(!value)throw Object.assign(new Error('Informe a senha do MikroTik.'),{statusCode:400});
   const key=await routerSharedSecretKey(env),settingKey=routerSecretV2SettingKey(id),encrypted=await encryptSecret(value,key);await routerSecretD1Save(env,settingKey,encrypted);
-  if(env?.DATABASE_URL)try{await setSetting(sqlFor(env),settingKey,encrypted)}catch(error){console.error(`Provedor Plus: cópia de recuperação da credencial MikroTik ${id} no Neon falhou; D1 permanece confirmado.`,error)}
   return {configured:true,id};
 }
 async function routerSecretDelete(env,sql,routerId){
   const id=num(routerId);if(!id)return {deleted:false,id:null};const settingKey=routerSecretV2SettingKey(id);
   await routerSecretD1Save(env,settingKey,{v:2,deleted:true});
-  if(env?.DATABASE_URL)try{const recoverySql=sqlFor(env);await deleteSetting(recoverySql,settingKey);await deleteLegacyRouterSecrets(recoverySql,id)}catch(error){console.error(`Provedor Plus: limpeza da cópia Neon da credencial MikroTik ${id} falhou; exclusão no D1 permanece autoritativa.`,error)}
   return {deleted:true,id};
 }
 export async function resolveRouterForService(env,routerId){

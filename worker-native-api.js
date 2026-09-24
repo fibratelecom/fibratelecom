@@ -360,7 +360,7 @@ async function upsertNativePlan(sql,data,env=null){
   return readPlanById(env,sql,plan.id);
 }
 async function syncNativePlanCatalog(sql,state,env){
-  for(const item of Array.isArray(state?.plans)?state.plans:[])await upsertNativePlan(sql,item,env);
+  for(const item of Array.isArray(state?.plans)?state.plans:[]){if(!nativePlanPayload(item))continue;await upsertNativePlan(sql,item,env)}
 }
 function safePlanRow(row){if(!row||typeof row!=='object')return row;return {...row,id:Number(row.id),speed_down_mbps:Math.max(0,Number(row.speed_down_mbps)||0),speed_up_mbps:Math.max(0,Number(row.speed_up_mbps)||0),price_cents:Math.max(0,Math.round(Number(row.price_cents)||0)),active:bool(row.active,true)}}
 async function readPlanById(env,sql,planId){

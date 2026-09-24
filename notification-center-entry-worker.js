@@ -227,16 +227,7 @@ async function ensurePortalLoginRateTable(store){
       )`),
       store.prepare('CREATE INDEX IF NOT EXISTS pp_portal_login_rate_updated_idx ON pp_portal_login_rate (updated_at)')
     ]);
-  }else{
-    await store`CREATE TABLE IF NOT EXISTS pp_portal_login_rate (
-      key TEXT PRIMARY KEY,
-      failures INTEGER NOT NULL DEFAULT 0,
-      window_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      blocked_until TIMESTAMPTZ NULL,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    )`;
-    await store`CREATE INDEX IF NOT EXISTS pp_portal_login_rate_updated_idx ON pp_portal_login_rate (updated_at)`;
-  }
+  }else throw Object.assign(new Error('Banco D1 da proteção de login não configurado.'),{statusCode:503});
   portalLoginRateSchemaReady=true;
 }
 function portalLoginRateError(blockedUntil){
@@ -258,9 +249,7 @@ async function portalLoginRateRows(store,keys){
     const statement=keys.ipKey?store.prepare('SELECT key,blocked_until FROM pp_portal_login_rate WHERE key=? OR key=?').bind(keys.pairKey,keys.ipKey):store.prepare('SELECT key,blocked_until FROM pp_portal_login_rate WHERE key=?').bind(keys.pairKey);
     return d1Rows(statement);
   }
-  const query=()=>keys.ipKey?store`SELECT key,blocked_until FROM pp_portal_login_rate WHERE key=${keys.pairKey} OR key=${keys.ipKey}`:store`SELECT key,blocked_until FROM pp_portal_login_rate WHERE key=${keys.pairKey}`;
-  try{const rows=await query();portalLoginRateSchemaReady=true;return rows}
-  catch(error){if(portalLoginRateSchemaReady||text(error?.code)!=='42P01')throw error;await ensurePortalLoginRateTable(store);return query()}
+  throw Object.assign(new Error('Banco D1 da proteção de login não configurado.'),{statusCode:503});
 }
 async function checkPortalLoginRate(store,keys){
   const rows=await portalLoginRateRows(store,keys);
@@ -288,25 +277,12 @@ async function recordPortalLoginFailure(store,key,limit){
       RETURNING failures,blocked_until`).bind(key,nowIso,nowIso,cutoffIso,cutoffIso,nowIso,nowIso,cutoffIso,Number(limit),blockIso,nowIso));
     return rows?.[0]||null;
   }
-  const rows=await store`INSERT INTO pp_portal_login_rate (key,failures,window_started_at,blocked_until,updated_at)
-    VALUES (${key},1,${nowIso},NULL,${nowIso})
-    ON CONFLICT (key) DO UPDATE SET
-      failures=CASE WHEN pp_portal_login_rate.window_started_at<${cutoffIso} THEN 1 ELSE pp_portal_login_rate.failures+1 END,
-      window_started_at=CASE WHEN pp_portal_login_rate.window_started_at<${cutoffIso} THEN ${nowIso} ELSE pp_portal_login_rate.window_started_at END,
-      blocked_until=CASE
-        WHEN pp_portal_login_rate.blocked_until>${nowIso} THEN pp_portal_login_rate.blocked_until
-        WHEN pp_portal_login_rate.window_started_at<${cutoffIso} THEN NULL
-        WHEN pp_portal_login_rate.failures+1>=${Number(limit)} THEN ${blockIso}
-        ELSE NULL
-      END,
-      updated_at=${nowIso}
-    RETURNING failures,blocked_until`;
-  return rows?.[0]||null;
+  throw Object.assign(new Error('Banco D1 da proteção de login não configurado.'),{statusCode:503});
 }
 async function registerPortalLoginFailure(store,keys){
   const pair=await recordPortalLoginFailure(store,keys.pairKey,PORTAL_LOGIN_PAIR_LIMIT),ip=keys.ipKey?await recordPortalLoginFailure(store,keys.ipKey,PORTAL_LOGIN_IP_LIMIT):null;
   const cutoff=new Date(Date.now()-2*86400000).toISOString();
-  try{if(store?.prepare)await store.prepare('DELETE FROM pp_portal_login_rate WHERE datetime(updated_at)<datetime(?)').bind(cutoff).run();else await store`DELETE FROM pp_portal_login_rate WHERE updated_at<now()-interval '2 days'`}catch{}
+  try{if(store?.prepare)await store.prepare('DELETE FROM pp_portal_login_rate WHERE datetime(updated_at)<datetime(?)').bind(cutoff).run()}catch{}
   let blockedUntil=null;for(const row of [pair,ip]){const at=row?.blocked_until?new Date(row.blocked_until):null;if(at&&!Number.isNaN(at.getTime())&&at.getTime()>Date.now()&&(!blockedUntil||at>blockedUntil))blockedUntil=at}
   if(blockedUntil)throw portalLoginRateError(blockedUntil);
 }
@@ -314,14 +290,14 @@ async function preparePortalLoginRate(request,env,path){
   if(path!==PORTAL_LOGIN_PATH||request.method!=='POST')return null;
   const origin=text(request.headers.get('origin'));if(origin&&!CLIENT_ORIGINS.has(origin))return null;
   let body={};try{body=await request.clone().json()}catch{return null};if(text(body?.action)!=='login')return null;
-  const store=env?.PROVEDOR_DB||(env?.DATABASE_URL?neon(env.DATABASE_URL):null);if(!store)return null;
+  const store=env?.PROVEDOR_DB;if(!store)return null;
   const keys=await portalLoginRateKeys(request,env,body?.data||{}),check=await checkPortalLoginRate(store,keys);return {store,keys,...check};
 }
 async function finishPortalLoginRate(request,response,rate,ctx){
   if(!rate)return response;
   if(response?.ok){
     if(rate.pairExists){
-      const cleanup=async()=>{try{if(rate.store?.prepare)await rate.store.prepare('DELETE FROM pp_portal_login_rate WHERE key=?').bind(rate.keys.pairKey).run();else await rate.store`DELETE FROM pp_portal_login_rate WHERE key=${rate.keys.pairKey}`}catch(error){console.error('Provedor Plus: não foi possível limpar a contagem de login válido.',error)}};
+      const cleanup=async()=>{try{if(rate.store?.prepare)await rate.store.prepare('DELETE FROM pp_portal_login_rate WHERE key=?').bind(rate.keys.pairKey).run()}catch(error){console.error('Provedor Plus: não foi possível limpar a contagem de login válido.',error)}};
       if(typeof ctx?.waitUntil==='function')ctx.waitUntil(cleanup());else await cleanup();
     }
     return response;
@@ -348,24 +324,8 @@ async function stateMutationRequest(request,path){
   if(path==='/api/customer-portal')return new Set(['login','refresh','payment-config','payment-prepare','negotiate','payment-pix','payment-card','payment-status']).has(action);
   return false;
 }
-async function acquireStateWriteLockNeon(env,maxWaitMs=20000){
-  if(!env?.DATABASE_URL)return null;
-  const totalWaitMs=Math.max(1000,Number(maxWaitMs)||20000),sql=neon(env.DATABASE_URL),token=crypto.randomUUID(),deadline=Date.now()+totalWaitMs;
-  while(Date.now()<deadline){
-    const expiresAt=new Date(Date.now()+STATE_WRITE_LOCK_TTL_MS).toISOString(),raw=JSON.stringify({token,expires_at:expiresAt});
-    const rows=await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${STATE_WRITE_LOCK_KEY},${raw}::jsonb,now()) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at WHERE COALESCE(NULLIF(pp_settings.value->>'expires_at','')::timestamptz,to_timestamp(0))<=now() RETURNING value`;
-    if(text(rows?.[0]?.value?.token)===token){
-      let stopped=false,renewTimer=null;
-      const renew=async()=>{if(stopped)return;try{const nextExpiry=new Date(Date.now()+STATE_WRITE_LOCK_TTL_MS).toISOString(),nextRaw=JSON.stringify({token,expires_at:nextExpiry});await sql`UPDATE pp_settings SET value=${nextRaw}::jsonb,updated_at=now() WHERE key=${STATE_WRITE_LOCK_KEY} AND value->>'token'=${token}`}catch(error){console.error('Provedor Plus: não foi possível renovar a trava de estado.',error)}if(!stopped)renewTimer=setTimeout(renew,20000)};
-      renewTimer=setTimeout(renew,20000);
-      return async()=>{stopped=true;if(renewTimer)clearTimeout(renewTimer);try{await sql`DELETE FROM pp_settings WHERE key=${STATE_WRITE_LOCK_KEY} AND value->>'token'=${token}`}catch(error){console.error('Provedor Plus: não foi possível liberar a trava de estado.',error)}};
-    }
-    const remaining=deadline-Date.now();if(remaining>0)await wait(Math.min(250,remaining));
-  }
-  throw Object.assign(new Error('O Provedor Plus está concluindo outra atualização de dados. Tente novamente em alguns segundos.'),{statusCode:409});
-}
 async function acquireStateWriteLock(env,maxWaitMs=20000){
-  if(!env?.PROVEDOR_DB)return acquireStateWriteLockNeon(env,maxWaitMs);
+  if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 da trava de estado não configurado.'),{statusCode:503});
   const db=env.PROVEDOR_DB,totalWaitMs=Math.max(1000,Number(maxWaitMs)||20000),token=crypto.randomUUID(),deadline=Date.now()+totalWaitMs;
   while(Date.now()<deadline){
     const nowIso=new Date().toISOString(),expiresAt=new Date(Date.now()+STATE_WRITE_LOCK_TTL_MS).toISOString(),raw=JSON.stringify({token,expires_at:expiresAt});

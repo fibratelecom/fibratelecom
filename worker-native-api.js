@@ -353,14 +353,14 @@ function nativePlanPayload(data={}){
 }
 async function upsertNativePlan(sql,data,env=null){
   const plan=nativePlanPayload(data);if(!plan)throw Object.assign(new Error('Plano inválido para sincronização com o cadastro nativo.'),{statusCode:409});
-  const conflict=await sql`SELECT id FROM pp_plans WHERE name=${plan.name} AND id<>${plan.id} LIMIT 1`;
-  if(conflict[0]?.id)throw Object.assign(new Error(`O plano ${plan.name} já existe no banco com outro identificador. Revise o cadastro de planos antes de vincular clientes.`),{statusCode:409});
-  const rows=await sql`INSERT INTO pp_plans (id,name,speed_down_mbps,speed_up_mbps,price_cents,active,description,updated_at) VALUES (${plan.id},${plan.name},${plan.speedDown},${plan.speedUp},${plan.priceCents},${plan.active},${plan.description},${plan.updatedAt}) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name,speed_down_mbps=EXCLUDED.speed_down_mbps,speed_up_mbps=EXCLUDED.speed_up_mbps,price_cents=EXCLUDED.price_cents,active=EXCLUDED.active,description=EXCLUDED.description,updated_at=EXCLUDED.updated_at RETURNING *`,saved=rows[0]||null;
-  if(saved&&env?.PROVEDOR_DB)try{await mirrorPlanRowToD1(env,saved)}catch(error){console.error(`Provedor Plus: não foi possível espelhar o plano ${plan.id} no D1.`,error)}
-  return saved;
+  if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 dos planos não configurado.'),{statusCode:503});
+  const conflict=await env.PROVEDOR_DB.prepare('SELECT id FROM pp_plans WHERE name=? AND id<>? LIMIT 1').bind(plan.name,plan.id).all();
+  if(conflict?.results?.[0]?.id)throw Object.assign(new Error(`O plano ${plan.name} já existe no banco com outro identificador. Revise o cadastro de planos antes de vincular clientes.`),{statusCode:409});
+  await mirrorPlanRowToD1(env,{id:plan.id,name:plan.name,speed_down_mbps:plan.speedDown,speed_up_mbps:plan.speedUp,price_cents:plan.priceCents,active:plan.active,description:plan.description,updated_at:plan.updatedAt});
+  return readPlanById(env,sql,plan.id);
 }
 async function syncNativePlanCatalog(sql,state,env){
-  for(const item of Array.isArray(state?.plans)?state.plans:[]){const plan=nativePlanPayload(item);if(!plan)continue;if(env?.PROVEDOR_DB){const conflict=await env.PROVEDOR_DB.prepare('SELECT id FROM pp_plans WHERE name=? AND id<>? LIMIT 1').bind(plan.name,plan.id).all();if(conflict?.results?.[0]?.id)throw Object.assign(new Error(`O plano ${plan.name} já existe no banco com outro identificador. Revise o cadastro de planos antes de vincular clientes.`),{statusCode:409});await mirrorPlanRowToD1(env,{id:plan.id,name:plan.name,speed_down_mbps:plan.speedDown,speed_up_mbps:plan.speedUp,price_cents:plan.priceCents,active:plan.active,description:plan.description,updated_at:plan.updatedAt})}if(env?.DATABASE_URL)try{await upsertNativePlan(sql,item,null)}catch(error){console.error(`Provedor Plus: cópia de recuperação do plano ${plan.id} no Neon falhou; D1 permanece confirmado.`,error)}}
+  for(const item of Array.isArray(state?.plans)?state.plans:[])await upsertNativePlan(sql,item,env);
 }
 function safePlanRow(row){if(!row||typeof row!=='object')return row;return {...row,id:Number(row.id),speed_down_mbps:Math.max(0,Number(row.speed_down_mbps)||0),speed_up_mbps:Math.max(0,Number(row.speed_up_mbps)||0),price_cents:Math.max(0,Math.round(Number(row.price_cents)||0)),active:bool(row.active,true)}}
 async function readPlanById(env,sql,planId){
@@ -373,7 +373,7 @@ async function readPlanById(env,sql,planId){
 }
 async function ensureNativePlanForClient(sql,planId,env){
   const id=num(planId);if(!id)return null;
-  const nativePlan=await readPlanById(env,sql,id),row=await getSetting(sql,STATE_KEY),state=row?.value&&typeof row.value==='object'?row.value:{},plan=(Array.isArray(state?.plans)?state.plans:[]).find(item=>Number(item?.id)===Number(id));
+  const nativePlan=await readPlanById(env,sql,id),row=await getStateD1(env),state=row?.value&&typeof row.value==='object'?row.value:{},plan=(Array.isArray(state?.plans)?state.plans:[]).find(item=>Number(item?.id)===Number(id));
   if(!plan)throw Object.assign(new Error('O plano selecionado não existe mais no cadastro de planos do Provedor Plus. Atualize o formulário e selecione um plano válido.'),{statusCode:409});
   if(nativePlan&&text(nativePlan.name)===text(plan.name))return nativePlan;
   return upsertNativePlan(sql,plan,env);

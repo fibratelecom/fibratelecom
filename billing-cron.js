@@ -1,5 +1,4 @@
 import baseWorker from './worker.js';
-import { neon } from '@neondatabase/serverless';
 import { handleBankProxy,readBankSettingsRecord } from './worker-bank-native.js';
 import {paymentPriorityActive} from './state-write-lock.js';
 
@@ -20,17 +19,10 @@ function parseStateValue(value){
   return {};
 }
 
-async function loadState(env,sql=null){
-  if(env?.PROVEDOR_DB)try{
-    const result=await env.PROVEDOR_DB.prepare('SELECT value FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY).all(),row=Array.isArray(result?.results)?result.results[0]:null;
-    if(row)return parseStateValue(row.value);
-  }catch(error){console.error('Provedor Plus: leitura D1 do estado de mensalidades falhou.',error);throw error}
-  if(sql){
-    const rows=await sql`SELECT value,updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,row=Array.isArray(rows)?rows[0]:null,state=parseStateValue(row?.value),updatedAt=row?.updated_at instanceof Date?row.updated_at.toISOString():text(row?.updated_at);
-    if(row&&env?.PROVEDOR_DB)await mirrorInvoicesToD1(env,state,updatedAt||new Date().toISOString());
-    return state;
-  }
-  throw Object.assign(new Error('Banco D1 das mensalidades não configurado.'),{statusCode:503});
+async function loadState(env){
+  if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 das mensalidades não configurado.'),{statusCode:503});
+  const result=await env.PROVEDOR_DB.prepare('SELECT value FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY).all(),row=Array.isArray(result?.results)?result.results[0]:null;
+  return parseStateValue(row?.value);
 }
 
 async function mirrorInvoicesToD1(env,state,updatedAt=''){
@@ -43,11 +35,10 @@ async function mirrorInvoicesToD1(env,state,updatedAt=''){
   return true;
 }
 
-async function saveState(env,sql,state){
-  const updatedAt=new Date().toISOString(),raw=JSON.stringify(state||{});
+async function saveState(env,state){
+  const updatedAt=new Date().toISOString();
   if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 das mensalidades não configurado.'),{statusCode:503});
   await mirrorInvoicesToD1(env,state,updatedAt);
-  if(sql)try{await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${STATE_KEY},${raw}::jsonb,${updatedAt}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at`}catch(error){console.error('Provedor Plus: cópia de recuperação das mensalidades no Neon falhou; D1 permanece confirmado.',error)}
   return updatedAt;
 }
 
@@ -76,8 +67,8 @@ async function bankCryptoKey(env){
   return crypto.subtle.importKey('raw',raw,{name:'AES-GCM'},false,['decrypt']);
 }
 
-async function readBankSettings(env,sql){
-  const stored=await readBankSettingsRecord(env,sql),record=stored?.record;
+async function readBankSettings(env){
+  const stored=await readBankSettingsRecord(env,null),record=stored?.record;
   if(!record?.iv||!record?.data)return {efi:{},mercadoPago:{}};
   const key=await bankCryptoKey(env),plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:bankB64Bytes(record.iv)},key,bankB64Bytes(record.data));
   const parsed=JSON.parse(new TextDecoder().decode(plain));
@@ -217,7 +208,7 @@ function bankSecrets(vault){
 
 async function enrichPanelBankRequest(request,env){
   let body={};try{body=await request.clone().json()}catch{throw Object.assign(new Error('Operação bancária inválida.'),{statusCode:400})}
-  const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,vault=await readBankSettings(env,sql),secrets=bankSecrets(vault),headers=new Headers(request.headers);
+  const vault=await readBankSettings(env),secrets=bankSecrets(vault),headers=new Headers(request.headers);
   headers.delete('content-length');headers.set('Content-Type','application/json');
   return new Request(request.url,{method:'POST',headers,body:JSON.stringify({...body,efi:secrets.efi,mercadoPago:secrets.mercadoPago})});
 }
@@ -303,11 +294,11 @@ function prepareCombinedMonthly(invoice,client,plan,dueDate){
   return invoice;
 }
 
-async function issueAndSave(env,sql,state,invoice,client,vault,isExisting){
+async function issueAndSave(env,state,invoice,client,vault,isExisting){
   const before=JSON.parse(JSON.stringify(invoice));
   const remoteIssued=await issueRealCharge(env,invoice,client,state,vault);
   if(!isExisting){state.invoices=Array.isArray(state.invoices)?state.invoices:[];state.invoices.push(invoice)}
-  try{await saveState(env,sql,state)}catch(error){
+  try{await saveState(env,state)}catch(error){
     try{await cancelIssued(env,invoice,client,vault)}catch{}
     if(isExisting){for(const key of Object.keys(invoice))delete invoice[key];Object.assign(invoice,before)}
     else state.invoices=state.invoices.filter(row=>String(row?.id)!==String(invoice.id));
@@ -318,17 +309,17 @@ async function issueAndSave(env,sql,state,invoice,client,vault,isExisting){
 
 async function runBillingCron(env,{force=false}={}){
   if(!env?.PROVEDOR_DB)throw new Error('Banco D1 não configurado para a geração automática.');
-  const sql=null,state=await loadState(env);state.settings={...(state.settings||{})};
+  const state=await loadState(env);state.settings={...(state.settings||{})};
   const enabled=state.settings.billing_auto_enabled!==false&&String(state.settings.billing_auto_enabled)!=='false';
   if(!enabled&&!force)return {enabled:false,generated:0,issued:0,skipped:0,failed:0,errors:[]};
   const todayParts=brazilParts(),today=keyFromParts(todayParts.year,todayParts.month,todayParts.day),daysBefore=Math.max(1,Math.min(30,Math.floor(num(state.settings.billing_auto_days_before)||7)));
   let vault={},bankSettingsError='';
-  try{vault=await readBankSettings(env,sql)}catch(error){bankSettingsError=error instanceof Error?error.message:String(error)}
+  try{vault=await readBankSettings(env)}catch(error){bankSettingsError=error instanceof Error?error.message:String(error)}
   const clientResult=await env.PROVEDOR_DB.prepare('SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code FROM pp_clients ORDER BY id ASC').all(),rows=Array.isArray(clientResult?.results)?clientResult.results:[];
   const primaryClients=rows.map(remote=>mergedClient(remote,state)),owners=new Map(primaryClients.map(item=>[Number(item.id),item])),extraContracts=Array.isArray(state?.client_contracts)?state.client_contracts:[],contractClients=extraContracts.map(item=>{const owner=owners.get(Number(item?.client_id));return owner?mergedContractClient(item,owner,state):null}).filter(Boolean),billable=[...primaryClients,...contractClients];
   let generated=0,issued=0,skipped=0,failed=0,yielded=false;const errors=[];
   for(const client of billable){
-    if(!force&&await paymentPriorityActive(env,sql)){yielded=true;break}
+    if(!force&&await paymentPriorityActive(env)){yielded=true;break}
     if(!activeClient(client)){skipped++;continue}
     if(serviceContractId(client)&&Number(client.due_day)===0){skipped++;continue}
     const installation=dateFromKey(client.installation_date),todayDate=dateFromKey(today);if(installation&&todayDate&&installation.getTime()>todayDate.getTime()){skipped++;continue}
@@ -352,7 +343,7 @@ async function runBillingCron(env,{force=false}={}){
       if(inactive||text(invoice.bank_charge_id)||mpPixWaiting){skipped++;continue}
       if(bankSettingsError)throw new Error(`Credenciais bancárias indisponíveis: ${bankSettingsError}`);
       if(existing&&deferredNegotiationInstallment(invoice))prepareCombinedMonthly(invoice,client,plan,dueDate);
-      const remoteIssued=await issueAndSave(env,sql,state,invoice,client,vault,Boolean(existing));
+      const remoteIssued=await issueAndSave(env,state,invoice,client,vault,Boolean(existing));
       if(remoteIssued)issued++;if(!existing)generated++;
     }catch(error){failed++;errors.push(`${billingSubject(client)}: ${error instanceof Error?error.message:String(error)}`)}
   }
@@ -362,7 +353,7 @@ async function runBillingCron(env,{force=false}={}){
   const result={generated,issued,skipped,failed,at:new Date().toISOString(),errors:errors.slice(0,50)};
   if(force){state.settings.billing_manual_last_run=today;state.settings.billing_manual_last_result=result}
   else{state.settings.billing_auto_last_run=today;state.settings.billing_cloudflare_last_run=today;state.settings.billing_cloudflare_last_result=result}
-  await saveState(env,sql,state);
+  await saveState(env,state);
   return {date:today,manual:force,enabled,generated,issued,skipped,failed,errors};
 }
 

@@ -2,7 +2,7 @@ import baseWorker from './operations-entry-worker.js';
 import {runBillingCron,mirrorInvoicesToD1} from './billing-cron.js';
 import {neon} from '@neondatabase/serverless';
 import {buildPushHTTPRequest} from '@pushforge/builder';
-import {resolveRouterForService,recordTrafficForService,mirrorClientToD1} from './worker-native-api.js';
+import {resolveRouterForService,recordTrafficForService} from './worker-native-api.js';
 import {handleMikrotikProxy} from './worker-mikrotik-native.js';
 import {beginPaymentPriority,paymentPriorityActive} from './state-write-lock.js';
 
@@ -144,16 +144,6 @@ async function overlayInvoicesFromD1(response,env,path,action){
   const store=await readInvoicesSnapshotFromD1(env,target?.invoices,minimumUpdatedAt);if(store.active)target.invoices=store.invoices;
   if(panelRead){const financialStore=await readFinancialSnapshotFromD1(env,target,minimumUpdatedAt);if(financialStore.active)applyFinancialSnapshot(target,financialStore.snapshot)}
   const headers=new Headers(response.headers);headers.set('Content-Type','application/json; charset=utf-8');headers.set('Cache-Control','no-store, max-age=0');return new Response(JSON.stringify(parsed),{status:response.status,statusText:response.statusText,headers});
-}
-async function mirrorRecentClientsToD1(env,minutes=15){
-  if(!env?.DATABASE_URL||!env?.PROVEDOR_DB)return {checked:0,mirrored:0,failed:0};
-  const windowMinutes=Math.max(5,Math.min(60,Math.floor(Number(minutes)||15))),since=new Date(Date.now()-windowMinutes*60*1000).toISOString(),sql=neon(env.DATABASE_URL),rows=await sql`SELECT id FROM pp_clients WHERE updated_at IS NOT NULL AND updated_at>=${since} ORDER BY updated_at ASC LIMIT 500`;
-  let mirrored=0,failed=0;
-  for(let start=0;start<(rows||[]).length;start+=20){
-    const results=await Promise.allSettled(rows.slice(start,start+20).map(row=>mirrorClientToD1(env,row.id)));
-    for(const result of results)result.status==='fulfilled'?mirrored++:failed++;
-  }
-  return {checked:(rows||[]).length,mirrored,failed};
 }
 function trafficService(row,scope='primary'){
   const clientId=Number(row?.client_id??row?.id)||0,routerId=Number(row?.router_id)||0,username=text(row?.pppoe_username||row?.pppoe_user),connectionType=normalize(row?.connection_type),normalizedScope=text(scope)||'primary';
@@ -556,7 +546,7 @@ async function resolveClient(db,identifier){
 }
 async function clientById(db,id){const rows=await d1Rows(db.prepare('SELECT id,name,contract_number,document,plan,plan_id,due_day FROM pp_clients WHERE id=? LIMIT 1').bind(Number(id)));return rows?.[0]||null}
 async function allAuthorizedClients(db){return d1Rows(db.prepare('SELECT id,name,contract_number,document,plan,plan_id,due_day FROM pp_clients WHERE id IN (SELECT DISTINCT client_id FROM pp_push_subscriptions WHERE active=1) ORDER BY id ASC'))}
-async function subscriptionsFor(db,clientId){return d1Rows(db.prepare('SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=? AND active=1 ORDER BY id ASC').bind(Number(clientId)))}
+async function subscriptionsFor(db,clientId){return d1Rows(db.prepare('SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=? AND active=1 ORDER BY id ASC'))}
 async function recordInbox(db,clientId,sourceKey,title,body,clickUrl,createdAt=null){
   if(!clientId||!sourceKey||!title||!body)return;
   await ensureTables(db);
@@ -712,7 +702,6 @@ export default {
         if(response?.ok&&env?.PROVEDOR_DB){
           try{await mirrorInvoicesSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha ao confirmar alteração de faturas no D1; cópia Neon preservada para recuperação.',error)}
           try{await mirrorFinancialSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha ao confirmar cashback e negociações no D1; cópia Neon preservada para recuperação.',error)}
-          if(mutation!=='d1-billing'){const clientsTask=mirrorRecentClientsToD1(env).catch(error=>console.error('Provedor Plus: falha ao espelhar alterações recentes de clientes no D1.',error));if(typeof ctx?.waitUntil==='function')ctx.waitUntil(clientsTask);else await clientsTask}
         }
         return response;
       }
@@ -727,7 +716,6 @@ export default {
         if(dueEvery(scheduledAt,NOTIFICATION_SCHEDULE_INTERVAL_MINUTES)&&env?.PROVEDOR_DB)ctx.waitUntil(processDueSchedules(env).catch(error=>console.error('Provedor Plus: falha nos agendamentos de notificações.',error)));
         if(dueEvery(scheduledAt,TRAFFIC_COLLECTION_INTERVAL_MINUTES))ctx.waitUntil(collectCustomerTraffic(env).catch(error=>console.error('Provedor Plus: falha na coleta automática do consumo PPPoE.',error)));
         if(dueEvery(scheduledAt,PAYMENT_RECONCILIATION_INTERVAL_MINUTES))ctx.waitUntil(runScheduledStateMaintenance(env,scheduledAt).catch(error=>console.error('Provedor Plus: falha na manutenção automática de pagamentos e mensalidades.',error)));
-        if(env?.PROVEDOR_DB)ctx.waitUntil(mirrorRecentClientsToD1(env).catch(error=>console.error('Provedor Plus: falha ao sincronizar clientes recentes com o D1.',error)));
       }
       return;
     }

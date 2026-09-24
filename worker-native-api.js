@@ -466,6 +466,17 @@ async function encryptSecret(value,keyBytes){const iv=randomBytes(12),key=await 
 async function decryptSecret(record,keyBytes){try{if(!record?.iv||!record?.tag||!record?.data)return '';const data=b64ToBytes(record.data),tag=b64ToBytes(record.tag),combined=new Uint8Array(data.length+tag.length);combined.set(data);combined.set(tag,data.length);const key=await crypto.subtle.importKey('raw',keyBytes,{name:'AES-GCM'},false,['decrypt']),plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:b64ToBytes(record.iv)},key,combined);return new TextDecoder().decode(plain)}catch{return ''}}
 const routerSecretV2SettingKey=routerId=>`router_secret_v2_${Number(routerId)}`;
 async function routerSharedSecretKey(env){const secret=text(env?.BANK_SECRET_KEY)||text(env?.PORTAL_SESSION_SECRET)||text(env?.DATABASE_URL);if(!secret)throw Object.assign(new Error('Chave de proteção das credenciais do MikroTik não configurada.'),{statusCode:503});return sha256Bytes(`provedor-plus-router-secret-v2|${secret}`)}
+async function routerSecretD1Get(env,key){
+  if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 das credenciais do MikroTik não configurado.'),{statusCode:503});
+  const result=await env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(key).all(),row=result?.results?.[0]||null;
+  return row?{value:stateObject(row.value),updated_at:row.updated_at||null}:null;
+}
+async function routerSecretD1Save(env,key,value){
+  if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 das credenciais do MikroTik não configurado.'),{statusCode:503});
+  const updatedAt=new Date().toISOString();
+  await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(key,JSON.stringify(value??null),updatedAt).run();
+  return {value,updated_at:updatedAt};
+}
 async function legacyRouterSecret(sql,routerId){
   const id=num(routerId);if(!id)return '';
   const users=await sql`SELECT id,password_hash,role FROM pp_users ORDER BY CASE WHEN role='admin' THEN 0 ELSE 1 END,id ASC`;
@@ -478,10 +489,16 @@ async function legacyRouterSecret(sql,routerId){
 }
 async function sharedRouterSecret(env,sql,routerId,{migrateLegacy=true}={}){
   const id=num(routerId);if(!id)return '';
-  const key=await routerSharedSecretKey(env),row=await getSetting(sql,routerSecretV2SettingKey(id)),stored=await decryptSecret(row?.value,key);if(stored)return stored;
-  if(!migrateLegacy)return '';
-  const legacy=await legacyRouterSecret(sql,id);if(!legacy)return '';
-  await setSetting(sql,routerSecretV2SettingKey(id),await encryptSecret(legacy,key));return legacy;
+  const settingKey=routerSecretV2SettingKey(id),key=await routerSharedSecretKey(env),d1Row=await routerSecretD1Get(env,settingKey),d1Record=d1Row?.value;
+  if(d1Record?.deleted===true)return '';
+  const stored=await decryptSecret(d1Record,key);if(stored)return stored;
+  if(!migrateLegacy||!env?.DATABASE_URL)return '';
+  const recoverySql=sqlFor(env),legacyV2=await getSetting(recoverySql,settingKey),legacyRecord=legacyV2?.value,recovered=await decryptSecret(legacyRecord,key);
+  if(recovered){await routerSecretD1Save(env,settingKey,legacyRecord);return recovered}
+  const legacy=await legacyRouterSecret(recoverySql,id);if(!legacy)return '';
+  const encrypted=await encryptSecret(legacy,key);await routerSecretD1Save(env,settingKey,encrypted);
+  try{await setSetting(recoverySql,settingKey,encrypted)}catch(error){console.error(`Provedor Plus: cópia de recuperação da credencial MikroTik ${id} no Neon falhou; D1 permanece confirmado.`,error)}
+  return legacy;
 }
 async function deleteLegacyRouterSecrets(sql,routerId){
   const id=num(routerId);if(!id)return;
@@ -489,10 +506,20 @@ async function deleteLegacyRouterSecrets(sql,routerId){
   for(const user of Array.isArray(users)?users:[]){const userId=Number(user?.id)||0;if(userId)await deleteSetting(sql,`router_secret_v1_${userId}_${id}`)}
 }
 async function routerSecretGet(env,sql,routerId){const id=num(routerId);if(!id)throw Object.assign(new Error('MikroTik inválido.'),{statusCode:400});const password=await sharedRouterSecret(env,sql,id);return {configured:Boolean(password),password};}
-async function routerSecretSave(env,sql,routerId,password){const id=num(routerId),value=String(password||'');if(!id)throw Object.assign(new Error('MikroTik inválido.'),{statusCode:400});if(!value)throw Object.assign(new Error('Informe a senha do MikroTik.'),{statusCode:400});const key=await routerSharedSecretKey(env);await setSetting(sql,routerSecretV2SettingKey(id),await encryptSecret(value,key));return {configured:true,id};}
-async function routerSecretDelete(env,sql,routerId){const id=num(routerId);if(!id)return {deleted:false,id:null};await deleteSetting(sql,routerSecretV2SettingKey(id));await deleteLegacyRouterSecrets(sql,id);return {deleted:true,id};}
+async function routerSecretSave(env,sql,routerId,password){
+  const id=num(routerId),value=String(password||'');if(!id)throw Object.assign(new Error('MikroTik inválido.'),{statusCode:400});if(!value)throw Object.assign(new Error('Informe a senha do MikroTik.'),{statusCode:400});
+  const key=await routerSharedSecretKey(env),settingKey=routerSecretV2SettingKey(id),encrypted=await encryptSecret(value,key);await routerSecretD1Save(env,settingKey,encrypted);
+  if(env?.DATABASE_URL)try{await setSetting(sqlFor(env),settingKey,encrypted)}catch(error){console.error(`Provedor Plus: cópia de recuperação da credencial MikroTik ${id} no Neon falhou; D1 permanece confirmado.`,error)}
+  return {configured:true,id};
+}
+async function routerSecretDelete(env,sql,routerId){
+  const id=num(routerId);if(!id)return {deleted:false,id:null};const settingKey=routerSecretV2SettingKey(id);
+  await routerSecretD1Save(env,settingKey,{v:2,deleted:true});
+  if(env?.DATABASE_URL)try{const recoverySql=sqlFor(env);await deleteSetting(recoverySql,settingKey);await deleteLegacyRouterSecrets(recoverySql,id)}catch(error){console.error(`Provedor Plus: limpeza da cópia Neon da credencial MikroTik ${id} falhou; exclusão no D1 permanece autoritativa.`,error)}
+  return {deleted:true,id};
+}
 export async function resolveRouterForService(env,routerId){
-  const sql=sqlFor(env),id=num(routerId);
+  const sql=authSqlFor(env),id=num(routerId);
   if(!id)throw Object.assign(new Error('MikroTik do cliente não está configurado.'),{statusCode:409});
   const router=await readRouterById(env,sql,id);
   if(!router)throw Object.assign(new Error('MikroTik vinculado ao cliente não foi encontrado.'),{statusCode:404});
@@ -537,7 +564,7 @@ async function cashbackWalletAdjust(request,sql,env,data){
 
 export async function handleNativeCloudData(request,env){
   if(request.method!=='POST')return apiJson({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-native-data'});
-  try{const body=await bodyOf(request),action=text(body?.action),data=body?.data||{},sql=(action.startsWith('cashback.')||action.startsWith('clients.'))?authSqlFor(env):sqlFor(env);if(action.startsWith('routers.')||action==='traffic.record')await requirePermission(request,sql,'network');else if(action.startsWith('clients.'))await requirePermission(request,sql,'clients');else if(action.startsWith('cashback.'))await requirePermission(request,sql,'finance');else await requireAuth(request,sql);let result;
+  try{const body=await bodyOf(request),action=text(body?.action),data=body?.data||{},sql=(action.startsWith('cashback.')||action.startsWith('clients.')||action.startsWith('routers.'))?authSqlFor(env):sqlFor(env);if(action.startsWith('routers.')||action==='traffic.record')await requirePermission(request,sql,'network');else if(action.startsWith('clients.'))await requirePermission(request,sql,'clients');else if(action.startsWith('cashback.'))await requirePermission(request,sql,'finance');else await requireAuth(request,sql);let result;
     if(action==='routers.list')result=await readRouterList(env,sql);
     else if(action==='routers.save')result=await saveRouter(sql,data,env);
     else if(action==='routers.delete'){const id=num(data.id);if(!id)throw Object.assign(new Error('MikroTik inválido.'),{statusCode:400});if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 dos MikroTik não configurado.'),{statusCode:503});await env.PROVEDOR_DB.prepare('DELETE FROM pp_routers WHERE id=?').bind(id).run();result={deleted:true,id};}

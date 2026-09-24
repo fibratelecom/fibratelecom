@@ -139,7 +139,7 @@ async function requireBankAdmin(request,env){
 }
 
 async function readBankSettings(env){
-  const sql=env?.DATABASE_URL?neon(env.DATABASE_URL):null,stored=await readBankSettingsRecord(env,sql),encrypted=stored?.record;
+  const stored=await readBankSettingsRecord(env,null),encrypted=stored?.record;
   if(!encrypted)return emptyBankSettings();
   const value=await decryptBankSettings(env,encrypted);
   return {
@@ -151,8 +151,8 @@ async function readBankSettings(env){
 }
 
 async function writeBankSettings(env,value){
-  const sql=env?.DATABASE_URL?neon(env.DATABASE_URL):null,updatedAt=new Date().toISOString(),encrypted=await encryptBankSettings(env,value);
-  await writeBankSettingsRecord(env,sql,encrypted,updatedAt);
+  const updatedAt=new Date().toISOString(),encrypted=await encryptBankSettings(env,value);
+  await writeBankSettingsRecord(env,null,encrypted,updatedAt);
   return value;
 }
 
@@ -225,10 +225,10 @@ async function handleBankSettings(request,env){
       const provider=['efi','mercadoPago'].includes(text(data.provider))?text(data.provider):'',state=await loadState(env);
       state.banks={...(state.banks||{}),defaultProvider:provider};await saveState(env,state);result={defaultProvider:provider};
     }else if(action==='test-efi'||action==='test-mercado-pago'||action==='configure-efi-webhooks'){
-      const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,current=await readBankSettings(env),secrets=bankSecretsFromVault(current),isEfi=action!=='test-mercado-pago';
+      const current=await readBankSettings(env),secrets=bankSecretsFromVault(current),isEfi=action!=='test-mercado-pago';
       try{
         const proxyAction=action==='test-efi'?'efi-test':action==='test-mercado-pago'?'mp-test':'efi-webhooks';
-        const tested=await bankProxyAsService(env,sql,{action:proxyAction,efi:secrets.efi,mercadoPago:secrets.mercadoPago}),now=new Date().toISOString();
+        const tested=await bankProxyAsService(env,null,{action:proxyAction,efi:secrets.efi,mercadoPago:secrets.mercadoPago}),now=new Date().toISOString();
         if(isEfi)current.efi={...current.efi,lastTestStatus:'success',lastTestMessage:text(tested?.message)||'Conexão Efí confirmada.',lastTestAt:now,...(action==='configure-efi-webhooks'?{webhookConfiguredAt:now}:{})};
         else current.mercadoPago={...current.mercadoPago,lastTestStatus:'success',lastTestMessage:text(tested?.message)||'Conexão Mercado Pago confirmada.',lastTestAt:now};
         await writeBankSettings(env,current);result={test:tested,settings:safeBankSettings(current)};

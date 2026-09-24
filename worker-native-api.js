@@ -55,18 +55,6 @@ async function mirrorPlanRowToD1(env,row){
     ).run();
   return true;
 }
-async function mirrorRouterRowToD1(env,row){
-  if(!env?.PROVEDOR_DB||!row?.id)return false;
-  await env.PROVEDOR_DB.prepare(`INSERT INTO pp_routers (id,name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,created_at,updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-    ON CONFLICT(id) DO UPDATE SET name=excluded.name,host=excluded.host,port=excluded.port,username=excluded.username,
-    connection_method=excluded.connection_method,allow_self_signed=excluded.allow_self_signed,active=excluded.active,
-    last_status=excluded.last_status,last_sync=excluded.last_sync,
-    created_at=COALESCE(pp_routers.created_at,excluded.created_at),updated_at=excluded.updated_at`).bind(
-      Number(row.id),text(row.name),text(row.host),Math.max(1,Number(row.port)||443),text(row.username),text(row.connection_method)||'rest',d1Bool(row.allow_self_signed),d1Bool(row.active),nullableText(row.last_status),row.last_sync||null,row.created_at||null,row.updated_at||new Date().toISOString()
-    ).run();
-  return true;
-}
 function safeRouterRow(row){if(!row||typeof row!=='object')return row;return {...row,id:Number(row.id),port:Math.max(1,Number(row.port)||443),allow_self_signed:bool(row.allow_self_signed,false),active:bool(row.active,true)}}
 async function readRouterList(env,sql){
   if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 dos MikroTik não configurado.'),{statusCode:503});
@@ -82,24 +70,6 @@ async function readRouterById(env,sql,routerId){
     const result=await env.PROVEDOR_DB.prepare('SELECT id,name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,created_at,updated_at FROM pp_routers WHERE id=? LIMIT 1').bind(id).all(),row=result?.results?.[0]||null;
     return safeRouterRow(row);
   }catch(error){console.error(`Provedor Plus: leitura D1 do MikroTik ${id} falhou.`,error);throw error}
-}
-export async function mirrorClientToD1(env,clientId){
-  const id=num(clientId);if(!id||!env?.PROVEDOR_DB)return false;
-  const rows=await sqlFor(env)`SELECT * FROM pp_clients WHERE id=${id} LIMIT 1`,row=Array.isArray(rows)?rows[0]:null;
-  if(!row){await env.PROVEDOR_DB.prepare('DELETE FROM pp_clients WHERE id = ?').bind(id).run();return false}
-  return mirrorClientRowToD1(env,row);
-}
-export async function mirrorPlanToD1(env,planId){
-  const id=num(planId);if(!id||!env?.PROVEDOR_DB)return false;
-  const rows=await sqlFor(env)`SELECT * FROM pp_plans WHERE id=${id} LIMIT 1`,row=Array.isArray(rows)?rows[0]:null;
-  if(!row){await env.PROVEDOR_DB.prepare('DELETE FROM pp_plans WHERE id = ?').bind(id).run();return false}
-  return mirrorPlanRowToD1(env,row);
-}
-export async function mirrorRouterToD1(env,routerId){
-  const id=num(routerId);if(!id||!env?.PROVEDOR_DB)return false;
-  const rows=await sqlFor(env)`SELECT * FROM pp_routers WHERE id=${id} LIMIT 1`,row=Array.isArray(rows)?rows[0]:null;
-  if(!row){await env.PROVEDOR_DB.prepare('DELETE FROM pp_routers WHERE id = ?').bind(id).run();return false}
-  return mirrorRouterRowToD1(env,row);
 }
 function apiJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store, max-age=0',...headers}});}
 async function bodyOf(request){try{return await request.json()}catch{return {}}}
@@ -562,7 +532,7 @@ async function cashbackWalletAdjust(request,sql,env,data){
 
 export async function handleNativeCloudData(request,env){
   if(request.method!=='POST')return apiJson({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-native-data'});
-  try{const body=await bodyOf(request),action=text(body?.action),data=body?.data||{},sql=(action.startsWith('cashback.')||action.startsWith('clients.')||action.startsWith('routers.')||action==='traffic.record'||action==='health')?authSqlFor(env):sqlFor(env);if(action.startsWith('routers.')||action==='traffic.record')await requirePermission(request,sql,'network');else if(action.startsWith('clients.'))await requirePermission(request,sql,'clients');else if(action.startsWith('cashback.'))await requirePermission(request,sql,'finance');else await requireAuth(request,sql);let result;
+  try{const body=await bodyOf(request),action=text(body?.action),data=body?.data||{},sql=authSqlFor(env);if(action.startsWith('routers.')||action==='traffic.record')await requirePermission(request,sql,'network');else if(action.startsWith('clients.'))await requirePermission(request,sql,'clients');else if(action.startsWith('cashback.'))await requirePermission(request,sql,'finance');else await requireAuth(request,sql);let result;
     if(action==='routers.list')result=await readRouterList(env,sql);
     else if(action==='routers.save')result=await saveRouter(sql,data,env);
     else if(action==='routers.delete'){const id=num(data.id);if(!id)throw Object.assign(new Error('MikroTik inválido.'),{statusCode:400});if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 dos MikroTik não configurado.'),{statusCode:503});await env.PROVEDOR_DB.prepare('DELETE FROM pp_routers WHERE id=?').bind(id).run();result={deleted:true,id};}

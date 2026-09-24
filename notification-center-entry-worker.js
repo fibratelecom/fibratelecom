@@ -102,35 +102,9 @@ async function readInvoicesSnapshotFromD1(env,fallback=[],minimumUpdatedAt=''){
     return {invoices:value,active:true,updatedAt:text(row.updated_at)};
   }catch(error){console.error('Provedor Plus: leitura D1 das faturas falhou; usando Neon.',error);return {invoices:legacy,active:false,updatedAt:''}}
 }
-async function syncPrimarySnapshotsD1ToNeon(env,{invoices=false,financial=false}={}){
-  if(!env?.DATABASE_URL||!env?.PROVEDOR_DB)return {active:false};
-  const sql=neon(env.DATABASE_URL),rows=await sql`SELECT value,updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,row=rows?.[0];if(!row)return {active:false};
-  const state=parseState(row.value),neonUpdatedAt=row.updated_at instanceof Date?row.updated_at.toISOString():text(row.updated_at),stamp=neonUpdatedAt||new Date().toISOString();let changed=false,seededInvoices=false,seededFinancial=false;
-  if(invoices){const store=await readInvoicesSnapshotFromD1(env,state?.invoices,neonUpdatedAt);if(store.active){const current=Array.isArray(state?.invoices)?state.invoices:[];if(JSON.stringify(current)!==JSON.stringify(store.invoices)){state.invoices=store.invoices;changed=true}}else{await mirrorInvoicesToD1(env,state,stamp);seededInvoices=true}}
-  if(financial){const store=await readFinancialSnapshotFromD1(env,state,neonUpdatedAt);if(store.active){const before=JSON.stringify(financialSnapshotFromState(state));applyFinancialSnapshot(state,store.snapshot);if(before!==JSON.stringify(financialSnapshotFromState(state)))changed=true}else{await saveFinancialSnapshotToD1(env,state,stamp);seededFinancial=true}}
-  if(changed){const updatedAt=new Date().toISOString(),raw=JSON.stringify(state);await sql`UPDATE pp_settings SET value=${raw}::jsonb,updated_at=${updatedAt} WHERE key=${STATE_KEY}`;if(invoices)await mirrorInvoicesToD1(env,state,updatedAt);if(financial)await saveFinancialSnapshotToD1(env,state,updatedAt)}
-  return {active:true,changed,seededInvoices,seededFinancial};
-}
-async function syncInvoicesD1ToNeon(env){return syncPrimarySnapshotsD1ToNeon(env,{invoices:true})}
 async function invoiceReadAction(request,path){
   if(request.method!=='POST'||(path!=='/api/cloud-state'&&path!=='/api/customer-portal'))return '';
   let body={};try{body=await request.clone().json()}catch{return ''};return text(body?.action);
-}
-async function invoiceWorkingCopyRequest(request,path){
-  if(request.method!=='POST')return false;
-  const url=new URL(request.url);if(path==='/api/customer-portal'&&url.searchParams.get('mp_webhook')==='1')return true;
-  let body={};try{body=await request.clone().json()}catch{return false};const action=text(body?.action);
-  if(path==='/api/customer-portal')return new Set(['refresh','payment-config','payment-prepare','payment-pix','payment-card','payment-status','negotiation-options','negotiate']).has(action);
-  if(path==='/api/cloud-data')return action==='billing.run'||action==='negotiation.support.options'||action==='negotiation.support.create';
-  if(path==='/api/customer-due-date'||path==='/api/customer-trust-release')return true;
-  return false;
-}
-async function financialWorkingCopyRequest(request,path){
-  if(request.method!=='POST')return false;const url=new URL(request.url);if(path==='/api/customer-portal'&&url.searchParams.get('mp_webhook')==='1')return true;
-  let body={};try{body=await request.clone().json()}catch{return false};const action=text(body?.action);
-  if(path==='/api/cloud-data')return new Set(['negotiation.support.options','negotiation.support.create']).has(action);
-  if(path==='/api/customer-portal')return new Set(['login','refresh','payment-config','payment-prepare','payment-pix','payment-card','payment-status','negotiation-options','negotiate']).has(action);
-  return false;
 }
 async function overlayInvoicesFromD1(response,env,path,action){
   if(!response?.ok||!env?.PROVEDOR_DB)return response;
@@ -694,8 +668,8 @@ export default {
     let portalLoginRate=null,priorityStop=null;
     try{portalLoginRate=await preparePortalLoginRate(request,env,path)}catch(error){if(Number(error?.statusCode)===429)return portalLoginRateResponse(request,error);console.error('Provedor Plus: proteção de tentativas do login não pôde ser preparada.',error)}
     try{
-      const priorityAction=await paymentPriorityAction(request,path),readAction=await invoiceReadAction(request,path),invoiceWorkingCopy=await invoiceWorkingCopyRequest(request,path),financialWorkingCopy=await financialWorkingCopyRequest(request,path),mutation=await stateMutationRequest(request,path);if(priorityAction)priorityStop=await beginPaymentPriority(env);
-      const forward=async()=>{if(!['d1-billing','d1-state','d1-cashback'].includes(mutation)&&(mutation||invoiceWorkingCopy||financialWorkingCopy))await syncPrimarySnapshotsD1ToNeon(env,{invoices:mutation||invoiceWorkingCopy,financial:mutation||financialWorkingCopy});let response=await baseWorker.fetch(request,env,ctx);if(portalLoginRate)response=await finishPortalLoginRate(request,response,portalLoginRate,ctx);if(path==='/api/bank-settings')response=await sanitizeBankResponse(response);return overlayInvoicesFromD1(response,env,path,readAction)};
+      const priorityAction=await paymentPriorityAction(request,path),readAction=await invoiceReadAction(request,path),mutation=await stateMutationRequest(request,path);if(priorityAction)priorityStop=await beginPaymentPriority(env);
+      const forward=async()=>{let response=await baseWorker.fetch(request,env,ctx);if(portalLoginRate)response=await finishPortalLoginRate(request,response,portalLoginRate,ctx);if(path==='/api/bank-settings')response=await sanitizeBankResponse(response);return overlayInvoicesFromD1(response,env,path,readAction)};
       if(mutation){
         const response=await withStateWriteLock(env,forward,priorityAction?60000:20000);
         if(response?.ok&&env?.PROVEDOR_DB){

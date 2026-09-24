@@ -564,7 +564,7 @@ async function cashbackWalletAdjust(request,sql,env,data){
 
 export async function handleNativeCloudData(request,env){
   if(request.method!=='POST')return apiJson({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-native-data'});
-  try{const body=await bodyOf(request),action=text(body?.action),data=body?.data||{},sql=(action.startsWith('cashback.')||action.startsWith('clients.')||action.startsWith('routers.'))?authSqlFor(env):sqlFor(env);if(action.startsWith('routers.')||action==='traffic.record')await requirePermission(request,sql,'network');else if(action.startsWith('clients.'))await requirePermission(request,sql,'clients');else if(action.startsWith('cashback.'))await requirePermission(request,sql,'finance');else await requireAuth(request,sql);let result;
+  try{const body=await bodyOf(request),action=text(body?.action),data=body?.data||{},sql=(action.startsWith('cashback.')||action.startsWith('clients.')||action.startsWith('routers.')||action==='traffic.record'||action==='health')?authSqlFor(env):sqlFor(env);if(action.startsWith('routers.')||action==='traffic.record')await requirePermission(request,sql,'network');else if(action.startsWith('clients.'))await requirePermission(request,sql,'clients');else if(action.startsWith('cashback.'))await requirePermission(request,sql,'finance');else await requireAuth(request,sql);let result;
     if(action==='routers.list')result=await readRouterList(env,sql);
     else if(action==='routers.save')result=await saveRouter(sql,data,env);
     else if(action==='routers.delete'){const id=num(data.id);if(!id)throw Object.assign(new Error('MikroTik inválido.'),{statusCode:400});if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 dos MikroTik não configurado.'),{statusCode:503});await env.PROVEDOR_DB.prepare('DELETE FROM pp_routers WHERE id=?').bind(id).run();result={deleted:true,id};}
@@ -577,7 +577,7 @@ export async function handleNativeCloudData(request,env){
     else if(action==='cashback.wallet.get')result=await cashbackWalletGet(env,data);
     else if(action==='cashback.wallet.adjust')result=await cashbackWalletAdjust(request,sql,env,data);
     else if(action==='traffic.record')result=await trafficRecord(env,data);
-    else if(action==='health'){const rows=await sql`SELECT id FROM pp_routers LIMIT 1`;result={online:true,routers:Array.isArray(rows)};}
+    else if(action==='health'){if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 dos MikroTik não configurado.'),{statusCode:503});const rows=await env.PROVEDOR_DB.prepare('SELECT id FROM pp_routers LIMIT 1').all();result={online:true,routers:Array.isArray(rows?.results)};}
     else throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});
     return apiJson({ok:true,data:result},200,{'x-provedor-plus-edge':'cloudflare-native-data'});
   }catch(error){return apiJson({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,{'x-provedor-plus-edge':'cloudflare-native-data'});}

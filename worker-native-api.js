@@ -141,11 +141,10 @@ export function finalizePaidNegotiations(state){
 async function setSetting(sql,key,value){if(key===STATE_KEY)value=finalizePaidNegotiations(value);const updatedAt=new Date().toISOString(),raw=JSON.stringify(value??null);const rows=await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${key},${raw}::jsonb,${updatedAt}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at RETURNING value,updated_at`;return Array.isArray(rows)?rows[0]||null:null;}
 async function deleteSetting(sql,key){await sql`DELETE FROM pp_settings WHERE key=${key}`;}
 function stateObject(value){if(value&&typeof value==='object'&&!Array.isArray(value))return value;if(typeof value==='string')try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{}return {}}
-async function getStateD1(env,sql=null){
+async function getStateD1(env){
   if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 do estado administrativo não configurado.'),{statusCode:503});
   const result=await env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY).all(),row=result?.results?.[0];
   if(row)return {value:stateObject(row.value),updated_at:row.updated_at||null};
-  if(sql)try{const legacy=await getSetting(sql,STATE_KEY);if(legacy){const seeded=await setStateD1(env,legacy.value,legacy.updated_at instanceof Date?legacy.updated_at.toISOString():text(legacy.updated_at));return seeded}}catch(error){console.error('Provedor Plus: cópia Neon do estado não pôde recompor o D1.',error)}
   return null;
 }
 async function setStateD1(env,value,updatedAt=new Date().toISOString()){
@@ -242,7 +241,7 @@ export async function handleNativeAuth(request,env){
         else await db.prepare('UPDATE pp_users SET email=?,name=?,role=? WHERE id=?').bind(login,name,role,id).run();
         const saved=await db.prepare('SELECT id,email,name,role,password_hash,created_at FROM pp_users WHERE id=? LIMIT 1').bind(id).all();user=saved?.results?.[0];
       }else{
-        const hash=await passwordHash(password),createdAt=new Date().toISOString(),insert=await db.prepare('INSERT INTO pp_users (email,name,role,password_hash,created_at) VALUES (?,?,?,?,?)').bind(login,name,role,hash,createdAt).run(),newId=Number(insert?.meta?.last_row_id)||0;if(newId){const saved=await db.prepare('SELECT id,email,name,role,password_hash,created_at FROM pp_users WHERE id=? LIMIT 1').bind(newId).all();user=saved?.results?.[0]}
+        const hash=await passwordHash(password),createdAt=new Date().toISOString(),insert=await db.prepare('INSERT INTO pp_users (email,name,role,password_hash,created_at) VALUES (?,?,?,?,?)').bind(login,name,role,hash,createdAt).run(),newId=Number(inserted?.meta?.last_row_id)||0;if(newId){const saved=await db.prepare('SELECT id,email,name,role,password_hash,created_at FROM pp_users WHERE id=? LIMIT 1').bind(newId).all();user=saved?.results?.[0]}
       }
       if(!user?.id)throw Object.assign(new Error('Não foi possível salvar o funcionário.'),{statusCode:500});
       try{await saveProfile(sql,user.id,{active,phone,permissions,updated_at:new Date().toISOString()},env);}catch(error){if(!id){try{await db.prepare('DELETE FROM pp_users WHERE id=?').bind(Number(user.id)).run()}catch{}try{await deleteProfile(sql,user.id,env)}catch{}}throw error}
@@ -380,9 +379,9 @@ async function ensureNativePlanForClient(sql,planId,env){
 }
 export async function handleNativeCloudState(request,env){
   if(request.method!=='POST')return apiJson({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-native-state'});const sql=authSqlFor(env);
-  try{await requireAuth(request,sql);const body=await bodyOf(request),action=text(body?.action),data=body?.data||{},recoverySql=env?.DATABASE_URL?sql:null;let result;
+  try{await requireAuth(request,sql);const body=await bodyOf(request),action=text(body?.action),data=body?.data||{};let result;
     if(action==='state.get'){
-      const row=await getStateD1(env,recoverySql);
+      const row=await getStateD1(env);
       if(!row)result={state:null,updated_at:null};
       else{
         const clean=sanitize(row.value||{}),ticketStore=await readTicketsD1(env,clean.tickets),legacyAudit=Array.isArray(clean.audit)?clean.audit:Array.isArray(clean.audit_log)?clean.audit_log:Array.isArray(clean.history)?clean.history:Array.isArray(clean.logs)?clean.logs:[],auditStore=await readAuditD1(env,legacyAudit);
@@ -392,17 +391,16 @@ export async function handleNativeCloudState(request,env){
     }
     else if(action==='state.save'){
       if(!data.state||typeof data.state!=='object'||Array.isArray(data.state))throw Object.assign(new Error('Estado do gerenciador inválido.'),{statusCode:400});
-      const previous=await getStateD1(env,recoverySql),expectedAt=text(data.baseUpdatedAt),actualAt=previous?.updated_at,expectedTime=Date.parse(expectedAt),actualTime=Date.parse(text(actualAt));
+      const previous=await getStateD1(env),expectedAt=text(data.baseUpdatedAt),actualAt=previous?.updated_at,expectedTime=Date.parse(expectedAt),actualTime=Date.parse(text(actualAt));
       if(expectedAt&&actualAt&&Number.isFinite(expectedTime)&&Number.isFinite(actualTime)&&expectedTime!==actualTime)throw Object.assign(new Error('O estado foi atualizado em outro acesso. Recarregando para mesclar as alterações.'),{statusCode:409});
       const merged=preservePortalState(data.state,previous?.value),clean=sanitize(merged);await syncNativePlanCatalog(sql,clean,env);
       let ticketsOnD1=false;if(Array.isArray(clean.tickets)&&env?.PROVEDOR_DB)ticketsOnD1=await saveTicketsD1(env,clean.tickets);
       let auditOnD1=false;if(Array.isArray(clean.audit)&&env?.PROVEDOR_DB)auditOnD1=await saveAuditD1(env,clean.audit);
       let d1State={...clean};if(ticketsOnD1)delete d1State.tickets;if(auditOnD1)delete d1State.audit;const row=await setStateD1(env,d1State),savedState=row?.value||d1State;
-      if(recoverySql)try{await setSetting(recoverySql,STATE_KEY,clean)}catch(error){console.error('Provedor Plus: cópia de recuperação do estado no Neon falhou; D1 permanece confirmado.',error)}
       let resultState=savedState;if(ticketsOnD1)resultState={...resultState,tickets:clean.tickets};if(auditOnD1)resultState={...resultState,audit:clean.audit};
       result={state:resultState,updated_at:row?.updated_at||new Date().toISOString()};
     }
-    else if(action==='health'){const row=await getStateD1(env,recoverySql);result={online:true,hasState:Boolean(row?.value),updated_at:row?.updated_at||null};}
+    else if(action==='health'){const row=await getStateD1(env);result={online:true,hasState:Boolean(row?.value),updated_at:row?.updated_at||null};}
     else throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});return apiJson({ok:true,data:result},200,{'x-provedor-plus-edge':'cloudflare-native-state'});
   }catch(error){return apiJson({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,{'x-provedor-plus-edge':'cloudflare-native-state'});}
 }

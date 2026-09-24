@@ -420,7 +420,6 @@ async function saveState(store,state){
   const raw=JSON.stringify(state||{}),updatedAt=new Date().toISOString(),db=d1Db(store);
   if(db){
     await db.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(STATE_KEY,raw,updatedAt).run();
-    const sql=recoverySql(store);if(sql)try{await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${STATE_KEY},${raw}::jsonb,${updatedAt}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at`}catch(error){console.error('Provedor Plus: cópia de recuperação do estado no Neon falhou.',error)}
     return {state,updated_at:updatedAt};
   }
   const sql=recoverySql(store);if(!sql)throw Object.assign(new Error('Estado do Provedor Plus não configurado.'),{statusCode:503});await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${STATE_KEY},${raw}::jsonb,${updatedAt}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at`;return {state,updated_at:updatedAt};

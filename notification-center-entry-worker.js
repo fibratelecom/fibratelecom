@@ -89,8 +89,8 @@ async function mirrorFinancialSnapshotToD1(env){
   const state=parseState(row.value),updatedAt=text(row.updated_at);return saveFinancialSnapshotToD1(env,state,updatedAt||new Date().toISOString());
 }
 async function currentStateUpdatedAt(env){
-  if(!env?.DATABASE_URL)return '';
-  try{const rows=await neon(env.DATABASE_URL)`SELECT updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,value=rows?.[0]?.updated_at;return value instanceof Date?value.toISOString():text(value)}catch{return ''}
+  if(!env?.PROVEDOR_DB)return '';
+  try{const rows=await d1Rows(env.PROVEDOR_DB.prepare('SELECT updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY));return text(rows?.[0]?.updated_at)}catch{return ''}
 }
 async function readInvoicesSnapshotFromD1(env,fallback=[],minimumUpdatedAt=''){
   const legacy=Array.isArray(fallback)?fallback:[];

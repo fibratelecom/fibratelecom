@@ -735,7 +735,6 @@ export default {
       try{
         await withStateWriteLock(env,async()=>{
           if(await paymentPriorityActive(env))return;
-          await syncPrimarySnapshotsD1ToNeon(env,{invoices:true,financial:true});
           const result=baseWorker.scheduled(controller,env,ctx);
           if(result&&typeof result.then==='function')await result;
           if(env?.PROVEDOR_DB){try{await mirrorInvoicesSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha ao confirmar faturas da rotina agendada no D1.',error)}try{await mirrorFinancialSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha ao confirmar cashback e negociações da rotina agendada no D1.',error)}}

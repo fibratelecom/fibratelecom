@@ -318,7 +318,7 @@ async function issueAndSave(env,sql,state,invoice,client,vault,isExisting){
 
 async function runBillingCron(env,{force=false}={}){
   if(!env?.PROVEDOR_DB)throw new Error('Banco D1 não configurado para a geração automática.');
-  const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,state=await loadState(env,sql);state.settings={...(state.settings||{})};
+  const sql=null,state=await loadState(env);state.settings={...(state.settings||{})};
   const enabled=state.settings.billing_auto_enabled!==false&&String(state.settings.billing_auto_enabled)!=='false';
   if(!enabled&&!force)return {enabled:false,generated:0,issued:0,skipped:0,failed:0,errors:[]};
   const todayParts=brazilParts(),today=keyFromParts(todayParts.year,todayParts.month,todayParts.day),daysBefore=Math.max(1,Math.min(30,Math.floor(num(state.settings.billing_auto_days_before)||7)));

@@ -1,5 +1,4 @@
 import baseWorker from './trust-release-worker.js';
-import {neon} from '@neondatabase/serverless';
 import {resolveRouterForService,recordTrafficForService,readTrafficForService} from './worker-native-api.js';
 import {handleMikrotikProxy} from './worker-mikrotik-native.js';
 
@@ -23,23 +22,17 @@ function parseStateValue(value){
   if(typeof value==='string')try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{}
   return {};
 }
-async function loadState(env,sql=null){
-  if(env?.PROVEDOR_DB)try{
+async function loadState(env){
+  if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 da Área do Cliente não configurado.'),{statusCode:503});
+  try{
     const result=await env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY).all(),row=Array.isArray(result?.results)?result.results[0]:null;
-    if(row)return parseStateValue(row.value);
+    return parseStateValue(row?.value);
   }catch(error){console.error('Provedor Plus: leitura D1 do estado da Área do Cliente falhou.',error);throw error}
-  if(sql){
-    const rows=await sql`SELECT value,updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,row=Array.isArray(rows)?rows[0]:null,state=parseStateValue(row?.value),updatedAt=row?.updated_at instanceof Date?row.updated_at.toISOString():text(row?.updated_at)||new Date().toISOString();
-    if(row&&env?.PROVEDOR_DB)try{await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(STATE_KEY,JSON.stringify(state),updatedAt).run()}catch(error){console.error('Provedor Plus: não foi possível recompor o estado da Área do Cliente no D1.',error)}
-    return state;
-  }
-  throw Object.assign(new Error('Banco D1 da Área do Cliente não configurado.'),{statusCode:503});
 }
-async function saveState(env,sql,state){
+async function saveState(env,state){
   const updatedAt=new Date().toISOString(),raw=JSON.stringify(state||{});
   if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 da Área do Cliente não configurado.'),{statusCode:503});
   await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(STATE_KEY,raw,updatedAt).run();
-  if(sql)try{await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${STATE_KEY},${raw}::jsonb,${updatedAt}) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at`}catch(error){console.error('Provedor Plus: cópia de recuperação do estado da Área do Cliente no Neon falhou; D1 permanece confirmado.',error)}
   return updatedAt;
 }
 function localClientIndex(state,id){return (Array.isArray(state?.clients)?state.clients:[]).findIndex(row=>Number(row?.id)===Number(id))}
@@ -115,23 +108,20 @@ async function augmentPortalPlanContext(response,env){
   try{const context=await planActivity(env,clientId);body.data={...(body.data||{}),...context};const headers=new Headers(response.headers);headers.delete('content-length');headers.delete('content-encoding');headers.delete('etag');return new Response(JSON.stringify(body),{status:response.status,statusText:response.statusText,headers})}catch(error){console.error('Provedor Plus: não foi possível carregar recomendações de plano.',error);return response}
 }
 
-async function portalClient(env,sql,id){
+async function portalClient(env,id){
   if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 dos clientes não configurado.'),{statusCode:503});
-  try{const result=await env.PROVEDOR_DB.prepare('SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,router_id,connection_type,pppoe_username,ip,mikrotik_status,mikrotik_last_sync FROM pp_clients WHERE id=? LIMIT 1').bind(Number(id)).all(),row=result?.results?.[0]||null;if(row)return row}catch(error){console.error(`Provedor Plus: leitura D1 do cliente ${id} falhou.`,error);throw error}
-  if(sql){const rows=await sql`SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,router_id,connection_type,pppoe_username,ip,mikrotik_status,mikrotik_last_sync FROM pp_clients WHERE id=${Number(id)} LIMIT 1`;return rows?.[0]||null}
-  return null;
+  try{const result=await env.PROVEDOR_DB.prepare('SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,router_id,connection_type,pppoe_username,ip,mikrotik_status,mikrotik_last_sync FROM pp_clients WHERE id=? LIMIT 1').bind(Number(id)).all();return result?.results?.[0]||null}catch(error){console.error(`Provedor Plus: leitura D1 do cliente ${id} falhou.`,error);throw error}
 }
-async function updateClientDueDay(env,sql,id,dueDay,at){
+async function updateClientDueDay(env,id,dueDay,at){
   if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 dos clientes não configurado.'),{statusCode:503});
   await env.PROVEDOR_DB.prepare('UPDATE pp_clients SET due_day=?,updated_at=? WHERE id=?').bind(Number(dueDay),at,Number(id)).run();
-  if(sql)try{await sql`UPDATE pp_clients SET due_day=${Number(dueDay)},updated_at=${at} WHERE id=${Number(id)}`}catch(error){console.error(`Provedor Plus: cópia de recuperação do vencimento do cliente ${id} no Neon falhou; D1 permanece confirmado.`,error)}
 }
 async function remapAdditionalContractLogin(request,env,body={},action='',path=''){
   if(path!==PORTAL_PATH||action!=='login')return {request,body};
   const contract=text(body?.data?.contract);if(!contract)return {request,body};const wanted=contract.replace(/\D/g,'');if(!wanted)return {request,body};
   try{
-    const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,state=await loadState(env,sql),extra=(Array.isArray(state?.client_contracts)?state.client_contracts:[]).find(item=>{const number=text(item?.contract_number);return number===contract||number.replace(/\D/g,'')===wanted});
-    if(!extra?.client_id)return {request,body};const owner=await portalClient(env,sql,extra.client_id);if(!owner?.contract_number)return {request,body};
+    const state=await loadState(env),extra=(Array.isArray(state?.client_contracts)?state.client_contracts:[]).find(item=>{const number=text(item?.contract_number);return number===contract||number.replace(/\D/g,'')===wanted});
+    if(!extra?.client_id)return {request,body};const owner=await portalClient(env,extra.client_id);if(!owner?.contract_number)return {request,body};
     const nextBody={...body,data:{...(body?.data||{}),contract:text(owner.contract_number)}},headers=new Headers(request.headers),nextRequest=new Request(request.url,{method:request.method,headers,body:JSON.stringify(nextBody)});return {request:nextRequest,body:nextBody};
   }catch(error){console.error('Provedor Plus: não foi possível resolver o contrato adicional informado no login.',error);return {request,body}}
 }
@@ -204,7 +194,7 @@ async function augmentPortalContractContext(response,env,requestBody={},action='
   const topPortal=body.data?.client&&Array.isArray(body.data?.invoices)?body.data:null,nestedPortal=body.data?.portal?.client&&Array.isArray(body.data.portal?.invoices)?body.data.portal:null,portal=topPortal||nestedPortal;if(!portal)return response;
   try{
     let clientId=Number(portal?.client?.id)||0;if(!clientId&&requestBody?.data?.session)clientId=(await verifySession(requestBody.data.session,env)).clientId;if(!clientId)return response;
-    const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,client=await portalClient(env,sql,clientId);if(!client)return response;const state=await loadState(env,sql),contractId=action==='login'?'primary':text(requestBody?.data?.contractId)||'primary',live=!contractId.startsWith('primary')&&(action==='refresh'||isConnectionAction(action)),scoped=await scopePortalToContract(portal,client,state,env,contractId,live),contracts=portalContracts(client,state),selected=contracts.find(item=>text(item.id)===text(scoped?.selectedContractId||contractId))||contracts[0],firstBilling=firstBillingPreview(client,state,selected),accessBlock=portalAccessBlock(client,state,scoped,contractId),scopedWithBlock={...scoped,firstBillingPreview:firstBilling,accessBlock,client:{...(scoped?.client||{}),accessBlock}};
+    const client=await portalClient(env,clientId);if(!client)return response;const state=await loadState(env),contractId=action==='login'?'primary':text(requestBody?.data?.contractId)||'primary',live=!contractId.startsWith('primary')&&(action==='refresh'||isConnectionAction(action)),scoped=await scopePortalToContract(portal,client,state,env,contractId,live),contracts=portalContracts(client,state),selected=contracts.find(item=>text(item.id)===text(scoped?.selectedContractId||contractId))||contracts[0],firstBilling=firstBillingPreview(client,state,selected),accessBlock=portalAccessBlock(client,state,scoped,contractId),scopedWithBlock={...scoped,firstBillingPreview:firstBilling,accessBlock,client:{...(scoped?.client||{}),accessBlock}};
     if(topPortal)body.data=scopedWithBlock;else body.data={...body.data,portal:scopedWithBlock};
     const headers=new Headers(response.headers);headers.delete('content-length');headers.delete('content-encoding');headers.delete('etag');return new Response(JSON.stringify(body),{status:response.status,statusText:response.statusText,headers});
   }catch(error){console.error('Provedor Plus: não foi possível aplicar o contexto do contrato na Área do Cliente.',error);return response}
@@ -233,7 +223,7 @@ function transitionPreview(client,state,targetDay,eligibility){
 }
 async function previewFor(env,client,state,targetDay){const eligibility=await dueEligibility(env,client,state,targetDay);return transitionPreview(client,state,targetDay,eligibility)}
 
-async function changeDueDate(env,sql,client,state,targetDay){
+async function changeDueDate(env,client,state,targetDay){
   const preview=await previewFor(env,client,state,targetDay);if(!preview.eligible)throw Object.assign(new Error(preview.message),{statusCode:409,data:preview});
   const oldDay=preview.currentDay,newDay=Number(targetDay),protocol=await createProtocol(env,{clientId:client.id,category:'Vencimento',subject:'Alteração de vencimento',status:'Em processamento',details:{oldDay,newDay,requestedAt:new Date().toISOString()}}),db=await ensureProtocolTable(env),since=new Date(Date.now()-90*DAY).toISOString(),activeResult=await db.prepare("SELECT id,protocol,status FROM pp_protocols WHERE client_id=? AND category='Vencimento' AND subject='Alteração de vencimento' AND status IN ('Concluído','Em processamento') AND datetime(created_at)>=datetime(?) ORDER BY id ASC LIMIT 1").bind(Number(client.id),since).all(),active=activeResult?.results||[];
   if(Number(active?.[0]?.id)!==Number(protocol.id)){await finishProtocol(env,protocol.protocol,'Negado',{oldDay,newDay,reason:'cooldown_or_parallel_request'});throw Object.assign(new Error('Já existe uma alteração de vencimento recente ou em processamento para este cliente.'),{statusCode:409})}
@@ -245,13 +235,13 @@ async function changeDueDate(env,sql,client,state,targetDay){
       state.invoices=Array.isArray(state.invoices)?state.invoices:[];state.invoices.push(invoice);
     }
     state.clients[index]={...state.clients[index],due_day:newDay,due_date_change_last_at:now,due_date_change_from_day:oldDay,due_date_change_to_day:newDay,due_date_change_protocol:protocol.protocol,due_date_change_transition_invoice_id:invoice?.id||null,access_history:appendHistory(state.clients[index],'Alteração de vencimento',`Vencimento alterado do dia ${oldDay} para o dia ${newDay}. Protocolo ${protocol.protocol}`)};
-    await saveState(env,sql,state);
-    await updateClientDueDay(env,sql,client.id,newDay,now);dbChanged=true;
+    await saveState(env,state);
+    await updateClientDueDay(env,client.id,newDay,now);dbChanged=true;
     const completed=await finishProtocol(env,protocol.protocol,'Concluído',{oldDay,newDay,planPriceCents:preview.planPriceCents,transitionType:preview.transitionType,transitionInvoiceId:invoice?.id||null,transitionDueDate:preview.transitionDueDate||'',serviceDays:preview.serviceDays||0,transitionAmountCents:preview.transitionAmountCents||0,nextNormalDueDate:preview.nextNormalDueDate||'',changedAt:now});
     return {...preview,eligible:false,reasonCode:'changed',changed:true,protocol:completed?.protocol||protocol.protocol,protocolRecord:completed,transitionInvoice:invoice?{id:invoice.id,dueDate:invoice.due_date,amountCents:invoice.amount_cents,total:brMoney(invoice.amount_cents)}:null,message:`Vencimento alterado para o dia ${String(newDay).padStart(2,'0')}. ${preview.transitionType==='proportional'?`A cobrança proporcional de ${brMoney(preview.transitionAmountCents)} foi criada para ${brDate(preview.transitionDueDate)}.`:'A próxima cobrança utilizará o novo vencimento.'} Protocolo ${completed?.protocol||protocol.protocol}.`};
   }catch(error){
-    if(dbChanged)try{await updateClientDueDay(env,sql,client.id,oldDay,new Date().toISOString())}catch{}
-    try{await saveState(env,sql,before)}catch{}
+    if(dbChanged)try{await updateClientDueDay(env,client.id,oldDay,new Date().toISOString())}catch{}
+    try{await saveState(env,before)}catch{}
     try{await finishProtocol(env,protocol.protocol,'Falhou',{oldDay,newDay,error:error instanceof Error?error.message:String(error),failedAt:new Date().toISOString()})}catch{}
     throw error;
   }
@@ -261,10 +251,10 @@ async function handleDueDate(request,env){
   const cors=corsFor(request);if(request.method==='OPTIONS')return new Response(null,{status:204,headers:cors});if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405,cors);
   try{
     const origin=text(request.headers.get('origin'));if(!PORTAL_ORIGINS.has(origin))throw Object.assign(new Error('Origem não autorizada.'),{statusCode:403});if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 do Provedor Plus não configurado.'),{statusCode:503});
-    let body={};try{body=await request.json()}catch{}const action=text(body?.action),data=body?.data||{},session=await verifySession(data.session,env),sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,client=await portalClient(env,sql,session.clientId);if(!client)throw Object.assign(new Error('Cliente não encontrado.'),{statusCode:404});const state=await loadState(env,sql);
+    let body={};try{body=await request.json()}catch{}const action=text(body?.action),data=body?.data||{},session=await verifySession(data.session,env),client=await portalClient(env,session.clientId);if(!client)throw Object.assign(new Error('Cliente não encontrado.'),{statusCode:404});const state=await loadState(env);
     if(action==='status')return json({ok:true,data:await dueEligibility(env,client,state)},200,cors);
     if(action==='preview')return json({ok:true,data:await previewFor(env,client,state,Number(data.day))},200,cors);
-    if(action==='change')return json({ok:true,data:await changeDueDate(env,sql,client,state,Number(data.day))},200,cors);
+    if(action==='change')return json({ok:true,data:await changeDueDate(env,client,state,Number(data.day))},200,cors);
     throw Object.assign(new Error('Ação de vencimento não permitida.'),{statusCode:400});
   }catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error),data:error?.data||null},Number(error?.statusCode)||500,cors)}
 }
@@ -273,7 +263,7 @@ async function handlePlanRequest(request,env,body={}){
   const cors=corsFor(request);if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405,cors);
   try{
     const origin=text(request.headers.get('origin'));if(!PORTAL_ORIGINS.has(origin))throw Object.assign(new Error('Origem não autorizada.'),{statusCode:403});if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 do Provedor Plus não configurado.'),{statusCode:503});
-    const data=body?.data||{};if(text(data.contractId)&&text(data.contractId)!=='primary')throw Object.assign(new Error('A mudança de plano está disponível somente no contrato principal.'),{statusCode:409});const session=await verifySession(data.session,env),sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,client=await portalClient(env,sql,session.clientId);if(!client)throw Object.assign(new Error('Cliente não encontrado.'),{statusCode:404});const state=await loadState(env,sql),planId=Number(data.planId)||0,target=planById(state,planId);if(!target||target.active===false||target.portal_visible===false)throw Object.assign(new Error('Este plano não está disponível para solicitação no momento.'),{statusCode:409});
+    const data=body?.data||{};if(text(data.contractId)&&text(data.contractId)!=='primary')throw Object.assign(new Error('A mudança de plano está disponível somente no contrato principal.'),{statusCode:409});const session=await verifySession(data.session,env),client=await portalClient(env,session.clientId);if(!client)throw Object.assign(new Error('Cliente não encontrado.'),{statusCode:404});const state=await loadState(env),planId=Number(data.planId)||0,target=planById(state,planId);if(!target||target.active===false||target.portal_visible===false)throw Object.assign(new Error('Este plano não está disponível para solicitação no momento.'),{statusCode:409});
     if(Number(client.plan_id)===planId||(!client.plan_id&&normalize(client.plan)===normalize(target.name)))throw Object.assign(new Error('Este já é o seu plano atual.'),{statusCode:409});
     const db=await ensureProtocolTable(env),pendingResult=await db.prepare("SELECT id,protocol,client_id,category,subject,source,status,details,created_at,closed_at FROM pp_protocols WHERE client_id=? AND category='Plano' AND subject='Solicitação de mudança de plano' AND status='Aguardando aprovação' ORDER BY datetime(created_at) DESC,id DESC LIMIT 10").bind(Number(client.id)).all(),pending=(pendingResult?.results||[]).map(safeProtocol),same=pending.find(item=>Number(item?.details?.planId)===planId);
     if(same){const context=await planActivity(env,client.id);return json({ok:true,data:{requested:true,existing:true,protocol:same.protocol,protocolRecord:same,message:`Sua solicitação para o plano ${text(target.name)||`#${planId}`} já está aguardando aprovação.`,...context}},200,cors)}
@@ -290,8 +280,8 @@ async function handleConnectionRestart(request,env,body={}){
     if(request.method!=='POST')throw Object.assign(new Error('Método não permitido.'),{statusCode:405});
     const origin=text(request.headers.get('origin'));if(!PORTAL_ORIGINS.has(origin))throw Object.assign(new Error('Origem não autorizada.'),{statusCode:403});
     if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 do Provedor Plus não configurado.'),{statusCode:503});
-    const session=await verifySession(body?.data?.session,env),sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,client=await portalClient(env,sql,session.clientId);if(!client)throw Object.assign(new Error('Cliente não encontrado.'),{statusCode:404});
-    const state=await loadState(env,sql),contractId=text(body?.data?.contractId)||'primary',raw=contractId==='primary'?null:rawContractFor(client,state,contractId);if(contractId!=='primary'&&!raw)throw Object.assign(new Error('Contrato selecionado não foi encontrado.'),{statusCode:404});
+    const session=await verifySession(body?.data?.session,env),client=await portalClient(env,session.clientId);if(!client)throw Object.assign(new Error('Cliente não encontrado.'),{statusCode:404});
+    const state=await loadState(env),contractId=text(body?.data?.contractId)||'primary',raw=contractId==='primary'?null:rawContractFor(client,state,contractId);if(contractId!=='primary'&&!raw)throw Object.assign(new Error('Contrato selecionado não foi encontrado.'),{statusCode:404});
     const service=contractId==='primary'?{...(localClient(state,client.id)||{}),...client}:{...raw,name:text(client.name),document:text(client.document)};
     if(normalize(service?.connection_type)!=='pppoe')throw Object.assign(new Error('O reinício automático está disponível somente para conexões PPPoE.'),{statusCode:409});
     if(!Number(service?.router_id)||!text(service?.pppoe_username||service?.pppoe_user))throw Object.assign(new Error('A conexão ainda não possui MikroTik e usuário PPPoE vinculados.'),{statusCode:409});

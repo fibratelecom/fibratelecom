@@ -78,15 +78,15 @@ async function loadState(env,sql=null){
   throw Object.assign(new Error('Estado D1 do Provedor Plus não configurado.'),{statusCode:503});
 }
 async function mirrorInvoicesSnapshotToD1(env){
-  if(!env?.DATABASE_URL||!env?.PROVEDOR_DB)return false;
-  const sql=neon(env.DATABASE_URL),rows=await sql`SELECT value,updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,row=rows?.[0];if(!row)return false;
-  const state=parseState(row.value),updatedAt=row.updated_at instanceof Date?row.updated_at.toISOString():text(row.updated_at);
+  if(!env?.PROVEDOR_DB)return false;
+  const rows=await d1Rows(env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY)),row=rows?.[0];if(!row)return false;
+  const state=parseState(row.value),updatedAt=text(row.updated_at);
   return mirrorInvoicesToD1(env,state,updatedAt||new Date().toISOString());
 }
 async function mirrorFinancialSnapshotToD1(env){
-  if(!env?.DATABASE_URL||!env?.PROVEDOR_DB)return false;
-  const sql=neon(env.DATABASE_URL),rows=await sql`SELECT value,updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,row=rows?.[0];if(!row)return false;
-  const state=parseState(row.value),updatedAt=row.updated_at instanceof Date?row.updated_at.toISOString():text(row.updated_at);return saveFinancialSnapshotToD1(env,state,updatedAt||new Date().toISOString());
+  if(!env?.PROVEDOR_DB)return false;
+  const rows=await d1Rows(env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY)),row=rows?.[0];if(!row)return false;
+  const state=parseState(row.value),updatedAt=text(row.updated_at);return saveFinancialSnapshotToD1(env,state,updatedAt||new Date().toISOString());
 }
 async function currentStateUpdatedAt(env){
   if(!env?.DATABASE_URL)return '';

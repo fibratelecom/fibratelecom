@@ -335,7 +335,7 @@ async function retryPending(sql,env){
 
 async function scanOperationalEvents(env){
   if(!env?.PROVEDOR_DB)return {scanned:false};
-  const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,protocolStore=env.PROVEDOR_DB;if(sql)await ensureTables(sql);await seedOperationalEventsD1(env,sql);const state=await loadState(env,sql),settings=await loadSettings(env.PROVEDOR_DB),events=[];
+  const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,protocolStore=env.PROVEDOR_DB;await seedOperationalEventsD1(env,sql);const state=await loadState(env,sql),settings=await loadSettings(env.PROVEDOR_DB),events=[];
   events.push(...await statusAndPlanEvents(sql,state,settings,protocolStore,env));
   events.push(...trustEvents(state,settings));
   events.push(...await dueChangeEvents(protocolStore,settings));

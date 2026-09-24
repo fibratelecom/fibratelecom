@@ -546,7 +546,7 @@ async function resolveClient(db,identifier){
 }
 async function clientById(db,id){const rows=await d1Rows(db.prepare('SELECT id,name,contract_number,document,plan,plan_id,due_day FROM pp_clients WHERE id=? LIMIT 1').bind(Number(id)));return rows?.[0]||null}
 async function allAuthorizedClients(db){return d1Rows(db.prepare('SELECT id,name,contract_number,document,plan,plan_id,due_day FROM pp_clients WHERE id IN (SELECT DISTINCT client_id FROM pp_push_subscriptions WHERE active=1) ORDER BY id ASC'))}
-async function subscriptionsFor(db,clientId){return d1Rows(db.prepare('SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=? AND active=1 ORDER BY id ASC'))}
+async function subscriptionsFor(db,clientId){return d1Rows(db.prepare('SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=? AND active=1 ORDER BY id ASC').bind(Number(clientId)))}
 async function recordInbox(db,clientId,sourceKey,title,body,clickUrl,createdAt=null){
   if(!clientId||!sourceKey||!title||!body)return;
   await ensureTables(db);

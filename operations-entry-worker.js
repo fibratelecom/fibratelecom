@@ -103,10 +103,9 @@ async function ensureTables(sql){
   schemaReady=true;
 }
 
-async function loadState(env,sql=null){
-  if(env?.PROVEDOR_DB)try{return parseObject(await settingValue(env.PROVEDOR_DB,STATE_KEY))}catch(error){console.error('Provedor Plus: leitura D1 do estado operacional falhou; usando cópia Neon.',error)}
-  if(sql)return parseObject(await settingValue(sql,STATE_KEY));
-  throw Object.assign(new Error('Estado D1 operacional não está disponível.'),{statusCode:503});
+async function loadState(env){
+  if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Estado D1 operacional não está disponível.'),{statusCode:503});
+  try{return parseObject(await settingValue(env.PROVEDOR_DB,STATE_KEY))}catch(error){console.error('Provedor Plus: leitura D1 do estado operacional falhou.',error);throw error}
 }
 async function settingValue(store,key){
   if(store?.prepare){const row=await store.prepare('SELECT value FROM pp_settings WHERE key = ? LIMIT 1').bind(key).first();return row?.value}
@@ -335,7 +334,7 @@ async function retryPending(sql,env){
 
 async function scanOperationalEvents(env){
   if(!env?.PROVEDOR_DB)return {scanned:false};
-  const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,protocolStore=env.PROVEDOR_DB;await seedOperationalEventsD1(env,sql);const state=await loadState(env,sql),settings=await loadSettings(env.PROVEDOR_DB),events=[];
+  const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,protocolStore=env.PROVEDOR_DB;await seedOperationalEventsD1(env,sql);const state=await loadState(env),settings=await loadSettings(env.PROVEDOR_DB),events=[];
   events.push(...await statusAndPlanEvents(sql,state,settings,protocolStore,env));
   events.push(...trustEvents(state,settings));
   events.push(...await dueChangeEvents(protocolStore,settings));

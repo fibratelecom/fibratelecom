@@ -128,8 +128,7 @@ async function invoiceWorkingCopyRequest(request,path){
 async function financialWorkingCopyRequest(request,path){
   if(request.method!=='POST')return false;const url=new URL(request.url);if(path==='/api/customer-portal'&&url.searchParams.get('mp_webhook')==='1')return true;
   let body={};try{body=await request.clone().json()}catch{return false};const action=text(body?.action);
-  if(path==='/api/cloud-state')return action==='state.save';
-  if(path==='/api/cloud-data')return new Set(['cashback.wallet.get','cashback.wallet.adjust','negotiation.support.options','negotiation.support.create']).has(action);
+  if(path==='/api/cloud-data')return new Set(['negotiation.support.options','negotiation.support.create']).has(action);
   if(path==='/api/customer-portal')return new Set(['login','refresh','payment-config','payment-prepare','payment-pix','payment-card','payment-status','negotiation-options','negotiate']).has(action);
   return false;
 }
@@ -367,8 +366,8 @@ async function stateMutationRequest(request,path){
   if(path==='/api/customer-portal'&&new URL(request.url).searchParams.get('mp_webhook')==='1')return true;
   let body={};try{body=await request.clone().json()}catch{return false}
   const action=text(body?.action);
-  if(path==='/api/cloud-state')return action==='state.save';
-  if(path==='/api/cloud-data')return action==='billing.run'?'d1-billing':action==='cashback.wallet.adjust'||action==='negotiation.support.create';
+  if(path==='/api/cloud-state')return action==='state.save'?'d1-state':false;
+  if(path==='/api/cloud-data')return action==='billing.run'?'d1-billing':action==='cashback.wallet.adjust'?'d1-cashback':action==='negotiation.support.create';
   if(path==='/api/bank-settings')return action==='save-default';
   if(path==='/api/customer-trust-release')return action==='release';
   if(path==='/api/customer-due-date')return action==='change';
@@ -696,7 +695,7 @@ export default {
     try{portalLoginRate=await preparePortalLoginRate(request,env,path)}catch(error){if(Number(error?.statusCode)===429)return portalLoginRateResponse(request,error);console.error('Provedor Plus: proteção de tentativas do login não pôde ser preparada.',error)}
     try{
       const priorityAction=await paymentPriorityAction(request,path),readAction=await invoiceReadAction(request,path),invoiceWorkingCopy=await invoiceWorkingCopyRequest(request,path),financialWorkingCopy=await financialWorkingCopyRequest(request,path),mutation=await stateMutationRequest(request,path);if(priorityAction)priorityStop=await beginPaymentPriority(env);
-      const forward=async()=>{if(mutation!=='d1-billing'&&(mutation||invoiceWorkingCopy||financialWorkingCopy))await syncPrimarySnapshotsD1ToNeon(env,{invoices:mutation||invoiceWorkingCopy,financial:mutation||financialWorkingCopy});let response=await baseWorker.fetch(request,env,ctx);if(portalLoginRate)response=await finishPortalLoginRate(request,response,portalLoginRate,ctx);if(path==='/api/bank-settings')response=await sanitizeBankResponse(response);return overlayInvoicesFromD1(response,env,path,readAction)};
+      const forward=async()=>{if(!['d1-billing','d1-state','d1-cashback'].includes(mutation)&&(mutation||invoiceWorkingCopy||financialWorkingCopy))await syncPrimarySnapshotsD1ToNeon(env,{invoices:mutation||invoiceWorkingCopy,financial:mutation||financialWorkingCopy});let response=await baseWorker.fetch(request,env,ctx);if(portalLoginRate)response=await finishPortalLoginRate(request,response,portalLoginRate,ctx);if(path==='/api/bank-settings')response=await sanitizeBankResponse(response);return overlayInvoicesFromD1(response,env,path,readAction)};
       if(mutation){
         const response=await withStateWriteLock(env,forward,priorityAction?60000:20000);
         if(response?.ok&&env?.PROVEDOR_DB){

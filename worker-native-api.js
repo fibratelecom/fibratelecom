@@ -77,10 +77,11 @@ async function readRouterList(env,sql){
 }
 async function readRouterById(env,sql,routerId){
   const id=num(routerId);if(!id)return null;
-  if(env?.PROVEDOR_DB)try{const result=await env.PROVEDOR_DB.prepare('SELECT id,name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,created_at,updated_at FROM pp_routers WHERE id=? LIMIT 1').bind(id).all(),row=result?.results?.[0];if(row)return safeRouterRow(row)}catch(error){console.error(`Provedor Plus: leitura D1 do MikroTik ${id} falhou; usando Neon.`,error)}
-  const rows=await sql`SELECT id,name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,created_at,updated_at FROM pp_routers WHERE id=${id} LIMIT 1`,row=Array.isArray(rows)?rows[0]:null;
-  if(row&&env?.PROVEDOR_DB)try{await mirrorRouterRowToD1(env,row)}catch(error){console.error(`Provedor Plus: não foi possível recompor o espelho D1 do MikroTik ${id}.`,error)}
-  return safeRouterRow(row);
+  if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 dos MikroTik não configurado.'),{statusCode:503});
+  try{
+    const result=await env.PROVEDOR_DB.prepare('SELECT id,name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,created_at,updated_at FROM pp_routers WHERE id=? LIMIT 1').bind(id).all(),row=result?.results?.[0]||null;
+    return safeRouterRow(row);
+  }catch(error){console.error(`Provedor Plus: leitura D1 do MikroTik ${id} falhou.`,error);throw error}
 }
 export async function mirrorClientToD1(env,clientId){
   const id=num(clientId);if(!id||!env?.PROVEDOR_DB)return false;

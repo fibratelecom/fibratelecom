@@ -1,5 +1,4 @@
 import baseWorker from './stories-entry-worker.js';
-import {neon} from '@neondatabase/serverless';
 import {buildPushHTTPRequest} from '@pushforge/builder';
 
 const OPS_PATH='/api/push-operations';
@@ -126,9 +125,8 @@ async function pushCryptoKey(env){const secret=text(env.BANK_SECRET_KEY)||text(e
 async function readVapid(env,sql=null){
   let record=null;
   if(env?.PROVEDOR_DB){
-    try{record=parseObject(await settingValue(env.PROVEDOR_DB,VAPID_D1_KEY))}catch(error){console.error('Provedor Plus: leitura D1 do VAPID operacional falhou; usando cópia legado.',error)}
+    try{record=parseObject(await settingValue(env.PROVEDOR_DB,VAPID_D1_KEY));if(!record?.iv||!record?.data)record=parseObject(await settingValue(env.PROVEDOR_DB,VAPID_KEY))}catch(error){console.error('Provedor Plus: leitura D1 do VAPID operacional falhou.',error)}
   }
-  if((!record?.iv||!record?.data)&&sql){const rows=await sql`SELECT value FROM pp_settings WHERE key=${VAPID_KEY} LIMIT 1`;record=rows?.[0]?.value}
   if(!record?.iv||!record?.data)return null;const key=await pushCryptoKey(env),plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:base64UrlBytes(record.iv)},key,base64UrlBytes(record.data));return JSON.parse(new TextDecoder().decode(plain))
 }
 
@@ -334,7 +332,7 @@ async function retryPending(sql,env){
 
 async function scanOperationalEvents(env){
   if(!env?.PROVEDOR_DB)return {scanned:false};
-  const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,protocolStore=env.PROVEDOR_DB;await seedOperationalEventsD1(env,sql);const state=await loadState(env),settings=await loadSettings(env.PROVEDOR_DB),events=[];
+  const sql=null,protocolStore=env.PROVEDOR_DB;await seedOperationalEventsD1(env,sql);const state=await loadState(env),settings=await loadSettings(env.PROVEDOR_DB),events=[];
   events.push(...await statusAndPlanEvents(sql,state,settings,protocolStore,env));
   events.push(...trustEvents(state,settings));
   events.push(...await dueChangeEvents(protocolStore,settings));

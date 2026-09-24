@@ -241,7 +241,7 @@ export async function handleNativeAuth(request,env){
         else await db.prepare('UPDATE pp_users SET email=?,name=?,role=? WHERE id=?').bind(login,name,role,id).run();
         const saved=await db.prepare('SELECT id,email,name,role,password_hash,created_at FROM pp_users WHERE id=? LIMIT 1').bind(id).all();user=saved?.results?.[0];
       }else{
-        const hash=await passwordHash(password),createdAt=new Date().toISOString(),insert=await db.prepare('INSERT INTO pp_users (email,name,role,password_hash,created_at) VALUES (?,?,?,?,?)').bind(login,name,role,hash,createdAt).run(),newId=Number(inserted?.meta?.last_row_id)||0;if(newId){const saved=await db.prepare('SELECT id,email,name,role,password_hash,created_at FROM pp_users WHERE id=? LIMIT 1').bind(newId).all();user=saved?.results?.[0]}
+        const hash=await passwordHash(password),createdAt=new Date().toISOString(),insert=await db.prepare('INSERT INTO pp_users (email,name,role,password_hash,created_at) VALUES (?,?,?,?,?)').bind(login,name,role,hash,createdAt).run(),newId=Number(insert?.meta?.last_row_id)||0;if(newId){const saved=await db.prepare('SELECT id,email,name,role,password_hash,created_at FROM pp_users WHERE id=? LIMIT 1').bind(newId).all();user=saved?.results?.[0]}
       }
       if(!user?.id)throw Object.assign(new Error('Não foi possível salvar o funcionário.'),{statusCode:500});
       try{await saveProfile(sql,user.id,{active,phone,permissions,updated_at:new Date().toISOString()},env);}catch(error){if(!id){try{await db.prepare('DELETE FROM pp_users WHERE id=?').bind(Number(user.id)).run()}catch{}try{await deleteProfile(sql,user.id,env)}catch{}}throw error}

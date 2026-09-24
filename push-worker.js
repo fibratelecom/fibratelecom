@@ -1,5 +1,4 @@
 import coreWorker from './negotiation-worker.js';
-import {neon} from '@neondatabase/serverless';
 import {buildPushHTTPRequest} from '@pushforge/builder';
 
 const CLIENT_PUSH_PATH='/api/customer-push';
@@ -98,28 +97,21 @@ async function pushCryptoKey(env){
 }
 async function encryptVapid(env,value){const key=await pushCryptoKey(env),iv=crypto.getRandomValues(new Uint8Array(12)),cipher=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,enc.encode(JSON.stringify(value)));return {v:1,iv:base64Url(iv),data:base64Url(new Uint8Array(cipher))}}
 async function decryptVapid(env,record){if(!record?.iv||!record?.data)throw new Error('Chaves push inválidas.');const key=await pushCryptoKey(env),plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:base64UrlBytes(record.iv)},key,base64UrlBytes(record.data));return JSON.parse(new TextDecoder().decode(plain))}
-async function readD1VapidRecord(db){
-  if(!db)return null;const rows=await d1Rows(db.prepare('SELECT value FROM pp_settings WHERE key=? LIMIT 1').bind(VAPID_D1_KEY)),row=rows?.[0];if(!row)return null;let value=row.value;if(typeof value==='string')try{value=JSON.parse(value)}catch{return null};return value&&typeof value==='object'&&!Array.isArray(value)?value:null;
+async function readD1VapidRecord(db,key=VAPID_D1_KEY){
+  if(!db)return null;const rows=await d1Rows(db.prepare('SELECT value FROM pp_settings WHERE key=? LIMIT 1').bind(key)),row=rows?.[0];if(!row)return null;let value=row.value;if(typeof value==='string')try{value=JSON.parse(value)}catch{return null};return value&&typeof value==='object'&&!Array.isArray(value)?value:null;
 }
 async function saveD1VapidRecord(db,record){
   if(!db||!record)return false;const raw=JSON.stringify(record),now=new Date().toISOString();await db.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO NOTHING').bind(VAPID_D1_KEY,raw,now).run();return true;
 }
 export async function vapidKeys(env,sql=null){
-  const db=env?.PROVEDOR_DB||null,d1Record=await readD1VapidRecord(db);if(d1Record)return decryptVapid(env,d1Record);
-  let legacyRecord=null;
-  if(sql){const rows=await sql`SELECT value FROM pp_settings WHERE key=${VAPID_KEY} LIMIT 1`;legacyRecord=rows?.[0]?.value||null}
-  else if(env?.DATABASE_URL){const rows=await neon(env.DATABASE_URL)`SELECT value FROM pp_settings WHERE key=${VAPID_KEY} LIMIT 1`;legacyRecord=rows?.[0]?.value||null}
-  if(legacyRecord){if(db)await saveD1VapidRecord(db,legacyRecord);return decryptVapid(env,legacyRecord)}
-  if(db){const subscriptions=await d1Rows(db.prepare('SELECT COUNT(*) AS total FROM pp_push_subscriptions WHERE active=1'));if((Number(subscriptions?.[0]?.total)||0)>0)throw new Error('Chaves de notificação existentes não puderam ser recuperadas com segurança.')}
+  const db=env?.PROVEDOR_DB||null;if(!db)throw Object.assign(new Error('Banco D1 das notificações não configurado.'),{statusCode:503});
+  const d1Record=await readD1VapidRecord(db);if(d1Record)return decryptVapid(env,d1Record);
+  const legacyRecord=await readD1VapidRecord(db,VAPID_KEY);
+  if(legacyRecord){await saveD1VapidRecord(db,legacyRecord);const stored=await readD1VapidRecord(db);return decryptVapid(env,stored||legacyRecord)}
+  const subscriptions=await d1Rows(db.prepare('SELECT COUNT(*) AS total FROM pp_push_subscriptions WHERE active=1'));if((Number(subscriptions?.[0]?.total)||0)>0)throw new Error('Chaves de notificação existentes não puderam ser recuperadas com segurança.');
   const pair=await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']),privateJWK=await crypto.subtle.exportKey('jwk',pair.privateKey),publicRaw=new Uint8Array(await crypto.subtle.exportKey('raw',pair.publicKey));
   const created={publicKey:base64Url(publicRaw),privateJWK,subject:'mailto:adrianomoreirausuarios@gmail.com'},encrypted=await encryptVapid(env,created),raw=JSON.stringify(encrypted),now=new Date().toISOString();
-  if(db){await db.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO NOTHING').bind(VAPID_D1_KEY,raw,now).run();const stored=await readD1VapidRecord(db);if(!stored)throw new Error('Não foi possível preparar as chaves de notificação no D1.');if(sql)try{await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${VAPID_KEY},${JSON.stringify(stored)}::jsonb,${now}) ON CONFLICT (key) DO NOTHING`}catch{}return decryptVapid(env,stored)}
-  if(!sql)throw new Error('Não foi possível preparar as chaves de notificação.');
-  const inserted=await sql`INSERT INTO pp_settings (key,value,updated_at) VALUES (${VAPID_KEY},${raw}::jsonb,${now}) ON CONFLICT (key) DO NOTHING RETURNING value`;
-  if(inserted?.[0]?.value)return created;
-  const existing=await sql`SELECT value FROM pp_settings WHERE key=${VAPID_KEY} LIMIT 1`;
-  if(!existing?.[0]?.value)throw new Error('Não foi possível preparar as chaves de notificação.');
-  return decryptVapid(env,existing[0].value);
+  await db.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO NOTHING').bind(VAPID_D1_KEY,raw,now).run();const stored=await readD1VapidRecord(db);if(!stored)throw new Error('Não foi possível preparar as chaves de notificação no D1.');return decryptVapid(env,stored);
 }
 
 async function portalKey(env){const secret=text(env.PORTAL_SESSION_SECRET)||text(env.DATABASE_URL);if(!secret)throw Object.assign(new Error('Sessão segura do portal não configurada.'),{statusCode:503});return crypto.subtle.importKey('raw',enc.encode(secret),{name:'HMAC',hash:'SHA-256'},false,['verify'])}
@@ -209,7 +201,7 @@ function cashbackAutomaticEvents(state){
 
 async function scanAutomaticEvents(env){
   if(!env?.PROVEDOR_DB)return {scanned:false};
-  const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,db=env.PROVEDOR_DB;await ensurePushTables(db);const state=await loadState(env),today=brazilDateKey(),tomorrow=addDaysKey(today,1),yesterday=addDaysKey(today,-1),events=[];
+  const sql=null,db=env.PROVEDOR_DB;await ensurePushTables(db);const state=await loadState(env),today=brazilDateKey(),tomorrow=addDaysKey(today,1),yesterday=addDaysKey(today,-1),events=[];
   for(const invoice of Array.isArray(state?.invoices)?state.invoices:[])events.push(...invoiceAutomaticEvents(invoice,today,tomorrow,yesterday));
   events.push(...cashbackAutomaticEvents(state));
   const unique=[...new Map(events.map(event=>[event.key,event])).values()].slice(0,250);let sent=0,failed=0,skipped=0;
@@ -234,7 +226,7 @@ async function handleCustomerPush(request,env,ctx){
   const cors=clientCors(request);if(request.method==='OPTIONS')return new Response(null,{status:204,headers:cors});if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405,cors);
   const origin=text(request.headers.get('origin'));if(!CLIENT_ORIGINS.has(origin))return json({ok:false,error:'Origem não autorizada.'},403,cors);
   try{
-    if(!env.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 das notificações não configurado.'),{statusCode:503});let body={};try{body=await request.json()}catch{}const action=text(body?.action),data=body?.data||{},sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,db=env.PROVEDOR_DB;await ensurePushTables(db);
+    if(!env.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 das notificações não configurado.'),{statusCode:503});let body={};try{body=await request.json()}catch{}const action=text(body?.action),data=body?.data||{},sql=null,db=env.PROVEDOR_DB;await ensurePushTables(db);
     if(action==='config'){const vapid=await vapidKeys(env,sql);return json({ok:true,data:{publicKey:vapid.publicKey,supported:true}},200,cors)}
     const session=await verifySession(data?.session,env),clientId=session.clientId;
     if(action==='subscribe'){

@@ -416,7 +416,22 @@ async function readClientList(env,sql){
     return rows.map(safeClientRow);
   }catch(error){console.error('Provedor Plus: leitura D1 dos clientes falhou.',error);throw error}
 }
-async function saveRouter(sql,data,env){const p=routerPayload(data);if(!p.host||!p.username)throw Object.assign(new Error('Informe o endereço e o usuário do MikroTik.'),{statusCode:400});let rows=[];if(p.id)rows=await sql`UPDATE pp_routers SET name=${p.name},host=${p.host},port=${p.port},username=${p.username},connection_method=${p.connection_method},allow_self_signed=${p.allow_self_signed},active=${p.active},last_status=${p.last_status},last_sync=COALESCE(${p.last_sync},last_sync),updated_at=${p.updated_at} WHERE id=${p.id} RETURNING *`;if(!rows[0]&&p.id)rows=await sql`INSERT INTO pp_routers (id,name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,updated_at) VALUES (${p.id},${p.name},${p.host},${p.port},${p.username},${p.connection_method},${p.allow_self_signed},${p.active},${p.last_status},${p.last_sync},${p.updated_at}) RETURNING *`;if(!rows[0])rows=await sql`INSERT INTO pp_routers (name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,updated_at) VALUES (${p.name},${p.host},${p.port},${p.username},${p.connection_method},${p.allow_self_signed},${p.active},${p.last_status},${p.last_sync},${p.updated_at}) RETURNING *`;const saved=rows[0]||null;if(saved&&env?.PROVEDOR_DB)try{await mirrorRouterRowToD1(env,saved)}catch(error){console.error(`Provedor Plus: não foi possível espelhar o MikroTik ${saved.id} no D1.`,error)}return saved;}
+async function saveRouter(sql,data,env){
+  const p=routerPayload(data);if(!p.host||!p.username)throw Object.assign(new Error('Informe o endereço e o usuário do MikroTik.'),{statusCode:400});
+  if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 dos MikroTik não configurado.'),{statusCode:503});
+  const db=env.PROVEDOR_DB,createdAt=p.updated_at;let id=p.id;
+  if(id){
+    const existing=await db.prepare('SELECT id FROM pp_routers WHERE id=? LIMIT 1').bind(id).all();
+    if(existing?.results?.[0])await db.prepare('UPDATE pp_routers SET name=?,host=?,port=?,username=?,connection_method=?,allow_self_signed=?,active=?,last_status=?,last_sync=COALESCE(?,last_sync),updated_at=? WHERE id=?').bind(p.name,p.host,p.port,p.username,p.connection_method,d1Bool(p.allow_self_signed),d1Bool(p.active),nullableText(p.last_status),p.last_sync||null,p.updated_at,id).run();
+    else await db.prepare('INSERT INTO pp_routers (id,name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').bind(id,p.name,p.host,p.port,p.username,p.connection_method,d1Bool(p.allow_self_signed),d1Bool(p.active),nullableText(p.last_status),p.last_sync||null,createdAt,p.updated_at).run();
+  }else{
+    const inserted=await db.prepare('INSERT INTO pp_routers (name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)').bind(p.name,p.host,p.port,p.username,p.connection_method,d1Bool(p.allow_self_signed),d1Bool(p.active),nullableText(p.last_status),p.last_sync||null,createdAt,p.updated_at).run();
+    id=Number(inserted?.meta?.last_row_id)||0;
+  }
+  if(!id)throw Object.assign(new Error('Não foi possível salvar o MikroTik no D1.'),{statusCode:500});
+  const saved=await db.prepare('SELECT id,name,host,port,username,connection_method,allow_self_signed,active,last_status,last_sync,created_at,updated_at FROM pp_routers WHERE id=? LIMIT 1').bind(id).all();
+  return safeRouterRow(saved?.results?.[0]||null);
+}
 async function findExistingClient(sql,p){if(p.contract_number){const rows=await sql`SELECT id FROM pp_clients WHERE contract_number=${p.contract_number} LIMIT 1`;if(rows[0]?.id)return num(rows[0].id)}if(p.document){const rows=await sql`SELECT id FROM pp_clients WHERE document=${p.document} LIMIT 1`;if(rows[0]?.id)return num(rows[0].id)}return null;}
 async function saveClient(sql,data,env){const p=clientPayload(data);if(!p.name)throw Object.assign(new Error('Nome do cliente é obrigatório.'),{statusCode:400});if(p.plan_id){const linkedPlan=await ensureNativePlanForClient(sql,p.plan_id,env);if(!p.plan)p.plan=text(linkedPlan?.name)}if(!p.id)p.id=await findExistingClient(sql,p);let rows=[];
   if(p.id){
@@ -506,7 +521,7 @@ export async function handleNativeCloudData(request,env){
   try{const body=await bodyOf(request),action=text(body?.action),data=body?.data||{};if(action.startsWith('routers.')||action==='traffic.record')await requirePermission(request,sql,'network');else if(action.startsWith('clients.'))await requirePermission(request,sql,'clients');else if(action.startsWith('cashback.'))await requirePermission(request,sql,'finance');else await requireAuth(request,sql);let result;
     if(action==='routers.list')result=await readRouterList(env,sql);
     else if(action==='routers.save')result=await saveRouter(sql,data,env);
-    else if(action==='routers.delete'){const id=num(data.id);if(!id)throw Object.assign(new Error('MikroTik inválido.'),{statusCode:400});await sql`DELETE FROM pp_routers WHERE id=${id}`;if(env?.PROVEDOR_DB)try{await mirrorRouterToD1(env,id)}catch(error){console.error(`Provedor Plus: não foi possível remover o espelho D1 do MikroTik ${id}.`,error)}result={deleted:true,id};}
+    else if(action==='routers.delete'){const id=num(data.id);if(!id)throw Object.assign(new Error('MikroTik inválido.'),{statusCode:400});if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 dos MikroTik não configurado.'),{statusCode:503});await env.PROVEDOR_DB.prepare('DELETE FROM pp_routers WHERE id=?').bind(id).run();result={deleted:true,id};}
     else if(action==='routers.secret.get')result=await routerSecretGet(env,sql,data.id);
     else if(action==='routers.secret.save')result=await routerSecretSave(env,sql,data.id,data.password);
     else if(action==='routers.secret.delete')result=await routerSecretDelete(env,sql,data.id);

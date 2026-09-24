@@ -21,10 +21,9 @@ function clientCors(request){const origin=text(request.headers.get('origin')),he
 function base64Url(bytes){const view=bytes instanceof Uint8Array?bytes:new Uint8Array(bytes);let raw='';for(let i=0;i<view.length;i+=0x8000)raw+=String.fromCharCode(...view.subarray(i,Math.min(i+0x8000,view.length)));return btoa(raw).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
 function base64UrlBytes(value){const raw=text(value).replace(/-/g,'+').replace(/_/g,'/'),padded=raw+'='.repeat((4-raw.length%4)%4),bin=atob(padded),out=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);return out}
 function parseState(value){if(value&&typeof value==='object'&&!Array.isArray(value))return value;if(typeof value==='string')try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{}return {}}
-async function loadState(env,sql=null){
-  if(env?.PROVEDOR_DB)try{const rows=await d1Rows(env.PROVEDOR_DB.prepare('SELECT value FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY)),row=rows?.[0];if(row)return parseState(row.value)}catch(error){console.error('Provedor Plus: leitura D1 do estado para notificações falhou; usando cópia Neon.',error)}
-  if(sql){const rows=await sql`SELECT value FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`;return parseState(rows?.[0]?.value)}
-  throw Object.assign(new Error('Estado D1 das notificações não está disponível.'),{statusCode:503});
+async function loadState(env){
+  if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Estado D1 das notificações não está disponível.'),{statusCode:503});
+  try{const rows=await d1Rows(env.PROVEDOR_DB.prepare('SELECT value FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY)),row=rows?.[0];return parseState(row?.value)}catch(error){console.error('Provedor Plus: leitura D1 do estado para notificações falhou.',error);throw error}
 }
 function normalizeStatus(value){return text(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')}
 function paidStatus(value){const status=normalizeStatus(value);return ['pago','paga','paid','baixado','recebido','recebida','quitado','quitada'].some(item=>status.includes(item))}
@@ -210,7 +209,7 @@ function cashbackAutomaticEvents(state){
 
 async function scanAutomaticEvents(env){
   if(!env?.PROVEDOR_DB)return {scanned:false};
-  const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,db=env.PROVEDOR_DB;await ensurePushTables(db);const state=await loadState(env,sql),today=brazilDateKey(),tomorrow=addDaysKey(today,1),yesterday=addDaysKey(today,-1),events=[];
+  const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,db=env.PROVEDOR_DB;await ensurePushTables(db);const state=await loadState(env),today=brazilDateKey(),tomorrow=addDaysKey(today,1),yesterday=addDaysKey(today,-1),events=[];
   for(const invoice of Array.isArray(state?.invoices)?state.invoices:[])events.push(...invoiceAutomaticEvents(invoice,today,tomorrow,yesterday));
   events.push(...cashbackAutomaticEvents(state));
   const unique=[...new Map(events.map(event=>[event.key,event])).values()].slice(0,250);let sent=0,failed=0,skipped=0;

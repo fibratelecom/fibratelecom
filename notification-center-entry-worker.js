@@ -508,10 +508,10 @@ async function tryBackgroundStateLock(env,fn,label){
 }
 async function runScheduledStateMaintenance(env,scheduledAt){
   if(dueEvery(scheduledAt,PAYMENT_RECONCILIATION_INTERVAL_MINUTES)){
-    await tryBackgroundStateLock(env,async()=>{try{await syncPrimarySnapshotsD1ToNeon(env,{invoices:true,financial:true});await reconcilePendingPayments(env);await mirrorInvoicesSnapshotToD1(env);await mirrorFinancialSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha na conciliação automática de pagamentos pendentes.',error)}},'Provedor Plus: conciliação automática não pôde obter a trava de estado.');
+    await tryBackgroundStateLock(env,async()=>{try{await reconcilePendingPayments(env)}catch(error){console.error('Provedor Plus: falha na conciliação automática de pagamentos pendentes.',error)}},'Provedor Plus: conciliação automática não pôde obter a trava de estado.');
   }
   if(!dueEvery(scheduledAt,BILLING_INTERVAL_MINUTES))return;
-  await tryBackgroundStateLock(env,async()=>{await syncPrimarySnapshotsD1ToNeon(env,{invoices:true,financial:true});await runBillingCron(env);await mirrorFinancialSnapshotToD1(env)},'Provedor Plus: geração automática de mensalidades aguardará a próxima checagem.');
+  await tryBackgroundStateLock(env,async()=>{await runBillingCron(env)},'Provedor Plus: geração automática de mensalidades aguardará a próxima checagem.');
 }
 
 async function pushCryptoKey(env){const secret=text(env.BANK_SECRET_KEY)||text(env.PORTAL_SESSION_SECRET)||text(env.DATABASE_URL);if(!secret)throw new Error('Chave de proteção das notificações não configurada.');const raw=await crypto.subtle.digest('SHA-256',enc.encode(`provedor-plus-push-v1|${secret}`));return crypto.subtle.importKey('raw',raw,{name:'AES-GCM'},false,['decrypt'])}

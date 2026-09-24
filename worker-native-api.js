@@ -63,7 +63,7 @@ async function mirrorRouterRowToD1(env,row){
     connection_method=excluded.connection_method,allow_self_signed=excluded.allow_self_signed,active=excluded.active,
     last_status=excluded.last_status,last_sync=excluded.last_sync,
     created_at=COALESCE(pp_routers.created_at,excluded.created_at),updated_at=excluded.updated_at`).bind(
-      Number(row.id),text(row.name),text(row.host),Math.max(1,Number(row.port)||443),text(row.username),text(row.connection_method)||'rest',d1Bool(row.allow_self_signed,false),d1Bool(row.active,true),nullableText(row.last_status),row.last_sync||null,row.created_at||null,row.updated_at||new Date().toISOString()
+      Number(row.id),text(row.name),text(row.host),Math.max(1,Number(row.port)||443),text(row.username),text(row.connection_method)||'rest',d1Bool(row.allow_self_signed),d1Bool(row.active),nullableText(row.last_status),row.last_sync||null,row.created_at||null,row.updated_at||new Date().toISOString()
     ).run();
   return true;
 }

@@ -2,22 +2,15 @@ import baseWorker from './push-worker.js';
 import {handleStoriesRequest,isStoriesPath} from './stories-worker.js';
 import {handleStoryReactionsRequest,isStoryReactionsPath} from './story-reactions-worker.js';
 import {handleServiceStatus} from './service-status-worker.js';
-import {neon} from '@neondatabase/serverless';
 
 const STATE_KEY='web_state_v1017';
 const FINANCIAL_REPAIR_PORTAL_ACTIONS=new Set(['refresh','payment-pix','payment-card','payment-status','payment-prepare','negotiate']);
 const text=value=>String(value??'').trim();
 function parseState(value){if(value&&typeof value==='object'&&!Array.isArray(value))return value;if(typeof value==='string')try{const parsed=JSON.parse(value);return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{}return {}}
-async function loadState(env,sql){
-  if(env?.PROVEDOR_DB)try{
-    const result=await env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY).all(),row=Array.isArray(result?.results)?result.results[0]:null;
-    if(row){
-      const stamps=await sql`SELECT updated_at FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`,neonAt=stamps?.[0]?.updated_at instanceof Date?stamps[0].updated_at.toISOString():text(stamps?.[0]?.updated_at),d1Time=Date.parse(text(row.updated_at)),neonTime=Date.parse(neonAt);
-      if(!Number.isFinite(neonTime)||(Number.isFinite(d1Time)&&d1Time>=neonTime))return parseState(row.value);
-    }
-  }catch(error){console.error('Provedor Plus: leitura D1 do estado financeiro falhou; usando Neon.',error)}
-  const rows=await sql`SELECT value FROM pp_settings WHERE key=${STATE_KEY} LIMIT 1`;
-  return parseState(rows?.[0]?.value);
+async function loadState(env){
+  if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 do estado financeiro não configurado.'),{statusCode:503});
+  const result=await env.PROVEDOR_DB.prepare('SELECT value FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY).all(),row=Array.isArray(result?.results)?result.results[0]:null;
+  return parseState(row?.value);
 }
 function balanceCents(client){const direct=Number(client?.cashback_balance_cents);if(Number.isFinite(direct))return Math.max(0,Math.round(direct));const amount=Number(client?.cashback_balance);return Number.isFinite(amount)?Math.max(0,Math.round(amount*100)):0}
 function paidStatus(value){const status=text(value).toLowerCase();return ['pago','paid','baixado','recebido','quitado'].some(item=>status.includes(item))}
@@ -27,8 +20,8 @@ function brl(cents){return new Intl.NumberFormat('pt-BR',{style:'currency',curre
 function cashbackRules(state){const settings=state?.settings||{},mode=text(settings.cashback_mode).toLowerCase()==='fixed'?'fixed':'percent';return {enabled:settings.cashback_enabled===true||text(settings.cashback_enabled).toLowerCase()==='true',mode,rate:Math.max(0,Math.min(100,Number(settings.cashback_rate)||0)),fixedCents:Math.max(0,Math.round(Number(settings.cashback_fixed_cents)||0))}}
 
 async function repairFinancialConsistency(env){
-  if(!env?.DATABASE_URL)return false;
-  const sql=neon(env.DATABASE_URL),state=await loadState(env,sql);
+  if(!env?.PROVEDOR_DB)return false;
+  const state=await loadState(env);
   const invoices=Array.isArray(state.invoices)?state.invoices:[],clients=Array.isArray(state.clients)?state.clients:[];
   let transactions=Array.isArray(state.cashback_transactions)?state.cashback_transactions:[],changed=false;
   const now=new Date().toISOString(),rules=cashbackRules(state);
@@ -85,7 +78,7 @@ async function repairFinancialConsistency(env){
   if(!changed)return false;
   state.invoices=invoices;state.clients=clients;state.cashback_transactions=transactions.slice(-5000);
   const raw=JSON.stringify(state);
-  await sql`UPDATE pp_settings SET value=${raw}::jsonb,updated_at=${now} WHERE key=${STATE_KEY}`;
+  await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(STATE_KEY,raw,now).run();
   return true;
 }
 
@@ -116,13 +109,13 @@ function enhancePortalObject(portal,state){
 }
 
 async function enhancePortalResponse(response,env){
-  if(!response?.ok||!env?.DATABASE_URL)return response;
+  if(!response?.ok||!env?.PROVEDOR_DB)return response;
   let body={};try{body=await response.clone().json()}catch{return response}
   if(!body?.ok||!body?.data)return response;
   const data=body.data,hasPortalData=Boolean(data?.client||Array.isArray(data?.invoices)||data?.portal?.client||Array.isArray(data?.portal?.invoices));
   if(!hasPortalData)return response;
   try{
-    const sql=neon(env.DATABASE_URL),state=await loadState(env,sql);
+    const state=await loadState(env);
     if(data?.client||data?.invoices)enhancePortalObject(data,state);
     if(data?.portal)enhancePortalObject(data.portal,state);
     const headers=new Headers(response.headers);headers.set('Content-Type','application/json; charset=utf-8');headers.set('Cache-Control','no-store, max-age=0');

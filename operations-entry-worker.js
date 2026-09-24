@@ -1,5 +1,4 @@
 import baseWorker from './stories-entry-worker.js';
-import {neon} from '@neondatabase/serverless';
 import {buildPushHTTPRequest} from '@pushforge/builder';
 
 const OPS_PATH='/api/push-operations';
@@ -126,9 +125,8 @@ async function pushCryptoKey(env){const secret=text(env.BANK_SECRET_KEY)||text(e
 async function readVapid(env,sql=null){
   let record=null;
   if(env?.PROVEDOR_DB){
-    try{record=parseObject(await settingValue(env.PROVEDOR_DB,VAPID_D1_KEY))}catch(error){console.error('Provedor Plus: leitura D1 do VAPID operacional falhou; usando cópia legado.',error)}
+    try{record=parseObject(await settingValue(env.PROVEDOR_DB,VAPID_D1_KEY));if(!record?.iv||!record?.data)record=parseObject(await settingValue(env.PROVEDOR_DB,VAPID_KEY))}catch(error){console.error('Provedor Plus: leitura D1 do VAPID operacional falhou.',error)}
   }
-  if((!record?.iv||!record?.data)&&sql){const rows=await sql`SELECT value FROM pp_settings WHERE key=${VAPID_KEY} LIMIT 1`;record=rows?.[0]?.value}
   if(!record?.iv||!record?.data)return null;const key=await pushCryptoKey(env),plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:base64UrlBytes(record.iv)},key,base64UrlBytes(record.data));return JSON.parse(new TextDecoder().decode(plain))
 }
 
@@ -251,12 +249,11 @@ async function statusAndPlanEvents(sql,state,settings,protocolStore=null,env=nul
     if(normalize(currentStatus)!==normalize(oldStatus)){
       const wasBlocked=blockedStatus(oldStatus),isBlocked=blockedStatus(currentStatus),stamp=text(row.updated_at)||Date.now();
       if(!wasBlocked&&isBlocked&&settings.statusSuspended&&!trustReblocked)events.push({key:`status-blocked:${clientId}:${stamp}`,clientId,type:'internet suspensa',title:'Conexão suspensa',body:'Sua conexão foi suspensa. Consulte suas faturas e opções de regularização na Área do Cliente.',url:'/#conexao'});
-      if(wasBlocked&&!isBlocked&&settings.statusRestored&&!trustActive)events.push({key:`status-restored:${clientId}:${stamp}`,clientId,type:'internet liberada',title:'Conexão liberada',body:'Seu acesso à internet foi liberado novamente.',url:'/#conexao'});
-    }
+      if(wasBlocked&&!isBlocked&&settings.statusRestored&&!trustActive)events.push({key:`status-restored:${clientId}:${stamp}`,clientId,type:'internet liberada',title:'Conexão liberada',body:'Seu acesso à internet foi liberado novamente.',url:'/#conexao'})}
     if(currentPlan!==oldPlan&&settings.planChange){const stamp=text(row.updated_at)||Date.now(),name=planNameFor(row,state);events.push({key:`plan-change:${clientId}:${stamp}`,clientId,type:'plano alterado',title:'Plano atualizado',body:`Seu plano foi atualizado para ${name}. Consulte os detalhes na Área do Cliente.`,url:'/#perfil'})}
     if(settings.dueChange&&oldDue>0&&currentDue>0&&currentDue!==oldDue&&!await recentDueProtocol(protocolStore||sql,clientId,currentDue)){const stamp=text(row.updated_at)||Date.now();events.push({key:`due-admin:${clientId}:${stamp}:${oldDue}-${currentDue}`,clientId,type:'mudança de vencimento',title:'Vencimento alterado',body:`Seu vencimento foi alterado do dia ${oldDue} para o dia ${currentDue}. Consulte seus dados na Área do Cliente.`,url:'/#perfil'})}
   }
-  await sql`INSERT INTO pp_push_observer_state (client_id,last_status,last_plan,last_due_day,updated_at) SELECT c.id,c.status,COALESCE(c.plan,'')||'|'||COALESCE(c.plan_id::text,''),c.due_day,now() FROM pp_clients c LEFT JOIN pp_push_observer_state o ON o.client_id=c.id WHERE o.client_id IS NULL OR o.last_status IS DISTINCT FROM c.status OR o.last_plan IS DISTINCT FROM (COALESCE(c.plan,'')||'|'||COALESCE(c.plan_id::text,'')) OR o.last_due_day IS DISTINCT FROM c.due_day ON CONFLICT (client_id) DO UPDATE SET last_status=EXCLUDED.last_status,last_plan=EXCLUDED.last_plan,last_due_day=EXCLUDED.last_due_day,updated_at=EXCLUDED.updated_at WHERE pp_push_observer_state.last_status IS DISTINCT FROM EXCLUDED.last_status OR pp_push_observer_state.last_plan IS DISTINCT FROM EXCLUDED.last_plan OR pp_push_observer_state.last_due_day IS DISTINCT FROM EXCLUDED.last_due_day`;
+  await sql`INSERT INTO pp_push_observer_state (client_id,last_status,last_plan,last_due_day,updated_at) SELECT c.id,c.status,COALESCE(c.plan,'')||'|'||COALESCE(c.plan_id::text,''),c.due_day,now() FROM pp_clients c LEFT JOIN pp_push_observer_state o ON o.client_id=c.id WHERE o.client_id IS NULL OR o.last_status IS DISTINCT FROM c.status OR o.last_plan IS DISTINCT FROM (COALESCE(c.plan,'')||'|'||COALESCE(c.plan_id::text,'')) OR o.last_due_day IS DISTINCT FROM c.due_day ON CONFLICT (client_id) DO UPDATE SET last_status=EXCLUDED.last_status,last_plan=EXCLUDED.last_plan,last_due_day=EXCLUDED.due_day,updated_at=EXCLUDED.updated_at WHERE pp_push_observer_state.last_status IS DISTINCT FROM EXCLUDED.last_status OR pp_push_observer_state.last_plan IS DISTINCT FROM EXCLUDED.last_plan OR pp_push_observer_state.last_due_day IS DISTINCT FROM EXCLUDED.last_due_day`;
   return events;
 }
 
@@ -334,7 +331,7 @@ async function retryPending(sql,env){
 
 async function scanOperationalEvents(env){
   if(!env?.PROVEDOR_DB)return {scanned:false};
-  const sql=env.DATABASE_URL?neon(env.DATABASE_URL):null,protocolStore=env.PROVEDOR_DB;await seedOperationalEventsD1(env,sql);const state=await loadState(env),settings=await loadSettings(env.PROVEDOR_DB),events=[];
+  const sql=null,protocolStore=env.PROVEDOR_DB;await seedOperationalEventsD1(env,sql);const state=await loadState(env),settings=await loadSettings(env.PROVEDOR_DB),events=[];
   events.push(...await statusAndPlanEvents(sql,state,settings,protocolStore,env));
   events.push(...trustEvents(state,settings));
   events.push(...await dueChangeEvents(protocolStore,settings));

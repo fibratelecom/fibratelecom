@@ -378,7 +378,7 @@ async function stateMutationRequest(request,path){
   let body={};try{body=await request.clone().json()}catch{return false}
   const action=text(body?.action);
   if(path==='/api/cloud-state')return action==='state.save';
-  if(path==='/api/cloud-data')return action==='cashback.wallet.adjust'||action==='negotiation.support.create'||action==='billing.run';
+  if(path==='/api/cloud-data')return action==='billing.run'?'d1-billing':action==='cashback.wallet.adjust'||action==='negotiation.support.create';
   if(path==='/api/bank-settings')return action==='save-default';
   if(path==='/api/customer-trust-release')return action==='release';
   if(path==='/api/customer-due-date')return action==='change';
@@ -706,13 +706,13 @@ export default {
     try{portalLoginRate=await preparePortalLoginRate(request,env,path)}catch(error){if(Number(error?.statusCode)===429)return portalLoginRateResponse(request,error);console.error('Provedor Plus: proteção de tentativas do login não pôde ser preparada.',error)}
     try{
       const priorityAction=await paymentPriorityAction(request,path),readAction=await invoiceReadAction(request,path),invoiceWorkingCopy=await invoiceWorkingCopyRequest(request,path),financialWorkingCopy=await financialWorkingCopyRequest(request,path),mutation=await stateMutationRequest(request,path);if(priorityAction)priorityStop=await beginPaymentPriority(env);
-      const forward=async()=>{if(mutation||invoiceWorkingCopy||financialWorkingCopy)await syncPrimarySnapshotsD1ToNeon(env,{invoices:mutation||invoiceWorkingCopy,financial:mutation||financialWorkingCopy});let response=await baseWorker.fetch(request,env,ctx);if(portalLoginRate)response=await finishPortalLoginRate(request,response,portalLoginRate,ctx);if(path==='/api/bank-settings')response=await sanitizeBankResponse(response);return overlayInvoicesFromD1(response,env,path,readAction)};
+      const forward=async()=>{if(mutation!=='d1-billing'&&(mutation||invoiceWorkingCopy||financialWorkingCopy))await syncPrimarySnapshotsD1ToNeon(env,{invoices:mutation||invoiceWorkingCopy,financial:mutation||financialWorkingCopy});let response=await baseWorker.fetch(request,env,ctx);if(portalLoginRate)response=await finishPortalLoginRate(request,response,portalLoginRate,ctx);if(path==='/api/bank-settings')response=await sanitizeBankResponse(response);return overlayInvoicesFromD1(response,env,path,readAction)};
       if(mutation){
         const response=await withStateWriteLock(env,forward,priorityAction?60000:20000);
         if(response?.ok&&env?.PROVEDOR_DB){
           try{await mirrorInvoicesSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha ao confirmar alteração de faturas no D1; cópia Neon preservada para recuperação.',error)}
           try{await mirrorFinancialSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha ao confirmar cashback e negociações no D1; cópia Neon preservada para recuperação.',error)}
-          const clientsTask=mirrorRecentClientsToD1(env).catch(error=>console.error('Provedor Plus: falha ao espelhar alterações recentes de clientes no D1.',error));if(typeof ctx?.waitUntil==='function')ctx.waitUntil(clientsTask);else await clientsTask;
+          if(mutation!=='d1-billing'){const clientsTask=mirrorRecentClientsToD1(env).catch(error=>console.error('Provedor Plus: falha ao espelhar alterações recentes de clientes no D1.',error));if(typeof ctx?.waitUntil==='function')ctx.waitUntil(clientsTask);else await clientsTask}
         }
         return response;
       }

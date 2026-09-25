@@ -91,7 +91,7 @@ async function bankCryptoKey(env){
 
 async function encryptBankSettings(env,value){
   const key=await bankCryptoKey(env),iv=crypto.getRandomValues(new Uint8Array(12));
-  const cipher=await crypto.subtle.encrypt({name:'AES-GCM',iv},bankUtf8.encode(JSON.stringify(value||{})));
+  const cipher=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,bankUtf8.encode(JSON.stringify(value||{})));
   return {v:1,iv:bankB64(iv),data:bankB64(new Uint8Array(cipher))};
 }
 
@@ -698,7 +698,7 @@ function negotiationRules(state){
 }
 
 function dateKey(date=new Date()){
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth()+1).padStart(2,'0')}${String(date.getUTCDate()).padStart(2,'0')}`;
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth()+1).padStart(2,'0')}-${String(date.getUTCDate()).padStart(2,'0')}`;
 }
 
 function dateFromKeyUtc(value){
@@ -946,7 +946,7 @@ async function portalPaymentContext(env,data){
   const state=await loadState(env);if(repairLegacyPendingCashback(state,client))await saveState(env,state);const vault=await readBankSettings(env),banks=portalBankAvailability(state,client,vault);return {session,sql:env,client,state,vault,banks};
 }
 async function paymentConfigForSession(env,data){const ctx=await portalPaymentContext(env,data),mp=ctx.vault?.mercadoPago||{};return {pixEnabled:Boolean(ctx.banks.pixProvider),pixProvider:ctx.banks.pixProvider,pixProviderLabel:ctx.banks.pixProvider==='efi'?'Efí Bank':ctx.banks.pixProvider==='mercadoPago'?'Mercado Pago':'',cardEnabled:Boolean(ctx.banks.cardProvider),cardProvider:'mercadoPago',cardProviderLabel:'Mercado Pago',mercadoPagoPublicKey:ctx.banks.cardProvider?text(mp.publicKey):'',defaultProvider:ctx.banks.preferred,efiConfigured:ctx.banks.ready.efiPix,mercadoPagoConfigured:ctx.banks.ready.mercadoPago};}
-async function paymentPrepareForSession(env,data){const ctx=await portalPaymentContext(env,data),invoice=portalPaymentInvoice(ctx.state,ctx.client,data?.invoiceId),late=invoiceLateBreakdown(invoice,ctx.state),meta=invoiceBillingMeta(invoice),card=text(data?.method).toLowerCase()==='card',discountCents=card?0:cashbackDiscountCents(ctx.state,ctx.client,invoice),cardFeeCents=card?CARD_PAYMENT_FEE_CENTS:0,amountCents=Math.max(0,late.totalCents-discountCents+cardFeeCents);return {invoiceId:invoice.id,reference:invoiceReference(invoice),billingLabel:meta.label,billingKind:meta.kind,dueDate:formatDate(invoice.due_date||invoice.dueDate),dueDateRaw:text(invoice.due_date||invoice.dueDate),originalAmount:late.baseCents/100,daysOverdue:late.daysOverdue,fineAmount:late.fineCents/100,interestAmount:late.interestCents/100,updatedAmount:late.totalCents/100,amountBeforeDiscount:late.totalCents/100,cashbackDiscount:discountCents/100,cashbackBalance:cashbackBalanceCents(ctx.state,ctx.client,invoice)/100,cashbackAvailable:cashbackAvailableCents(ctx.state,ctx.client,invoice)/100,cardFee:cardFeeCents/100,cardFeeCents,amount:amountCents/100,amountCents,payer:{name:text(ctx.client.name),email:text(ctx.client.email),identification:{type:digits(ctx.client.document).length===14?'CNPJ':'CPF',number:digits(ctx.client.document)}}};}
+async function paymentPrepareForSession(env,data){const ctx=await portalPaymentContext(env,data),invoice=portalPaymentInvoice(ctx.state,ctx.client,data?.invoiceId),late=invoiceLateBreakdown(invoice,ctx.state),meta=invoiceBillingMeta(invoice),card=text(data?.method).toLowerCase()==='card',discountCents=card?0:cashbackDiscountCents(ctx.state,ctx.client,invoice),cardFeeCents=card?CARD_PAYMENT_FEE_CENTS:0,amountCents=Math.max(0,late.totalCents-discountCents+cardFeeCents);return {invoiceId:invoice.id,reference:invoiceReference(invoice),billingLabel:meta.label,billingKind:meta.kind,dueDate:formatDate(invoice.due_date||invoice.dueDate),originalAmount:late.baseCents/100,daysOverdue:late.daysOverdue,fineAmount:late.fineCents/100,interestAmount:late.interestCents/100,updatedAmount:late.totalCents/100,amountBeforeDiscount:late.totalCents/100,cashbackDiscount:discountCents/100,cashbackBalance:cashbackBalanceCents(ctx.state,ctx.client,invoice)/100,cashbackAvailable:cashbackAvailableCents(ctx.state,ctx.client,invoice)/100,cardFee:cardFeeCents/100,cardFeeCents,amount:amountCents/100,amountCents,payer:{name:text(ctx.client.name),email:text(ctx.client.email),identification:{type:digits(ctx.client.document).length===14?'CNPJ':'CPF',number:digits(ctx.client.document)}}};}
 function mpPaid(value){const s=text(value).toLowerCase();return ['approved','paid','pago','concluido','concluído'].some(item=>s.includes(item));}
 function mpRejected(value){const s=text(value).toLowerCase();return ['rejected','cancelled','canceled','recusado','cancelado','refunded','charged_back'].some(item=>s.includes(item));}
 function markPortalInvoicePaid(invoice,method,paidAt=''){invoice.status='Pago';invoice.payment_method=method;invoice.paid_by='Área do Cliente';invoice.paid_at=text(paidAt)||new Date().toISOString();invoice.bank_last_sync_at=new Date().toISOString();}

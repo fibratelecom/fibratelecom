@@ -410,12 +410,16 @@ async function reconcilePendingPayments(env){
   if(!env?.PROVEDOR_DB)return {checked:0,confirmed:0,failed:0};
   const state=await loadState(env),candidates=(Array.isArray(state?.invoices)?state.invoices:[]).filter(row=>{
     if(!invoiceOpen(row))return false;
-    const provider=text(row?.bank_provider).toLowerCase(),detail=normalize(row?.bank_status_detail),paymentId=text(row?.bank_payment_id||row?.bank_charge_id);
-    return paymentId&&detail.includes('pix')&&(provider==='mercadopago'||provider==='efi');
-  }).sort((a,b)=>text(a?.bank_last_sync_at).localeCompare(text(b?.bank_last_sync_at))).slice(0,1);
+    const provider=text(row?.bank_provider).toLowerCase(),bankStatus=normalize(row?.bank_status),paymentId=text(row?.bank_payment_id||row?.bank_charge_id),chargeId=text(row?.bank_charge_id);
+    const closed=['cancelad','canceled','cancelled','rejected','rejeitad','recusad','refunded','charged_back','expired','expirad','removid'].some(value=>bankStatus.includes(value));
+    if(closed)return false;
+    if(provider==='mercadopago')return Boolean(paymentId);
+    if(provider==='efi')return Boolean(chargeId);
+    return false;
+  }).sort((a,b)=>text(a?.bank_last_sync_at).localeCompare(text(b?.bank_last_sync_at))).slice(0,10);
   let checked=0,confirmed=0,failed=0;
   for(const invoice of candidates){
-    const clientId=Number(invoice?.client_id)||0,paymentId=text(invoice?.bank_payment_id||invoice?.bank_charge_id);if(!clientId||!paymentId)continue;
+    const provider=text(invoice?.bank_provider).toLowerCase(),clientId=Number(invoice?.client_id)||0,paymentId=provider==='efi'?text(invoice?.bank_charge_id):text(invoice?.bank_payment_id||invoice?.bank_charge_id);if(!clientId||!paymentId)continue;
     try{
       const session=await portalServiceSession(env,clientId),request=new Request('https://painel.fibramais.workers.dev/api/customer-portal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'payment-status',data:{session,invoiceId:invoice.id,paymentId}})}),response=await baseWorker.fetch(request,env,{});let body={};try{body=await response.json()}catch{}
       checked++;if(!response.ok||!body?.ok){failed++;continue}const status=normalize(body?.data?.status),current=normalize(body?.data?.state);if(['approved','paid','pago','baixado'].includes(status)||paidStatus(current))confirmed++;
@@ -477,7 +481,7 @@ async function resolveClient(db,identifier){
 }
 async function clientById(db,id){const rows=await d1Rows(db.prepare('SELECT id,name,contract_number,document,plan,plan_id,due_day FROM pp_clients WHERE id=? LIMIT 1').bind(Number(id)));return rows?.[0]||null}
 async function allAuthorizedClients(db){return d1Rows(db.prepare('SELECT id,name,contract_number,document,plan,plan_id,due_day FROM pp_clients WHERE id IN (SELECT DISTINCT client_id FROM pp_push_subscriptions WHERE active=1) ORDER BY id ASC'))}
-async function subscriptionsFor(db,clientId){return d1Rows(db.prepare('SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=? AND active=1 ORDER BY id ASC').bind(Number(clientId)))}
+async function subscriptionsFor(db,clientId){return d1Rows(db.prepare('SELECT id,client_id,endpoint,p256dh,auth FROM pp_push_subscriptions WHERE client_id=? AND active=1 ORDER BY id ASC'))}
 async function recordInbox(db,clientId,sourceKey,title,body,clickUrl,createdAt=null){
   if(!clientId||!sourceKey||!title||!body)return;
   await ensureTables(db);

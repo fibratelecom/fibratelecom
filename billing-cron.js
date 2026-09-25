@@ -100,7 +100,7 @@ function invoiceForDue(state,clientId,dueDate,contractId=''){return (Array.isArr
 function hasAnyInvoice(state,clientId,contractId=''){return (Array.isArray(state?.invoices)?state.invoices:[]).some(row=>invoiceBelongsToService(row,clientId,contractId)&&invoiceActive(row))}
 function firstInvoiceExists(state,clientId,contractId=''){return (Array.isArray(state?.invoices)?state.invoices:[]).some(row=>invoiceBelongsToService(row,clientId,contractId)&&(row?.billing_origin==='first_prorated'||row?.prorated_first_invoice===true)&&invoiceActive(row))}
 function nextInvoiceId(state){const invoices=Array.isArray(state?.invoices)?state.invoices:[],max=Math.max(Number(state?.seq?.invoices)||0,...invoices.map(row=>Number(row?.id)||0)),id=max+1;state.seq={...(state.seq||{}),invoices:id};return id}
-function deferredNegotiationInstallment(row){return row?.bank_issue_deferred===true&&Number(row?.installment_number)>1&&Boolean(text(row?.negotiation_id))}
+function deferredNegotiationInstallment(row){return row?.bank_issue_deferred===true&&Number(row?.installment_number)>0&&Boolean(text(row?.negotiation_id))}
 
 function clientLocal(state,id){return (Array.isArray(state?.clients)?state.clients:[]).find(row=>Number(row?.id)===Number(id))||{}}
 function mergedClient(remote,state){
@@ -289,7 +289,7 @@ function makeInvoice(state,client,dueDate,amountCents,{first=false,serviceDays=0
 }
 
 function prepareCombinedMonthly(invoice,client,plan,dueDate){
-  const monthlyAmount=Math.max(1,monthlyCents(client,plan)),agreementCents=Math.max(1,Math.round(num(invoice?.negotiation_installment_amount_cents))),reference=dueDate.slice(0,7),part=Math.max(2,Math.round(num(invoice?.installment_number))),total=Math.max(part,Math.round(num(invoice?.installment_total)||part));
+  const monthlyAmount=Math.max(1,monthlyCents(client,plan)),agreementCents=Math.max(1,Math.round(num(invoice?.negotiation_installment_amount_cents))),reference=dueDate.slice(0,7),part=Math.max(1,Math.round(num(invoice?.installment_number))),total=Math.max(part,Math.round(num(invoice?.installment_total)||part));
   Object.assign(invoice,{due_date:dueDate,amount_cents:monthlyAmount+agreementCents,status:'Pendente',billing_type:'Mensalidade + Renegociação',description:`Mensalidade ${reference} + Acordo ${text(invoice?.negotiation_id)} · Parcela ${part}/${total}`,billing_origin:'monthly_auto_combined',auto_generated:true,competency:reference,reference,base_amount_cents:monthlyAmount,monthly_amount_cents:monthlyAmount,negotiation_installment_amount_cents:agreementCents,cashback_base_cents:monthlyAmount,combined_billing:true,bank_issue_deferred:false,cashback_eligible:false,cashback_enabled:false,cashback_reason:'mensalidade_com_renegociacao',billing_items:[{type:'monthly',label:`Mensalidade ${reference}`,amount_cents:monthlyAmount},{type:'negotiation',label:`Parcela ${part}/${total} do acordo`,amount_cents:agreementCents,installment_number:part,installment_total:total,negotiation_id:text(invoice?.negotiation_id)}]});
   return invoice;
 }

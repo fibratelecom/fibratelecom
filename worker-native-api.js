@@ -49,7 +49,7 @@ async function mirrorPlanRowToD1(env,row){
     ON CONFLICT(id) DO UPDATE SET name=excluded.name,speed_down_mbps=excluded.speed_down_mbps,
     speed_up_mbps=excluded.speed_up_mbps,price_cents=excluded.price_cents,active=excluded.active,
     description=excluded.description,created_at=COALESCE(pp_plans.created_at,excluded.created_at),updated_at=excluded.updated_at`).bind(
-      Number(row.id),text(row.name),Math.max(0,Number(row.speed_down_mbps)||0),Math.max(0,Number(row.speed_up_mbps)||0),Math.max(0,Math.round(Number(row.price_cents)||0)),d1Bool(row.active),nullableText(row.description),row.created_at||null,row.updated_at||new Date().toISOString()
+      Number(row.id),text(row.name),Math.max(0,Number(row.speed_down_mbps)||0),Math.max(0,Number(row.speed_up_mbps)||0),Math.max(0,Math.round(Number(row.price_cents)||0)),d1Bool(row.active),nullableText(row.description),row.created_at||row.updated_at||new Date().toISOString(),row.updated_at||new Date().toISOString()
     ).run();
   return true;
 }

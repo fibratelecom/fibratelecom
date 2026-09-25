@@ -3,6 +3,7 @@ import {runBillingCron,mirrorInvoicesToD1} from './billing-cron.js';
 import {buildPushHTTPRequest} from '@pushforge/builder';
 import {resolveRouterForService,recordTrafficForService} from './worker-native-api.js';
 import {handleMikrotikProxy} from './worker-mikrotik-native.js';
+import {verifyEfiNotification} from './worker-bank-native.js';
 import {beginPaymentPriority,paymentPriorityActive} from './state-write-lock.js';
 
 const CLIENT_PUSH_PATH='/api/customer-push';
@@ -14,6 +15,7 @@ const FINANCIAL_D1_KEY='cashback_negotiations_v1';
 const STATE_WRITE_LOCK_KEY='web_state_write_lock_v1';
 const STATE_WRITE_LOCK_TTL_MS=60000;
 const PORTAL_LOGIN_PATH='/api/customer-portal';
+const EFI_WEBHOOK_PATH='/api/efi-webhook';
 const PORTAL_LOGIN_WINDOW_MS=15*60*1000;
 const PORTAL_LOGIN_BLOCK_MS=15*60*1000;
 const PORTAL_LOGIN_PAIR_LIMIT=6;
@@ -427,6 +429,31 @@ async function reconcilePendingPayments(env){
   }
   return {checked,confirmed,failed};
 }
+async function reconcileEfiWebhookCharge(env,chargeId){
+  const id=text(chargeId);if(!id)return {matched:false,confirmed:false};
+  const state=await loadState(env),invoice=(Array.isArray(state?.invoices)?state.invoices:[]).find(row=>text(row?.bank_provider).toLowerCase()==='efi'&&text(row?.bank_charge_id)===id);
+  if(!invoice)return {matched:false,confirmed:false,chargeId:id};
+  const clientId=Number(invoice?.client_id)||0;if(!clientId)return {matched:true,confirmed:false,chargeId:id,invoiceId:invoice.id,error:'Fatura Efí sem cliente válido.'};
+  const session=await portalServiceSession(env,clientId),request=new Request('https://painel.fibramais.workers.dev/api/customer-portal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'payment-status',data:{session,invoiceId:invoice.id,paymentId:id}})}),response=await baseWorker.fetch(request,env,{});let body={};try{body=await response.json()}catch{}
+  if(!response.ok||!body?.ok)throw Object.assign(new Error(text(body?.error)||`Falha ao confirmar pagamento Efí (HTTP ${response.status}).`),{statusCode:502});
+  const status=normalize(body?.data?.status),current=normalize(body?.data?.state),confirmed=['approved','paid','pago','baixado'].includes(status)||paidStatus(current);
+  return {matched:true,confirmed,chargeId:id,invoiceId:invoice.id,status:text(body?.data?.status),state:text(body?.data?.state)};
+}
+function efiWebhookTxids(body={}){
+  const ids=[];for(const key of ['pix','cobsr','cobr','cobs']){const value=body?.[key],items=Array.isArray(value)?value:value&&typeof value==='object'?[value]:[];for(const item of items){const txid=text(item?.txid);if(txid)ids.push(txid)}}const direct=text(body?.txid);if(direct)ids.push(direct);return [...new Set(ids)];
+}
+async function efiWebhookPayload(request){
+  const raw=await request.text(),contentType=text(request.headers.get('content-type')).toLowerCase();let body={};if(raw&&(contentType.includes('json')||/^[\s]*[\[{]/.test(raw)))try{body=JSON.parse(raw)}catch{}const params=new URLSearchParams(raw),url=new URL(request.url),token=text(params.get('notification')||body?.notification||url.searchParams.get('notification'));return {body:body&&typeof body==='object'&&!Array.isArray(body)?body:{},token};
+}
+async function handleEfiWebhook(request,env){
+  if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405,{'x-provedor-plus-edge':'cloudflare-efi-webhook'});
+  if(!env?.PROVEDOR_DB)return json({ok:false,error:'Banco D1 do Provedor Plus não configurado.'},503,{'x-provedor-plus-edge':'cloudflare-efi-webhook'});
+  const payload=await efiWebhookPayload(request),chargeIds=efiWebhookTxids(payload.body);let verified=null;
+  if(payload.token){verified=await verifyEfiNotification(env,payload.token);for(const id of verified?.chargeIds||[])if(text(id))chargeIds.push(text(id));if(text(verified?.chargeId))chargeIds.push(text(verified.chargeId));}
+  const unique=[...new Set(chargeIds)].slice(0,20);if(!unique.length)return json({ok:true,data:{received:true,reconciled:false,type:payload.token?'cobrancas':'pix-event'}},200,{'x-provedor-plus-edge':'cloudflare-efi-webhook'});
+  const results=[];for(const id of unique)results.push(await reconcileEfiWebhookCharge(env,id));const matched=results.filter(item=>item.matched).length,confirmed=results.filter(item=>item.confirmed).length;
+  return json({ok:true,data:{received:true,reconciled:matched>0,matched,confirmed,notificationStatus:text(verified?.status),results}},200,{'x-provedor-plus-edge':'cloudflare-efi-webhook'});
+}
 async function tryBackgroundStateLock(env,fn,label){
   if(await paymentPriorityActive(env))return null;
   try{return await withStateWriteLock(env,async()=>{if(await paymentPriorityActive(env))return null;return fn()},1000)}catch(error){if(Number(error?.statusCode)===409)return null;console.error(label,error);return null}
@@ -623,6 +650,17 @@ async function handleOperations(request,env,ctx){
 export default {
   async fetch(request,env,ctx){
     const path=new URL(request.url).pathname;
+    if(path===EFI_WEBHOOK_PATH||path.startsWith(`${EFI_WEBHOOK_PATH}/`)){
+      let priorityStop=null;
+      try{
+        priorityStop=await beginPaymentPriority(env);
+        return await withStateWriteLock(env,async()=>{
+          const response=await handleEfiWebhook(request,env);
+          if(response?.ok&&env?.PROVEDOR_DB){try{await mirrorInvoicesSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha ao confirmar faturas após retorno Efí.',error)}try{await mirrorFinancialSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha ao confirmar financeiro após retorno Efí.',error)}}
+          return response;
+        },60000);
+      }catch(error){return json({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||503,{'x-provedor-plus-edge':'cloudflare-efi-webhook'})}finally{if(priorityStop)await priorityStop()}
+    }
     if(path===CLIENT_PUSH_PATH){const response=await handleCustomerPush(request,env);if(response)return response}
     if(path===ADMIN_PUSH_PATH){const response=await handleAdminSend(request,env,ctx);if(response)return response}
     if(path===OPS_PATH){const response=await handleOperations(request,env,ctx);if(response)return response}

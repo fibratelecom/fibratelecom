@@ -10,7 +10,7 @@ export function createViews(ctx){
   const paidValueNote=(row)=>{const cashback=invoiceCashbackUsedCents(row);return paidInvoice(row)&&cashback?`<small class="cell-note success-text">Cashback -${money(cashback,true)} · Pago ${money(invoiceReceivedCents(row),true)}</small>`:'';};
   const paymentLabel=(row)=>{const group=paymentGroup(row);return group==='card'?'Cartão':group==='pix'?'Pix':group==='boleto'?'Boleto':group==='cashback'?'Cashback':'Não informado';};
   const invoiceStatusLabel=(row)=>paidInvoice(row)?'Pago':overdueInvoice(row)?'Vencida':'Pendente';
-  const invoiceIssuedAt=(row)=>text(row?.bank_issued_at)||((row?.bank_charge_id||row?.bank_payment_id||row?.bank_order_id||row?.bank_ticket_url||row?.bank_pdf_url)?text(row?.created_at):'');
+  const invoiceIssuedAt=(row)=>text(row?.bank_issued_at||row?.issued_at||row?.created_at||row?.createdAt);
   const clientConnectionNote=(row)=>{const known=text(row?.connection_last_state),sync=text(row?.mikrotik_status);if(/^online$/i.test(known)||/^online$/i.test(sync))return status('Online');if(/^offline$/i.test(known)||/^offline$/i.test(sync))return status('Offline');return `<small class="cell-note">${esc(sync||row?.connection_type||'')}</small>`;};
   const isSuspended=(row)=>/bloque|suspens/.test(normalized(row?.status));
   const connectionEntries=()=>{

@@ -2,10 +2,40 @@ const arr = (value) => Array.isArray(value) ? value : [];
 export const text = (value) => String(value ?? '').trim();
 export const number = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
 export const clone = (value) => JSON.parse(JSON.stringify(value ?? {}));
+export const APP_TIME_ZONE = 'America/Manaus';
 
 export function money(value, cents = false) {
   const amount = cents ? number(value) / 100 : number(value);
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(amount);
+}
+
+export function dateKeyInTimeZone(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: APP_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${map.year}-${map.month}-${map.day}`;
+}
+
+export function dateTimeLocalValue(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: APP_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${map.year}-${map.month}-${map.day}T${map.hour}:${map.minute}`;
 }
 
 export function dateLabel(value, withTime = false) {
@@ -15,7 +45,10 @@ export function dateLabel(value, withTime = false) {
   if (direct) return `${direct[3]}/${direct[2]}/${direct[1]}`;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return raw || '—';
-  return new Intl.DateTimeFormat('pt-BR', withTime ? { dateStyle: 'short', timeStyle: 'short' } : { dateStyle: 'short' }).format(date);
+  return new Intl.DateTimeFormat('pt-BR', withTime
+    ? { dateStyle: 'short', timeStyle: 'short', timeZone: APP_TIME_ZONE }
+    : { dateStyle: 'short', timeZone: APP_TIME_ZONE }
+  ).format(date);
 }
 
 export function invoiceCents(invoice = {}) {
@@ -83,7 +116,7 @@ export function openInvoice(invoice = {}) {
   return !paidInvoice(invoice) && !canceledInvoice(invoice);
 }
 
-export function overdueInvoice(invoice = {}, today = new Date().toISOString().slice(0, 10)) {
+export function overdueInvoice(invoice = {}, today = dateKeyInTimeZone()) {
   return openInvoice(invoice) && Boolean(text(invoice.due_date).slice(0, 10)) && text(invoice.due_date).slice(0, 10) < today;
 }
 
@@ -95,7 +128,7 @@ export function lateFeeRules(settings = {}) {
   return { enabled, finePercent, dailyInterestPercent, startAfterDays };
 }
 
-export function invoiceLateBreakdown(invoice = {}, settings = {}, today = new Date().toISOString().slice(0, 10)) {
+export function invoiceLateBreakdown(invoice = {}, settings = {}, today = dateKeyInTimeZone()) {
   const baseCents = invoiceCents(invoice), rules = lateFeeRules(settings), dueKey = text(invoice?.due_date || invoice?.dueDate).slice(0, 10);
   if (!rules.enabled || !openInvoice(invoice) || !baseCents || !/^\d{4}-\d{2}-\d{2}$/.test(dueKey) || dueKey >= today) {
     return { ...rules, baseCents, overdueDays: 0, chargeDays: 0, fineCents: 0, interestCents: 0, feesCents: 0, totalCents: baseCents };
@@ -147,7 +180,7 @@ export function nextId(items = [], fallback = 0) {
 }
 
 export function nextContract(clients = []) {
-  const year = new Date().getFullYear();
+  const year = Number(dateKeyInTimeZone().slice(0, 4)) || new Date().getUTCFullYear();
   let seq = Math.max(0, ...arr(clients).map((item) => {
     const match = text(item?.contract_number).match(/(\d+)$/);
     return match ? Number(match[1]) || 0 : Number(item?.id) || 0;
@@ -195,7 +228,7 @@ export function formatRate(value) {
 }
 
 export function dashboardStats({ state = {}, clients = [], protocols = [], tickets = null } = {}) {
-  const invoices = arr(state.invoices), today = new Date().toISOString().slice(0, 10), support = tickets === null ? arr(protocols) : arr(tickets);
+  const invoices = arr(state.invoices), today = dateKeyInTimeZone(), support = tickets === null ? arr(protocols) : arr(tickets);
   const active = clients.filter((item) => !/cancel|inativ/.test(normalized(item.status))).length;
   const blocked = clients.filter((item) => /bloque|suspens/.test(normalized(item.status))).length;
   const overdue = invoices.filter((item) => overdueInvoice(item, today)).length;

@@ -38,7 +38,7 @@ async function mirrorClientRowToD1(env,row){
     ip=excluded.ip,mac_address=excluded.mac_address,mikrotik_secret_id=excluded.mikrotik_secret_id,
     mikrotik_status=excluded.mikrotik_status,mikrotik_last_sync=excluded.mikrotik_last_sync,
     created_at=COALESCE(pp_clients.created_at,excluded.created_at),updated_at=excluded.updated_at`).bind(
-      Number(row.id),text(row.name),nullableText(row.document),nullableText(row.contract_number),nullableText(row.plan),num(row.plan_id),num(row.due_day),nullableText(row.status),nullableText(row.email),nullableText(row.phone),nullableText(row.address),nullableText(row.city),nullableText(row.state),nullableText(row.zip_code),nullableText(row.pppoe_user),d1Bool(row.auto_block),num(row.block_after_days),nullableText(row.notes),num(row.router_id),nullableText(row.connection_type),nullableText(row.pppoe_username),nullableText(row.mikrotik_profile),nullableText(row.ip),nullableText(row.mac_address),nullableText(row.mikrotik_secret_id),nullableText(row.mikrotik_status),row.mikrotik_last_sync||null,row.created_at||row.updated_at||new Date().toISOString(),row.updated_at||new Date().toISOString()
+      Number(row.id),text(row.name),nullableText(row.document),nullableText(row.contract_number),nullableText(row.plan),num(row.plan_id),num(row.due_day),nullableText(row.status),nullableText(row.email),nullableText(row.phone),nullableText(row.address),nullableText(row.city),nullableText(row.state),nullableText(row.zip_code),nullableText(row.pppoe_user),d1Bool(row.auto_block),num(row.block_after_days),text(row.notes),num(row.router_id),nullableText(row.connection_type),nullableText(row.pppoe_username),nullableText(row.mikrotik_profile),nullableText(row.ip),nullableText(row.mac_address),nullableText(row.mikrotik_secret_id),nullableText(row.mikrotik_status),row.mikrotik_last_sync||null,row.created_at||row.updated_at||new Date().toISOString(),row.updated_at||new Date().toISOString()
     ).run();
   return true;
 }
@@ -364,7 +364,7 @@ export async function handleNativeCloudState(request,env){
       let resultState=savedState;if(ticketsOnD1)resultState={...resultState,tickets:clean.tickets};if(auditOnD1)resultState={...resultState,audit:clean.audit};
       result={state:resultState,updated_at:row?.updated_at||new Date().toISOString()};
     }
-    else if(action==='health'){const row=await getStateD1(env);result={online:true,hasState:Boolean(row?.value),updated_at:row?.updated_at||null};}
+    else if(action==='health'){const row=await getStateD1(env);result={online:true,hasState:Boolean(row?.value),updated_at:row.updated_at||null};}
     else throw Object.assign(new Error('Ação não permitida.'),{statusCode:400});return apiJson({ok:true,data:result},200,{'x-provedor-plus-edge':'cloudflare-native-state'});
   }catch(error){return apiJson({ok:false,error:error instanceof Error?error.message:String(error)},Number(error?.statusCode)||500,{'x-provedor-plus-edge':'cloudflare-native-state'});}
 }
@@ -418,7 +418,7 @@ async function saveClient(sql,data,env){
     auto_block,block_after_days,notes,router_id,connection_type,pppoe_username,mikrotik_profile,ip,mac_address,
     mikrotik_secret_id,mikrotik_status,mikrotik_last_sync,created_at,updated_at
   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
-    p.name,nullableText(p.document),nullableText(p.contract_number),nullableText(p.plan),num(p.plan_id),num(p.due_day),nullableText(p.status),nullableText(p.email),nullableText(p.phone),nullableText(p.address),nullableText(p.city),nullableText(p.state),nullableText(p.zip_code),nullableText(p.pppoe_user),d1Bool(p.auto_block),num(p.block_after_days),nullableText(p.notes),num(p.router_id),nullableText(p.connection_type),nullableText(p.pppoe_username),nullableText(p.mikrotik_profile),nullableText(p.ip),nullableText(p.mac_address),nullableText(p.mikrotik_secret_id),nullableText(p.mikrotik_status),p.mikrotik_last_sync||null,createdAt,p.updated_at
+    p.name,nullableText(p.document),nullableText(p.contract_number),nullableText(p.plan),num(p.plan_id),num(p.due_day),nullableText(p.status),nullableText(p.email),nullableText(p.phone),nullableText(p.address),nullableText(p.city),nullableText(p.state),nullableText(p.zip_code),nullableText(p.pppoe_user),d1Bool(p.auto_block),num(p.block_after_days),text(p.notes),num(p.router_id),nullableText(p.connection_type),nullableText(p.pppoe_username),nullableText(p.mikrotik_profile),nullableText(p.ip),nullableText(p.mac_address),nullableText(p.mikrotik_secret_id),nullableText(p.mikrotik_status),p.mikrotik_last_sync||null,createdAt,p.updated_at
   ).run(),newId=Number(inserted?.meta?.last_row_id)||0;
   if(!newId)throw Object.assign(new Error('Não foi possível salvar o cliente no D1.'),{statusCode:500});
   const saved=await db.prepare('SELECT id,name,document,contract_number,plan,plan_id,due_day,status,email,phone,address,city,state,zip_code,pppoe_user,auto_block,block_after_days,notes,router_id,connection_type,pppoe_username,mikrotik_profile,ip,mac_address,mikrotik_secret_id,mikrotik_status,mikrotik_last_sync,created_at,updated_at FROM pp_clients WHERE id=? LIMIT 1').bind(newId).all();

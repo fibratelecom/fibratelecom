@@ -64,7 +64,7 @@ export function createPanel(root,api){
  function brazilParts(){const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()),out={};for(const part of parts)out[part.type]=part.value;return out}
  function brazilMonthKey(){const p=brazilParts();return `${p.year}-${p.month}`}
  function brazilDateKey(){const p=brazilParts();return `${p.year}-${p.month}-${p.day}`}
- function accessHistory(c,action,detail){return [{id:crypto.randomUUID(),at:now(),action,user:actor(),detail},...(Array.isArray(c?.access_history)?c.access_history:[])].slice(0,30)}
+ function accessHistory(c,action,detail){return [{at:now(),action,user:actor(),detail},...(Array.isArray(c?.access_history)?c.access_history:[])].slice(0,30)}
  function clientHasOverdue(id){const today=brazilDateKey();return data().invoices.some(x=>Number(x.client_id)===Number(id)&&openInvoice(x)&&text(x.due_date||x.dueDate).slice(0,10)<today)}
  function dateTimeLabel(value){if(!value)return 'Não registrado';const d=new Date(value);return Number.isNaN(d.getTime())?'Não registrado':d.toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'})}
  function invoiceStatusLabel(row){if(paidInvoice(row))return 'Pago';if(!openInvoice(row))return text(row?.status)||'—';const due=text(row?.due_date||row?.dueDate).slice(0,10),today=brazilDateKey();if(!/^\d{4}-\d{2}-\d{2}$/.test(due)||due>=today)return 'Pendente';const dueDate=new Date(`${due}T12:00:00-03:00`),todayDate=new Date(`${today}T12:00:00-03:00`),days=!Number.isNaN(dueDate.getTime())?Math.max(1,Math.floor((todayDate-dueDate)/86400000)):1;return `Vencido há ${days} dia${days===1?'':'s'}`}

@@ -60,7 +60,8 @@ const PRESETS = [
 function presetList() {
   const box = document.createElement('div');
   box.dataset.manualPresetBox = '1';
-  box.innerHTML = `<div class="panel-title"><div><span>Mensagens prontas</span><h3>Envio manual rápido</h3><small class="cell-note">Escolha uma mensagem pronta, confira o texto e envie manualmente para um cliente ou para todos.</small></div></div><div class="template-list">${PRESETS.map((item) => `<article><div><strong>${item.name}</strong><small>${item.title}</small></div><div class="row-actions"><button class="btn secondary" type="button" data-manual-preset="${item.key}">Usar</button></div></article>`).join('')}</div>`;
+  box.style.marginBottom = '18px';
+  box.innerHTML = `<div class="panel-title" style="margin-bottom:12px"><div><span>Mensagens prontas</span><h3>Envio manual rápido</h3><small class="cell-note" style="display:block;margin-top:5px;line-height:1.45">Escolha uma mensagem pronta, confira o texto e envie manualmente para um cliente ou para todos.</small></div></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:10px">${PRESETS.map((item) => `<article style="display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:74px;padding:12px 13px;border:1px solid #e5dde9;border-radius:14px;background:#fbf9fc"><div style="min-width:0"><strong style="display:block;font-size:11px;line-height:1.35;color:#2d2233">${item.name}</strong><small style="display:block;margin-top:4px;color:#8b8091;font-size:9px;line-height:1.35">${item.title}</small></div><div class="row-actions" style="flex:0 0 auto"><button class="btn secondary" type="button" data-manual-preset="${item.key}" style="min-width:54px">Usar</button></div></article>`).join('')}</div>`;
   return box;
 }
 

@@ -80,7 +80,7 @@ function syncPushButtons(message=''){
     button.disabled=pushBusy;
     button.classList.toggle('active',pushActive);
     const gateAction=button.classList.contains('payment-notification-gate-action');
-    button.textContent=pushBusy?'Aguarde…':gateAction?'Ativar notificações':pushActive?'Pagamentos ativos':'Avisos de pagamentos';
+    button.textContent=pushBusy?'Aguarde…':gateAction?'Ativar notificações':'Notificações';
     if(message)button.title=message;
   });
   syncNotificationGate(message);

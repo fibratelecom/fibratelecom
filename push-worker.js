@@ -185,7 +185,7 @@ async function sendAdminOne(db,row,vapid,payload){
 async function sendAdminRows(db,rows,vapid,payload){let sent=0,failed=0;for(let start=0;start<rows.length;start+=10){const batch=rows.slice(start,start+10),results=await Promise.all(batch.map(row=>sendAdminOne(db,row,vapid,payload)));for(const result of results)result.ok?sent++:failed++}return {sent,failed,total:rows.length}}
 
 export async function notifyAdminPayment(env,{invoice,client,paymentId}={}){
-  if(!env?.PROVEDOR_DB||normalizeStatus(invoice?.bank_provider)!=='mercadopago'||!client)return {sent:0,failed:0,total:0,skipped:true};
+  const detail=normalizeStatus(invoice?.bank_status_detail),method=normalizeStatus(invoice?.payment_method);if(!env?.PROVEDOR_DB||normalizeStatus(invoice?.bank_provider)!=='mercadopago'||(detail!=='mercado_pago_pix'&&!method.includes('pix'))||!client)return {sent:0,failed:0,total:0,skipped:true};
   const db=env.PROVEDOR_DB;await ensurePushTables(db);
   const resolvedPaymentId=text(paymentId||invoice?.bank_payment_id||invoice?.bank_charge_id),invoiceId=text(invoice?.id),clientId=Number(client?.id)||Number(invoice?.client_id)||0;
   const eventKey=`mercado-pago:${resolvedPaymentId||invoiceId}:${invoiceId}`,title=`Pix recebido — ${brl(invoiceCents(invoice))}`,contract=text(invoice?.client_contract_number||invoice?.contract_number||client?.contract_number)||'não informado',due=brDate(invoice?.due_date||invoice?.dueDate),body=`Cliente: ${text(client?.name)||'Cliente'} · Contrato: ${contract} · Mensalidade: ${due||'não informada'} · Mercado Pago`,now=new Date().toISOString();

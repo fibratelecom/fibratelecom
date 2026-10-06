@@ -8,6 +8,7 @@ const VAPID_D1_KEY='push_vapid_d1_v1';
 const STATE_KEY='web_state_v1017';
 const CLIENT_ORIGINS=new Set(['https://cliente.fibramais.workers.dev','https://client.fibramais.workers.dev']);
 const CLIENT_APP_ORIGIN='https://cliente.fibramais.workers.dev';
+const PANEL_APP_ORIGIN='https://painel.fibramais.workers.dev';
 const AUTOMATIC_SCAN_PORTAL_ACTIONS=new Set(['payment-pix','payment-card','payment-status','negotiate']);
 const DAY=86400000;
 const text=value=>String(value??'').trim();
@@ -84,7 +85,36 @@ async function ensurePushTables(db){
       sent_at TEXT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
-    db.prepare('CREATE INDEX IF NOT EXISTS pp_push_events_client_created_idx ON pp_push_events (client_id,created_at DESC)')
+    db.prepare('CREATE INDEX IF NOT EXISTS pp_push_events_client_created_idx ON pp_push_events (client_id,created_at DESC)'),
+    db.prepare(`CREATE TABLE IF NOT EXISTS pp_admin_push_subscriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      endpoint TEXT NOT NULL UNIQUE,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      user_agent TEXT NULL,
+      platform TEXT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      last_success_at TEXT NULL,
+      last_error TEXT NULL
+    )`),
+    db.prepare('CREATE INDEX IF NOT EXISTS pp_admin_push_subscriptions_active_idx ON pp_admin_push_subscriptions (active,updated_at DESC)'),
+    db.prepare(`CREATE TABLE IF NOT EXISTS pp_admin_payment_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_key TEXT NOT NULL UNIQUE,
+      payment_id TEXT NULL,
+      invoice_id TEXT NULL,
+      client_id INTEGER NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      sent_count INTEGER NOT NULL DEFAULT 0,
+      failed_count INTEGER NOT NULL DEFAULT 0,
+      completed INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      sent_at TEXT NULL
+    )`),
+    db.prepare('CREATE INDEX IF NOT EXISTS pp_admin_payment_events_created_idx ON pp_admin_payment_events (created_at DESC)')
   ]);
   schemaReady=true;
 }
@@ -128,6 +158,8 @@ function normalizeSubscription(value){
 }
 function normalizeClickUrl(value=''){const raw=text(value);if(!raw)return `${CLIENT_APP_ORIGIN}/`;if(raw.startsWith('/'))return `${CLIENT_APP_ORIGIN}${raw}`;try{const url=new URL(raw);return CLIENT_ORIGINS.has(url.origin)?url.toString():`${CLIENT_APP_ORIGIN}/`}catch{return `${CLIENT_APP_ORIGIN}/`}}
 function notificationPayload(title,body,url,tag='fibra-plus'){return {title:text(title)||'Fibra+',body:text(body),icon:`${CLIENT_APP_ORIGIN}/icons/fibra-app-192.png?v=15`,badge:`${CLIENT_APP_ORIGIN}/icons/fibra-app-192.png?v=15`,tag:text(tag)||'fibra-plus',lang:'pt-BR',data:{url:normalizeClickUrl(url)}}}
+function normalizePanelClickUrl(value='/central'){const raw=text(value);if(raw.startsWith('/'))return `${PANEL_APP_ORIGIN}${raw}`;try{const url=new URL(raw);return url.origin===PANEL_APP_ORIGIN?url.toString():`${PANEL_APP_ORIGIN}/central`}catch{return `${PANEL_APP_ORIGIN}/central`}}
+function adminNotificationPayload(title,body,url='/mensalidades',tag='provedor-plus'){return {title:text(title)||'Provedor Plus',body:text(body),icon:`${PANEL_APP_ORIGIN}/app-icon.svg?v=20261005`,badge:`${PANEL_APP_ORIGIN}/app-icon.svg?v=20261005`,tag:text(tag)||'provedor-plus',lang:'pt-BR',data:{url:normalizePanelClickUrl(url)}}}
 
 async function sendOne(db,row,vapid,payload){
   try{
@@ -141,6 +173,30 @@ async function sendOne(db,row,vapid,payload){
   }catch(error){const message=error instanceof Error?error.message:String(error),now=new Date().toISOString();try{await db.prepare('UPDATE pp_push_subscriptions SET last_error=?,updated_at=? WHERE id=?').bind(message.slice(0,500),now,Number(row.id)).run()}catch{}return {ok:false,error:message}}
 }
 async function sendRows(db,rows,vapid,payload){let sent=0,failed=0;for(let start=0;start<rows.length;start+=10){const batch=rows.slice(start,start+10),results=await Promise.all(batch.map(row=>sendOne(db,row,vapid,payload)));for(const result of results)result.ok?sent++:failed++}return {sent,failed,total:rows.length}}
+
+async function sendAdminOne(db,row,vapid,payload){
+  try{
+    const built=await buildPushHTTPRequest({privateJWK:vapid.privateJWK,subscription:{endpoint:row.endpoint,keys:{p256dh:row.p256dh,auth:row.auth}},message:{payload,adminContact:vapid.subject||'mailto:adrianomoreirausuarios@gmail.com',options:{ttl:86400,urgency:'high',topic:text(payload.tag).replace(/[^A-Za-z0-9_-]/g,'').slice(0,32)||'provedor-plus'}}});
+    const response=await fetch(built.endpoint,{method:'POST',headers:built.headers,body:built.body,redirect:'manual'}),now=new Date().toISOString();
+    if(response.ok){await db.prepare('UPDATE pp_admin_push_subscriptions SET active=1,last_success_at=?,last_error=NULL,updated_at=? WHERE id=?').bind(now,now,Number(row.id)).run();return {ok:true}}
+    const error=`Push HTTP ${response.status}`;if(response.status===404||response.status===410)await db.prepare('UPDATE pp_admin_push_subscriptions SET active=0,last_error=?,updated_at=? WHERE id=?').bind(error,now,Number(row.id)).run();else await db.prepare('UPDATE pp_admin_push_subscriptions SET last_error=?,updated_at=? WHERE id=?').bind(error,now,Number(row.id)).run();return {ok:false,error};
+  }catch(error){const message=error instanceof Error?error.message:String(error),now=new Date().toISOString();try{await db.prepare('UPDATE pp_admin_push_subscriptions SET last_error=?,updated_at=? WHERE id=?').bind(message.slice(0,500),now,Number(row.id)).run()}catch{}return {ok:false,error:message}}
+}
+async function sendAdminRows(db,rows,vapid,payload){let sent=0,failed=0;for(let start=0;start<rows.length;start+=10){const batch=rows.slice(start,start+10),results=await Promise.all(batch.map(row=>sendAdminOne(db,row,vapid,payload)));for(const result of results)result.ok?sent++:failed++}return {sent,failed,total:rows.length}}
+
+export async function notifyAdminPayment(env,{invoice,client,paymentId}={}){
+  if(!env?.PROVEDOR_DB||normalizeStatus(invoice?.bank_provider)!=='mercadopago'||!client)return {sent:0,failed:0,total:0,skipped:true};
+  const db=env.PROVEDOR_DB;await ensurePushTables(db);
+  const resolvedPaymentId=text(paymentId||invoice?.bank_payment_id||invoice?.bank_charge_id),invoiceId=text(invoice?.id),clientId=Number(client?.id)||Number(invoice?.client_id)||0;
+  const eventKey=`mercado-pago:${resolvedPaymentId||invoiceId}:${invoiceId}`,title=`Pix recebido — ${brl(invoiceCents(invoice))}`,contract=text(invoice?.client_contract_number||invoice?.contract_number||client?.contract_number)||'não informado',due=brDate(invoice?.due_date||invoice?.dueDate),body=`Cliente: ${text(client?.name)||'Cliente'} · Contrato: ${contract} · Mensalidade: ${due||'não informada'} · Mercado Pago`,now=new Date().toISOString();
+  const inserted=await db.prepare('INSERT OR IGNORE INTO pp_admin_payment_events (event_key,payment_id,invoice_id,client_id,title,body,created_at) VALUES (?,?,?,?,?,?,?)').bind(eventKey,resolvedPaymentId||null,invoiceId||null,clientId||null,title,body,now).run();
+  if(!(Number(inserted?.meta?.changes)||0))return {sent:0,failed:0,total:0,duplicate:true};
+  const rows=await d1Rows(db.prepare('SELECT id,endpoint,p256dh,auth FROM pp_admin_push_subscriptions WHERE active=1 ORDER BY id ASC'));
+  if(!rows.length){await db.prepare('UPDATE pp_admin_payment_events SET completed=1,sent_at=? WHERE event_key=?').bind(now,eventKey).run();return {sent:0,failed:0,total:0,noDevices:true}}
+  const vapid=await vapidKeys(env),payload=adminNotificationPayload(title,body,'/mensalidades',`pp-pix-${resolvedPaymentId||invoiceId}`),result=await sendAdminRows(db,rows,vapid,payload);
+  await db.prepare('UPDATE pp_admin_payment_events SET sent_count=?,failed_count=?,completed=1,sent_at=? WHERE event_key=?').bind(result.sent,result.failed,new Date().toISOString(),eventKey).run();
+  return result;
+}
 
 async function sendAutomaticEvent(db,vapidSql,env,event){
   const clientId=Number(event?.clientId)||0,key=text(event?.key),type=text(event?.type),title=text(event?.title).slice(0,90),message=text(event?.body).slice(0,500),clickUrl=normalizeClickUrl(event?.url||'/');
@@ -258,6 +314,16 @@ async function handleAdminPush(request,env,ctx){
   if(request.method!=='POST')return json({ok:false,error:'Método não permitido.'},405);
   try{
     const user=await requirePanelAdmin(request,env,ctx);if(!env.PROVEDOR_DB)throw Object.assign(new Error('Banco D1 das notificações não configurado.'),{statusCode:503});let body={};try{body=await request.json()}catch{}const action=text(body?.action),data=body?.data||{},db=env.PROVEDOR_DB;await ensurePushTables(db);
+    if(action==='config'){const vapid=await vapidKeys(env);return json({ok:true,data:{publicKey:vapid.publicKey,supported:true}})}
+    if(action==='subscribe'){
+      const subscription=normalizeSubscription(data?.subscription),ua=text(data?.userAgent||request.headers.get('user-agent')).slice(0,800),platform=text(data?.platform).slice(0,120),now=new Date().toISOString();
+      await db.prepare(`INSERT INTO pp_admin_push_subscriptions (endpoint,p256dh,auth,user_agent,platform,active,created_at,updated_at) VALUES (?,?,?,?,?,1,?,?) ON CONFLICT(endpoint) DO UPDATE SET p256dh=excluded.p256dh,auth=excluded.auth,user_agent=excluded.user_agent,platform=excluded.platform,active=1,updated_at=excluded.updated_at,last_error=NULL`).bind(subscription.endpoint,subscription.p256dh,subscription.auth,ua||null,platform||null,now,now).run();
+      const rows=await d1Rows(db.prepare('SELECT id,endpoint,p256dh,auth FROM pp_admin_push_subscriptions WHERE endpoint=? AND active=1 LIMIT 1').bind(subscription.endpoint)),vapid=await vapidKeys(env),payload=adminNotificationPayload('Avisos Pix ativados','O Provedor Plus avisará neste dispositivo quando um Pix do Mercado Pago for confirmado.','/central','pp-pix-ativado');
+      if(rows?.[0]){const task=sendAdminRows(db,rows,vapid,payload);if(typeof ctx?.waitUntil==='function')ctx.waitUntil(task);else await task}
+      return json({ok:true,data:{active:true}});
+    }
+    if(action==='unsubscribe'){const endpoint=text(data?.endpoint),now=new Date().toISOString();if(endpoint)await db.prepare('UPDATE pp_admin_push_subscriptions SET active=0,updated_at=? WHERE endpoint=?').bind(now,endpoint).run();return json({ok:true,data:{active:false}})}
+    if(action==='status'){const endpoint=text(data?.endpoint),rows=endpoint?await d1Rows(db.prepare('SELECT COUNT(*) AS total FROM pp_admin_push_subscriptions WHERE endpoint=? AND active=1').bind(endpoint)):await d1Rows(db.prepare('SELECT COUNT(*) AS total FROM pp_admin_push_subscriptions WHERE active=1'));return json({ok:true,data:{active:(Number(rows?.[0]?.total)||0)>0,devices:Number(rows?.[0]?.total)||0}})}
     if(action==='stats'){
       const stats=await d1Rows(db.prepare('SELECT SUM(CASE WHEN active=1 THEN 1 ELSE 0 END) AS devices,COUNT(DISTINCT CASE WHEN active=1 THEN client_id END) AS clients FROM pp_push_subscriptions')),history=await d1Rows(db.prepare('SELECT id,target_mode,title,body,sent_count,failed_count,created_by_name,created_at FROM pp_push_messages ORDER BY id DESC LIMIT 10'));
       return json({ok:true,data:{devices:Number(stats?.[0]?.devices)||0,clients:Number(stats?.[0]?.clients)||0,history:history||[]}});

@@ -412,7 +412,7 @@ async function verifySession(token,env){
 async function notifyConfirmedPayment(env,invoiceId,paymentId=''){
   if(!env?.PROVEDOR_DB||!invoiceId)return {skipped:true};
   const state=await loadState(env),invoice=(Array.isArray(state?.invoices)?state.invoices:[]).find(row=>String(row?.id)===String(invoiceId));if(!invoice||!paidStatus(invoice?.status))return {skipped:true};
-  const client=(Array.isArray(state?.clients)?state.clients:[]).find(row=>Number(row?.id)===Number(invoice?.client_id));if(!client)return {skipped:true};
+  const local=(Array.isArray(state?.clients)?state.clients:[]).find(row=>Number(row?.id)===Number(invoice?.client_id)),remote=await clientById(env.PROVEDOR_DB,invoice?.client_id),client=local&&remote?{...local,...remote}:remote||local;if(!client)return {skipped:true};
   return notifyAdminPayment(env,{invoice,client,paymentId:text(paymentId||invoice?.bank_payment_id||invoice?.bank_charge_id)});
 }
 async function notifyPaidTransitions(env,beforeState={},afterState={}){
@@ -420,7 +420,7 @@ async function notifyPaidTransitions(env,beforeState={},afterState={}){
   const before=new Map((Array.isArray(beforeState?.invoices)?beforeState.invoices:[]).map(row=>[String(row?.id),paidStatus(row?.status)])),afterInvoices=Array.isArray(afterState?.invoices)?afterState.invoices:[],clients=Array.isArray(afterState?.clients)?afterState.clients:[];let checked=0,notified=0;
   for(const invoice of afterInvoices){
     const id=String(invoice?.id??'');if(!id||!paidStatus(invoice?.status)||before.get(id)===true)continue;checked++;
-    const client=clients.find(row=>Number(row?.id)===Number(invoice?.client_id));if(!client)continue;
+    const local=clients.find(row=>Number(row?.id)===Number(invoice?.client_id)),remote=await clientById(env.PROVEDOR_DB,invoice?.client_id),client=local&&remote?{...local,...remote}:remote||local;if(!client){console.error(`Provedor Plus: pagamento confirmado da fatura ${id}, mas o cliente ${text(invoice?.client_id)} não foi encontrado para montar o aviso.`);continue}
     try{const result=await notifyAdminPayment(env,{invoice,client,paymentId:text(invoice?.bank_payment_id||invoice?.bank_charge_id)});if(!result?.skipped&&!result?.duplicate)notified++}catch(error){console.error(`Provedor Plus: pagamento confirmado da fatura ${id}, mas o aviso administrativo falhou.`,error)}
   }
   return {checked,notified};

@@ -31,7 +31,8 @@ function syncInstallButtons(){
   const visible=!isStandalone()&&(mobileLike()||Boolean(deferredInstallPrompt));
   all('[data-pwa-install]').forEach(button=>{
     button.hidden=!visible;
-    button.textContent=isIOS()?'Instalar no iPhone':'Instalar aplicativo';
+    const compact=button.classList.contains('pwa-header-action');
+    button.textContent=compact?(isIOS()?'Instalar':'Instalar app'):(isIOS()?'Instalar no iPhone':'Instalar aplicativo');
   });
 }
 
@@ -40,7 +41,7 @@ function syncPushButtons(message=''){
     button.hidden=false;
     button.disabled=pushBusy;
     button.classList.toggle('active',pushActive);
-    button.textContent=pushBusy?'Aguarde…':pushActive?'Avisos Pix ativos':'Ativar avisos Pix';
+    button.textContent=pushBusy?'Aguarde…':pushActive?'Avisos Pix ativos':'Avisos Pix';
     if(message)button.title=message;
   });
 }

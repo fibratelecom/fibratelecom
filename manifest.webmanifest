@@ -1,0 +1,29 @@
+{
+  "id": "/",
+  "name": "Provedor Plus",
+  "short_name": "Provedor Plus",
+  "description": "Painel administrativo do Provedor Plus.",
+  "lang": "pt-BR",
+  "start_url": "/central",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone"],
+  "orientation": "any",
+  "background_color": "#1b0b2b",
+  "theme_color": "#6d1ed4",
+  "categories": ["business", "finance", "utilities"],
+  "icons": [
+    {
+      "src": "/app-icon.svg?v=20261005",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/app-icon.svg?v=20261005",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

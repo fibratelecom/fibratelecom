@@ -1,4 +1,4 @@
-const CACHE_VERSION='provedor-plus-pwa-20261005';
+const CACHE_VERSION='provedor-plus-pwa-20261006-payments1';
 
 self.addEventListener('install',event=>{
   event.waitUntil(self.skipWaiting());
@@ -21,8 +21,8 @@ self.addEventListener('push',event=>{
   const url=String(data?.data?.url||'/central');
   event.waitUntil(self.registration.showNotification(title,{
     body:String(data?.body||''),
-    icon:data?.icon||'/app-icon.svg?v=20261005',
-    badge:data?.badge||'/app-icon.svg?v=20261005',
+    icon:data?.icon||'/app-icon-192.png?v=20261006-payments1',
+    badge:data?.badge||'/app-icon-192.png?v=20261006-payments1',
     tag:String(data?.tag||'provedor-plus'),
     lang:data?.lang||'pt-BR',
     data:{url},

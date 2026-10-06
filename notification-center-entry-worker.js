@@ -409,18 +409,28 @@ async function verifySession(token,env){
   const parts=text(token).split('.');if(parts.length!==2)throw Object.assign(new Error('Sessão do cliente inválida. Entre novamente.'),{statusCode:401});
   try{const key=await portalKey(env),ok=await crypto.subtle.verify('HMAC',key,base64UrlBytes(parts[1]),enc.encode(parts[0]));if(!ok)throw new Error('assinatura');const payload=JSON.parse(new TextDecoder().decode(base64UrlBytes(parts[0]))),clientId=Number(payload?.clientId)||0,exp=Number(payload?.exp)||0;if(!clientId||exp<=Date.now())throw new Error('expirada');return {clientId}}catch{throw Object.assign(new Error('Sessão do cliente expirada ou inválida. Entre novamente.'),{statusCode:401})}
 }
-async function notifyConfirmedMercadoPagoPix(env,invoiceId,paymentId=''){
+async function notifyConfirmedPayment(env,invoiceId,paymentId=''){
   if(!env?.PROVEDOR_DB||!invoiceId)return {skipped:true};
-  const state=await loadState(env),invoice=(Array.isArray(state?.invoices)?state.invoices:[]).find(row=>String(row?.id)===String(invoiceId));if(!invoice||normalize(invoice?.bank_provider)!=='mercadopago')return {skipped:true};
+  const state=await loadState(env),invoice=(Array.isArray(state?.invoices)?state.invoices:[]).find(row=>String(row?.id)===String(invoiceId));if(!invoice||!paidStatus(invoice?.status))return {skipped:true};
   const client=(Array.isArray(state?.clients)?state.clients:[]).find(row=>Number(row?.id)===Number(invoice?.client_id));if(!client)return {skipped:true};
   return notifyAdminPayment(env,{invoice,client,paymentId:text(paymentId||invoice?.bank_payment_id||invoice?.bank_charge_id)});
+}
+async function notifyPaidTransitions(env,beforeState={},afterState={}){
+  if(!env?.PROVEDOR_DB)return {checked:0,notified:0};
+  const before=new Map((Array.isArray(beforeState?.invoices)?beforeState.invoices:[]).map(row=>[String(row?.id),paidStatus(row?.status)])),afterInvoices=Array.isArray(afterState?.invoices)?afterState.invoices:[],clients=Array.isArray(afterState?.clients)?afterState.clients:[];let checked=0,notified=0;
+  for(const invoice of afterInvoices){
+    const id=String(invoice?.id??'');if(!id||!paidStatus(invoice?.status)||before.get(id)===true)continue;checked++;
+    const client=clients.find(row=>Number(row?.id)===Number(invoice?.client_id));if(!client)continue;
+    try{const result=await notifyAdminPayment(env,{invoice,client,paymentId:text(invoice?.bank_payment_id||invoice?.bank_charge_id)});if(!result?.skipped&&!result?.duplicate)notified++}catch(error){console.error(`Provedor Plus: pagamento confirmado da fatura ${id}, mas o aviso administrativo falhou.`,error)}
+  }
+  return {checked,notified};
 }
 async function maybeNotifyMercadoPagoWebhook(request,response,env,ctx){
   if(!response?.ok)return;
   const url=new URL(request.url);if(url.pathname!==PORTAL_LOGIN_PATH||url.searchParams.get('mp_webhook')!=='1')return;
   let body={};try{body=await response.clone().json()}catch{return}
   const data=body?.data||{},status=normalize(data?.status);if(body?.ok!==true||data?.reconciled!==true||!['approved','paid','pago','baixado'].includes(status)||!data?.invoiceId)return;
-  const task=notifyConfirmedMercadoPagoPix(env,data.invoiceId).catch(error=>console.error('Provedor Plus: Pix Mercado Pago confirmado, mas o aviso administrativo não pôde ser enviado.',error));
+  const task=notifyConfirmedPayment(env,data.invoiceId).catch(error=>console.error('Provedor Plus: pagamento Mercado Pago confirmado, mas o aviso administrativo não pôde ser enviado.',error));
   if(typeof ctx?.waitUntil==='function')ctx.waitUntil(task);else await task;
 }
 
@@ -440,7 +450,7 @@ async function reconcilePendingPayments(env){
     const provider=text(invoice?.bank_provider).toLowerCase(),clientId=Number(invoice?.client_id)||0,paymentId=provider==='efi'?text(invoice?.bank_charge_id):text(invoice?.bank_payment_id||invoice?.bank_charge_id);if(!clientId||!paymentId)continue;
     try{
       const session=await portalServiceSession(env,clientId),request=new Request('https://painel.fibramais.workers.dev/api/customer-portal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'payment-status',data:{session,invoiceId:invoice.id,paymentId}})}),response=await baseWorker.fetch(request,env,{});let body={};try{body=await response.json()}catch{}
-      checked++;if(!response.ok||!body?.ok){failed++;continue}const status=normalize(body?.data?.status),current=normalize(body?.data?.state),isConfirmed=['approved','paid','pago','baixado'].includes(status)||paidStatus(current);if(isConfirmed){confirmed++;if(provider==='mercadopago')try{await notifyConfirmedMercadoPagoPix(env,invoice.id,paymentId)}catch(error){console.error(`Provedor Plus: pagamento Mercado Pago da fatura ${text(invoice?.id)} confirmado, mas o aviso administrativo falhou.`,error)}}
+      checked++;if(!response.ok||!body?.ok){failed++;continue}const status=normalize(body?.data?.status),current=normalize(body?.data?.state),isConfirmed=['approved','paid','pago','baixado'].includes(status)||paidStatus(current);if(isConfirmed){confirmed++;try{await notifyConfirmedPayment(env,invoice.id,paymentId)}catch(error){console.error(`Provedor Plus: pagamento da fatura ${text(invoice?.id)} confirmado, mas o aviso administrativo falhou.`,error)}}
     }catch(error){failed++;console.error(`Provedor Plus: falha ao conciliar automaticamente a fatura ${text(invoice?.id)}.`,error)}
   }
   return {checked,confirmed,failed};
@@ -453,6 +463,7 @@ async function reconcileEfiWebhookCharge(env,chargeId){
   const session=await portalServiceSession(env,clientId),request=new Request('https://painel.fibramais.workers.dev/api/customer-portal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'payment-status',data:{session,invoiceId:invoice.id,paymentId:id}})}),response=await baseWorker.fetch(request,env,{});let body={};try{body=await response.json()}catch{}
   if(!response.ok||!body?.ok)throw Object.assign(new Error(text(body?.error)||`Falha ao confirmar pagamento Efí (HTTP ${response.status}).`),{statusCode:502});
   const status=normalize(body?.data?.status),current=normalize(body?.data?.state),confirmed=['approved','paid','pago','baixado'].includes(status)||paidStatus(current);
+  if(confirmed)try{await notifyConfirmedPayment(env,invoice.id,id)}catch(error){console.error(`Provedor Plus: pagamento Efí da fatura ${text(invoice?.id)} confirmado, mas o aviso administrativo falhou.`,error)}
   return {matched:true,confirmed,chargeId:id,invoiceId:invoice.id,status:text(body?.data?.status),state:text(body?.data?.state)};
 }
 function efiWebhookTxids(body={}){
@@ -687,8 +698,10 @@ export default {
       const priorityAction=await paymentPriorityAction(request,path),readAction=await invoiceReadAction(request,path),mutation=await stateMutationRequest(request,path);if(priorityAction)priorityStop=await beginPaymentPriority(env);
       const forward=async()=>{let response=await baseWorker.fetch(request,env,ctx);await maybeNotifyMercadoPagoWebhook(request,response,env,ctx);if(portalLoginRate)response=await finishPortalLoginRate(request,response,portalLoginRate,ctx);if(path==='/api/bank-settings')response=await sanitizeBankResponse(response);return overlayInvoicesFromD1(response,env,path,readAction)};
       if(mutation){
-        const response=await withStateWriteLock(env,forward,priorityAction?60000:20000);
+        let beforeState=null,afterState=null;
+        const response=await withStateWriteLock(env,async()=>{if(env?.PROVEDOR_DB)try{beforeState=await loadState(env)}catch{}const result=await forward();if(result?.ok&&env?.PROVEDOR_DB)try{afterState=await loadState(env)}catch{}return result},priorityAction?60000:20000);
         if(response?.ok&&env?.PROVEDOR_DB){
+          if(beforeState&&afterState){const task=notifyPaidTransitions(env,beforeState,afterState);if(typeof ctx?.waitUntil==='function')ctx.waitUntil(task);else await task}
           try{await mirrorInvoicesSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha ao confirmar alteração de faturas no D1; estado principal D1 preservado.',error)}
           try{await mirrorFinancialSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha ao confirmar cashback e negociações no D1; estado principal D1 preservado.',error)}
         }

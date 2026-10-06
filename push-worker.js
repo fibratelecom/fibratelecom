@@ -159,7 +159,7 @@ function normalizeSubscription(value){
 function normalizeClickUrl(value=''){const raw=text(value);if(!raw)return `${CLIENT_APP_ORIGIN}/`;if(raw.startsWith('/'))return `${CLIENT_APP_ORIGIN}${raw}`;try{const url=new URL(raw);return CLIENT_ORIGINS.has(url.origin)?url.toString():`${CLIENT_APP_ORIGIN}/`}catch{return `${CLIENT_APP_ORIGIN}/`}}
 function notificationPayload(title,body,url,tag='fibra-plus'){return {title:text(title)||'Fibra+',body:text(body),icon:`${CLIENT_APP_ORIGIN}/icons/fibra-app-192.png?v=15`,badge:`${CLIENT_APP_ORIGIN}/icons/fibra-app-192.png?v=15`,tag:text(tag)||'fibra-plus',lang:'pt-BR',data:{url:normalizeClickUrl(url)}}}
 function normalizePanelClickUrl(value='/central'){const raw=text(value);if(raw.startsWith('/'))return `${PANEL_APP_ORIGIN}${raw}`;try{const url=new URL(raw);return url.origin===PANEL_APP_ORIGIN?url.toString():`${PANEL_APP_ORIGIN}/central`}catch{return `${PANEL_APP_ORIGIN}/central`}}
-function adminNotificationPayload(title,body,url='/mensalidades',tag='provedor-plus'){return {title:text(title)||'Provedor Plus',body:text(body),icon:`${PANEL_APP_ORIGIN}/app-icon.svg?v=20261005`,badge:`${PANEL_APP_ORIGIN}/app-icon.svg?v=20261005`,tag:text(tag)||'provedor-plus',lang:'pt-BR',data:{url:normalizePanelClickUrl(url)}}}
+function adminNotificationPayload(title,body,url='/mensalidades',tag='provedor-plus'){return {title:text(title)||'Provedor Plus',body:text(body),icon:`${PANEL_APP_ORIGIN}/app-icon-192.png?v=20261006-payments1`,badge:`${PANEL_APP_ORIGIN}/app-icon-192.png?v=20261006-payments1`,tag:text(tag)||'provedor-plus',lang:'pt-BR',data:{url:normalizePanelClickUrl(url)}}}
 
 async function sendOne(db,row,vapid,payload){
   try{
@@ -184,16 +184,42 @@ async function sendAdminOne(db,row,vapid,payload){
 }
 async function sendAdminRows(db,rows,vapid,payload){let sent=0,failed=0;for(let start=0;start<rows.length;start+=10){const batch=rows.slice(start,start+10),results=await Promise.all(batch.map(row=>sendAdminOne(db,row,vapid,payload)));for(const result of results)result.ok?sent++:failed++}return {sent,failed,total:rows.length}}
 
+function adminPaymentMethod(invoice={}){
+  const direct=text(invoice?.payment_method);if(direct)return direct;
+  const detail=normalizeStatus(invoice?.bank_status_detail),provider=normalizeStatus(invoice?.bank_provider),origin=normalizeStatus(invoice?.payment_origin);
+  if(detail==='mercado_pago_pix')return 'Pix Mercado Pago';
+  if(detail==='mercado_pago_card')return 'Cartão Mercado Pago';
+  if(detail==='mercado_pago_boleto')return 'Boleto Mercado Pago';
+  if(detail==='efi_pix_auto')return 'Pix Automático Efí';
+  if(detail==='efi_pix_cobv')return 'Pix Efí';
+  if(detail==='efi_bolix_pix')return 'Bolix / Pix Efí';
+  if(detail==='efi_carnet')return 'Carnê Efí';
+  if(origin==='manual'||origin==='bank_settle')return 'Baixa manual';
+  if(provider==='mercadopago')return 'Mercado Pago';
+  if(provider==='efi')return 'Efí Bank';
+  return 'Pagamento confirmado';
+}
+function adminPaymentTime(value){
+  const date=new Date(value);if(Number.isNaN(date.getTime()))return '';
+  try{return new Intl.DateTimeFormat('pt-BR',{dateStyle:'short',timeStyle:'short',timeZone:'America/Sao_Paulo'}).format(date)}catch{return ''}
+}
+function adminReceivedCents(invoice={}){
+  for(const key of ['bank_transaction_amount_cents','late_total_paid_cents','received_cents','amount_received_cents']){const n=Number(invoice?.[key]);if(Number.isFinite(n)&&n>0)return Math.round(n)}
+  return invoiceCents(invoice);
+}
+
 export async function notifyAdminPayment(env,{invoice,client,paymentId}={}){
-  const detail=normalizeStatus(invoice?.bank_status_detail),method=normalizeStatus(invoice?.payment_method);if(!env?.PROVEDOR_DB||normalizeStatus(invoice?.bank_provider)!=='mercadopago'||(detail!=='mercado_pago_pix'&&!method.includes('pix'))||!client)return {sent:0,failed:0,total:0,skipped:true};
+  if(!env?.PROVEDOR_DB||!invoice||!client||!paidStatus(invoice?.status))return {sent:0,failed:0,total:0,skipped:true};
   const db=env.PROVEDOR_DB;await ensurePushTables(db);
-  const resolvedPaymentId=text(paymentId||invoice?.bank_payment_id||invoice?.bank_charge_id),invoiceId=text(invoice?.id),clientId=Number(client?.id)||Number(invoice?.client_id)||0;
-  const transactionCents=Number(invoice?.bank_transaction_amount_cents),receivedCents=Number.isFinite(transactionCents)&&transactionCents>0?Math.round(transactionCents):invoiceCents(invoice),eventKey=`mercado-pago:${resolvedPaymentId||invoiceId}:${invoiceId}`,title=`Pix recebido — ${brl(receivedCents)}`,contract=text(invoice?.client_contract_number||invoice?.contract_number||client?.contract_number)||'não informado',due=brDate(invoice?.due_date||invoice?.dueDate),body=`Cliente: ${text(client?.name)||'Cliente'} · Contrato: ${contract} · Mensalidade: ${due||'não informada'} · Mercado Pago`,now=new Date().toISOString();
-  const inserted=await db.prepare('INSERT OR IGNORE INTO pp_admin_payment_events (event_key,payment_id,invoice_id,client_id,title,body,created_at) VALUES (?,?,?,?,?,?,?)').bind(eventKey,resolvedPaymentId||null,invoiceId||null,clientId||null,title,body,now).run();
+  const invoiceId=text(invoice?.id),clientId=Number(client?.id)||Number(invoice?.client_id)||0;if(!invoiceId||!clientId)return {sent:0,failed:0,total:0,skipped:true};
+  const already=await d1Rows(db.prepare('SELECT id FROM pp_admin_payment_events WHERE invoice_id=? LIMIT 1').bind(invoiceId));
+  if(already.length)return {sent:0,failed:0,total:0,duplicate:true};
+  const resolvedPaymentId=text(paymentId||invoice?.bank_payment_id||invoice?.bank_charge_id),receivedCents=adminReceivedCents(invoice),eventKey=`payment:${invoiceId}`,title=`Pagamento recebido — ${brl(receivedCents)}`,contract=text(invoice?.client_contract_number||invoice?.contract_number||client?.contract_number)||'não informado',due=brDate(invoice?.due_date||invoice?.dueDate),method=adminPaymentMethod(invoice),paidBy=text(invoice?.paid_by||invoice?.paid_by_name||invoice?.paidBy),paidAt=adminPaymentTime(invoice?.paid_at||invoice?.bank_last_sync_at||new Date().toISOString()),manual=normalizeStatus(invoice?.payment_origin)==='manual'||normalizeStatus(invoice?.payment_origin)==='bank_settle'||normalizeStatus(method).includes('baixa manual'),methodLabel=manual&&paidBy?`${method} por ${paidBy}`:method,body=`Cliente: ${text(client?.name)||'Cliente'} · Contrato: ${contract} · Vencimento: ${due||'não informado'} · Forma: ${methodLabel}${paidAt?` · Confirmado: ${paidAt}`:''}`,now=new Date().toISOString();
+  const inserted=await db.prepare('INSERT OR IGNORE INTO pp_admin_payment_events (event_key,payment_id,invoice_id,client_id,title,body,created_at) VALUES (?,?,?,?,?,?,?)').bind(eventKey,resolvedPaymentId||null,invoiceId,clientId,title,body,now).run();
   if(!(Number(inserted?.meta?.changes)||0))return {sent:0,failed:0,total:0,duplicate:true};
   const rows=await d1Rows(db.prepare('SELECT id,endpoint,p256dh,auth FROM pp_admin_push_subscriptions WHERE active=1 ORDER BY id ASC'));
   if(!rows.length){await db.prepare('UPDATE pp_admin_payment_events SET completed=1,sent_at=? WHERE event_key=?').bind(now,eventKey).run();return {sent:0,failed:0,total:0,noDevices:true}}
-  const vapid=await vapidKeys(env),payload=adminNotificationPayload(title,body,'/mensalidades',`pp-pix-${resolvedPaymentId||invoiceId}`),result=await sendAdminRows(db,rows,vapid,payload);
+  const vapid=await vapidKeys(env),payload=adminNotificationPayload(title,body,'/mensalidades',`pp-payment-${invoiceId}`),result=await sendAdminRows(db,rows,vapid,payload);
   await db.prepare('UPDATE pp_admin_payment_events SET sent_count=?,failed_count=?,completed=1,sent_at=? WHERE event_key=?').bind(result.sent,result.failed,new Date().toISOString(),eventKey).run();
   return result;
 }
@@ -318,7 +344,7 @@ async function handleAdminPush(request,env,ctx){
     if(action==='subscribe'){
       const subscription=normalizeSubscription(data?.subscription),ua=text(data?.userAgent||request.headers.get('user-agent')).slice(0,800),platform=text(data?.platform).slice(0,120),now=new Date().toISOString();
       await db.prepare(`INSERT INTO pp_admin_push_subscriptions (endpoint,p256dh,auth,user_agent,platform,active,created_at,updated_at) VALUES (?,?,?,?,?,1,?,?) ON CONFLICT(endpoint) DO UPDATE SET p256dh=excluded.p256dh,auth=excluded.auth,user_agent=excluded.user_agent,platform=excluded.platform,active=1,updated_at=excluded.updated_at,last_error=NULL`).bind(subscription.endpoint,subscription.p256dh,subscription.auth,ua||null,platform||null,now,now).run();
-      const rows=await d1Rows(db.prepare('SELECT id,endpoint,p256dh,auth FROM pp_admin_push_subscriptions WHERE endpoint=? AND active=1 LIMIT 1').bind(subscription.endpoint)),vapid=await vapidKeys(env),payload=adminNotificationPayload('Avisos Pix ativados','O Provedor Plus avisará neste dispositivo quando um Pix do Mercado Pago for confirmado.','/central','pp-pix-ativado');
+      const rows=await d1Rows(db.prepare('SELECT id,endpoint,p256dh,auth FROM pp_admin_push_subscriptions WHERE endpoint=? AND active=1 LIMIT 1').bind(subscription.endpoint)),vapid=await vapidKeys(env),payload=adminNotificationPayload('Avisos de pagamentos ativados','O Provedor Plus avisará neste dispositivo sempre que uma mensalidade for confirmada como paga.','/central','pp-pagamentos-ativados');
       if(rows?.[0]){const task=sendAdminRows(db,rows,vapid,payload);if(typeof ctx?.waitUntil==='function')ctx.waitUntil(task);else await task}
       return json({ok:true,data:{active:true}});
     }

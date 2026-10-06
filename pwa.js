@@ -6,6 +6,7 @@ let deferredInstallPrompt=null;
 let registration=null;
 let pushActive=false;
 let pushBusy=false;
+let adminSession=false;
 
 const text=value=>String(value??'').trim();
 const all=selector=>[...document.querySelectorAll(selector)];
@@ -46,14 +47,43 @@ function syncInstallButtons(){
   });
 }
 
+function ensureNotificationGate(){
+  let gate=document.querySelector('[data-admin-notification-gate]');
+  if(gate)return gate;
+  gate=document.createElement('section');
+  gate.className='admin-notification-gate';
+  gate.setAttribute('data-admin-notification-gate','');
+  gate.hidden=true;
+  gate.innerHTML=`<div class="admin-notification-gate-card"><img src="/app-icon-192.png?v=20261006-payments1" alt="" aria-hidden="true"><span class="section-label light">PROVEDOR PLUS</span><h2>Ative as notificações de pagamentos</h2><p data-admin-notification-message>Para usar o painel administrativo neste aparelho, autorize as notificações de pagamentos.</p><div class="admin-notification-gate-actions"><button class="btn primary payment-notification-gate-action" data-admin-push type="button">Ativar notificações</button><button class="notification-gate-install" data-pwa-install type="button" hidden>Instalar Provedor Plus</button></div><small>Você receberá valor, cliente, contrato, vencimento e forma de pagamento quando uma mensalidade for confirmada como paga.</small></div>`;
+  document.body.appendChild(gate);
+  return gate;
+}
+
+function syncNotificationGate(message=''){
+  const gate=ensureNotificationGate(),required=adminSession&&!pushActive;
+  gate.hidden=!required;
+  document.documentElement.classList.toggle('admin-notification-required',required);
+  if(!required)return;
+  const node=gate.querySelector('[data-admin-notification-message]');
+  let detail=message;
+  if(!detail&&!pushSupported())detail='Este navegador não oferece notificações push. Use um navegador compatível para acessar o painel administrativo.';
+  else if(!detail&&isIOS()&&!isStandalone())detail='No iPhone ou iPad, instale o Provedor Plus na Tela de Início e abra pelo ícone para ativar as notificações.';
+  else if(!detail&&Notification.permission==='denied')detail='As notificações estão bloqueadas neste aparelho. Ative-as nas configurações do sistema e volte ao Provedor Plus.';
+  else if(!detail)detail='As notificações de pagamentos são obrigatórias para o administrador neste aparelho. Toque abaixo para autorizar.';
+  if(node)node.textContent=detail;
+  syncInstallButtons();
+}
+
 function syncPushButtons(message=''){
   all('[data-admin-push]').forEach(button=>{
     button.hidden=false;
     button.disabled=pushBusy;
     button.classList.toggle('active',pushActive);
-    button.textContent=pushBusy?'Aguarde…':pushActive?'Avisos Pix ativos':'Avisos Pix';
+    const gateAction=button.classList.contains('payment-notification-gate-action');
+    button.textContent=pushBusy?'Aguarde…':gateAction?'Ativar notificações':pushActive?'Pagamentos ativos':'Avisos de pagamentos';
     if(message)button.title=message;
   });
+  syncNotificationGate(message);
 }
 
 async function api(action,data={}){
@@ -72,7 +102,7 @@ function toKey(value){
 async function registerServiceWorker(){
   if(!('serviceWorker' in navigator))return null;
   try{
-    registration=await navigator.serviceWorker.register('/sw.js?v=20261005',{scope:'/',updateViaCache:'none'});
+    registration=await navigator.serviceWorker.register('/sw.js?v=20261006-payments1',{scope:'/',updateViaCache:'none'});
     registration.waiting?.postMessage({type:'SKIP_WAITING'});
     try{await registration.update()}catch{}
     return registration;
@@ -108,16 +138,17 @@ async function currentSubscription(){
 }
 
 async function syncPushState(){
-  if(!document.querySelector('[data-admin-push]'))return;
+  if(!adminSession){pushActive=false;syncNotificationGate();return}
+  ensureNotificationGate();
   if(!pushSupported()){pushActive=false;syncPushButtons('Este navegador não oferece notificações push.');return}
-  if(isIOS()&&!isStandalone()){pushActive=false;syncPushButtons('No iPhone, instale o Provedor Plus antes de ativar os avisos.');return}
-  if(Notification.permission!=='granted'){pushActive=false;syncPushButtons('Ative para receber o nome do cliente quando o Pix for confirmado.');return}
+  if(isIOS()&&!isStandalone()){pushActive=false;syncPushButtons('No iPhone, instale o Provedor Plus na Tela de Início antes de ativar as notificações.');return}
+  if(Notification.permission!=='granted'){pushActive=false;syncPushButtons(Notification.permission==='denied'?'As notificações estão bloqueadas. Ative-as nas configurações do aparelho.':'Autorize as notificações para continuar usando o painel administrativo.');return}
   try{
     const sub=await currentSubscription();
-    if(!sub){pushActive=false;syncPushButtons();return}
+    if(!sub){pushActive=false;syncPushButtons('Autorize as notificações para continuar usando o painel administrativo.');return}
     const state=await api('status',{endpoint:sub.endpoint});
     pushActive=state.active===true;
-    syncPushButtons();
+    syncPushButtons(pushActive?'Notificações de pagamentos ativas neste aparelho.':'Autorize as notificações para continuar usando o painel administrativo.');
   }catch(error){
     pushActive=false;
     syncPushButtons(error.message||String(error));
@@ -134,10 +165,8 @@ async function togglePush(){
     if(sub&&Notification.permission==='granted'){
       const state=await api('status',{endpoint:sub.endpoint});
       if(state.active===true){
-        await api('unsubscribe',{endpoint:sub.endpoint});
-        await sub.unsubscribe();
-        pushActive=false;
-        toast('Avisos de Pix desativados neste dispositivo.');
+        pushActive=true;
+        toast('As notificações de pagamentos são obrigatórias e já estão ativas neste aparelho.');
         return;
       }
     }
@@ -149,7 +178,7 @@ async function togglePush(){
     if(!sub)sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:toKey(config.publicKey)});
     await api('subscribe',{subscription:sub.toJSON(),userAgent:navigator.userAgent,platform:navigator.platform||''});
     pushActive=true;
-    toast('Avisos Pix ativados. O Provedor Plus mostrará o nome do cliente quando o Mercado Pago confirmar o pagamento.');
+    toast('Notificações de pagamentos ativadas. O Provedor Plus avisará quando uma mensalidade for confirmada como paga.');
   }finally{
     pushBusy=false;
     syncPushButtons();
@@ -173,12 +202,14 @@ window.addEventListener('appinstalled',()=>{
   syncInstallButtons();
   toast('Provedor Plus instalado neste aparelho.');
 });
-window.addEventListener('provedorplus:login-ready',syncInstallButtons);
-window.addEventListener('provedorplus:authenticated',()=>{
+window.addEventListener('provedorplus:login-ready',()=>{adminSession=false;pushActive=false;syncInstallButtons();syncNotificationGate()});
+window.addEventListener('provedorplus:authenticated',event=>{
+  adminSession=String(event?.detail?.role||'').toLowerCase()==='admin';
+  if(adminSession)ensureNotificationGate();
   syncInstallButtons();
-  void syncPushState();
+  if(adminSession)void syncPushState();
 });
-window.addEventListener('focus',()=>void syncPushState());
+window.addEventListener('focus',()=>{if(adminSession)void syncPushState()});
 
 async function boot(){
   registration=await registerServiceWorker();

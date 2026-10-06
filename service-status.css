@@ -38,3 +38,21 @@
   .status-header .exit-button{font-size:9px}.module-nav{width:calc(100% - 10px)!important}.module-tab{font-size:8.5px}
   .status-workspace{padding-left:8px;padding-right:8px}.panel-card,.settings-card,.provider-card{padding:15px}
 }
+
+/* iPhone/PWA mobile: keep the application header below the system status area.
+   This rule intentionally comes after the generic mobile header rule so the
+   shorthand padding above cannot overwrite the safe-area inset. */
+@media(max-width:720px){
+  .status-header{
+    padding-top:calc(10px + env(safe-area-inset-top));
+    padding-right:max(12px,env(safe-area-inset-right));
+    padding-bottom:10px;
+    padding-left:max(12px,env(safe-area-inset-left));
+  }
+}
+@media(max-width:430px){
+  .status-header{gap:8px}
+  .status-brand{flex:1 1 auto;min-width:0}
+  .status-brand strong{font-size:13px}
+  .status-header-actions{flex:0 0 auto;min-width:0}
+}

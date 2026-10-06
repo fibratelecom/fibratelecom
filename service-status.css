@@ -9,3 +9,32 @@
 .service-chart{margin:14px 0 10px;padding:12px;border:1px solid #f0e9f1;border-radius:14px;background:#fbfafc}.chart-head,.chart-foot{display:flex;align-items:center;justify-content:space-between;gap:8px}.chart-head{font-size:11px;color:#807586;text-transform:uppercase;letter-spacing:.04em}.chart-head strong{color:#44394a;font-size:12px}.chart-foot{font-size:10px;color:#978c9b}.status-chart{display:block;width:100%;height:76px;margin:7px 0}.chart-guide{stroke:#e9e2eb;stroke-width:1;stroke-dasharray:3 4}.chart-line{fill:none;stroke:#75687a;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.chart-dot{stroke:#fff;stroke-width:1}.chart-dot.operational{fill:#22a06b}.chart-dot.degraded{fill:#d99a00}.chart-dot.maintenance{fill:#6c5ce7}.chart-dot.outage{fill:#d92d20}.chart-dot.error{fill:#8f8592}.chart-empty{min-height:76px;display:grid;place-items:center;text-align:center;color:#8a7f8e;font-size:12px}
 .service-actions{margin-top:auto;padding-top:16px;border-top:1px solid #f0ebf1;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px}.service-actions a{color:#6e2f7c;font-weight:700;text-decoration:none}.service-actions a:hover{text-decoration:underline}.service-actions span{color:#928793;text-align:right}
 @media(max-width:1050px){.services-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:720px){.status-header{align-items:flex-start;flex-direction:column}.status-summary,.services-grid{grid-template-columns:1fr}.status-toolbar{align-items:flex-start;flex-direction:column}.service-top{flex-direction:column}.service-actions{align-items:flex-start;flex-direction:column}.service-actions span{text-align:left}.chart-foot{font-size:9px}}
+
+/* Provedor Plus instalável: mesmos fluxos, controles adaptados ao celular. */
+.pwa-login-install{width:100%;min-height:46px;margin-top:10px;border:1px solid #ded6e3;border-radius:13px;background:#fff;color:#5b267e;font-size:11px;font-weight:850}
+.pwa-header-action{min-height:36px;padding:0 11px;border:1px solid rgba(255,255,255,.18);border-radius:10px;background:rgba(255,255,255,.08);color:#fff;font-size:9px;font-weight:850;white-space:nowrap}
+.pwa-header-action.push{border-color:rgba(255,174,116,.36);background:rgba(255,122,47,.12)}
+.pwa-header-action.push.active{border-color:rgba(46,209,141,.42);background:rgba(46,209,141,.14)}
+.pwa-login-install[hidden],.pwa-header-action[hidden]{display:none!important}
+@media(display-mode:standalone){
+  .app-shell{padding-bottom:env(safe-area-inset-bottom)}
+  .status-header{padding-top:calc(12px + env(safe-area-inset-top))}
+}
+@media(max-width:720px){
+  .status-header{align-items:center;flex-direction:row;gap:10px;padding:10px 12px}
+  .status-brand{min-width:0;gap:9px}.status-brand .brand-symbol{width:38px;height:38px;border-radius:12px;font-size:14px}.status-brand>div{min-width:0}.status-brand strong{font-size:14px;white-space:nowrap}.status-brand small{font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:112px}
+  .status-header-actions{margin-left:auto;align-items:center;flex-wrap:nowrap;gap:6px}.status-header-actions .live-pill,.status-header-actions .user-meta,.status-header-actions .avatar{display:none}
+  .status-header .round-action{width:34px;height:34px;min-width:34px;border-radius:10px}.status-header .exit-button{display:inline-flex!important;align-items:center;justify-content:center;height:34px;padding:0 9px;border-radius:10px}
+  .pwa-header-action{min-height:34px;padding:0 9px;font-size:8px}.pwa-header-action[data-pwa-install]{display:none}
+  .module-nav{width:calc(100% - 16px)!important;margin:8px auto 0!important;padding:7px!important;border-radius:16px!important;overscroll-behavior-x:contain;scrollbar-width:none}.module-nav::-webkit-scrollbar{display:none}.module-tab{height:42px;min-width:max-content;padding:0 10px}
+  .status-workspace{padding:18px 10px calc(34px + env(safe-area-inset-bottom))}
+  .status-workspace .page-head{margin-top:4px}.status-workspace .page-head h1,.status-workspace .page-head h2{font-size:clamp(24px,8vw,30px)}
+  .panel-card,.settings-card,.provider-card{border-radius:16px}.table-wrap{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .form-actions{flex-wrap:wrap}.form-actions .btn{flex:1 1 auto}
+  .toast{left:10px;right:10px;bottom:calc(10px + env(safe-area-inset-bottom));max-width:none}
+}
+@media(max-width:430px){
+  .status-brand small{display:none}.status-header-actions{gap:5px}.pwa-header-action.push{max-width:104px;overflow:hidden;text-overflow:ellipsis}
+  .status-header .exit-button{font-size:9px}.module-nav{width:calc(100% - 10px)!important}.module-tab{font-size:8.5px}
+  .status-workspace{padding-left:8px;padding-right:8px}.panel-card,.settings-card,.provider-card{padding:15px}
+}

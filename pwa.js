@@ -27,10 +27,20 @@ function toast(message,kind='success'){
   window.alert(message);
 }
 
+function loginInstallMarkup(){
+  const platform=isIOS()?'iPhone / iPad':/Android/i.test(navigator.userAgent)?'Android':'este dispositivo';
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="2.5" width="14" height="19" rx="2.4"/><path d="M9 18.2h6M12 6v8M9.2 11.2 12 14l2.8-2.8"/></svg><span><strong>Instalar Provedor Plus</strong><small>Aplicativo para ${platform}</small></span>`;
+}
+
 function syncInstallButtons(){
   const visible=!isStandalone()&&(mobileLike()||Boolean(deferredInstallPrompt));
   all('[data-pwa-install]').forEach(button=>{
     button.hidden=!visible;
+    if(button.classList.contains('pwa-login-install')){
+      button.innerHTML=loginInstallMarkup();
+      button.setAttribute('aria-label',isIOS()?'Instalar Provedor Plus no iPhone ou iPad':'Instalar Provedor Plus');
+      return;
+    }
     const compact=button.classList.contains('pwa-header-action');
     button.textContent=compact?(isIOS()?'Instalar':'Instalar app'):(isIOS()?'Instalar no iPhone':'Instalar aplicativo');
   });

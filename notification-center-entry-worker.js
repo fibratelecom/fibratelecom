@@ -5,6 +5,7 @@ import {resolveRouterForService,recordTrafficForService} from './worker-native-a
 import {handleMikrotikProxy} from './worker-mikrotik-native.js';
 import {verifyEfiNotification} from './worker-bank-native.js';
 import {beginPaymentPriority,paymentPriorityActive} from './state-write-lock.js';
+import {notifyAdminPayment} from './push-worker.js';
 
 const CLIENT_PUSH_PATH='/api/customer-push';
 const ADMIN_PUSH_PATH='/api/push-admin';
@@ -408,6 +409,21 @@ async function verifySession(token,env){
   const parts=text(token).split('.');if(parts.length!==2)throw Object.assign(new Error('Sessão do cliente inválida. Entre novamente.'),{statusCode:401});
   try{const key=await portalKey(env),ok=await crypto.subtle.verify('HMAC',key,base64UrlBytes(parts[1]),enc.encode(parts[0]));if(!ok)throw new Error('assinatura');const payload=JSON.parse(new TextDecoder().decode(base64UrlBytes(parts[0]))),clientId=Number(payload?.clientId)||0,exp=Number(payload?.exp)||0;if(!clientId||exp<=Date.now())throw new Error('expirada');return {clientId}}catch{throw Object.assign(new Error('Sessão do cliente expirada ou inválida. Entre novamente.'),{statusCode:401})}
 }
+async function notifyConfirmedMercadoPagoPix(env,invoiceId,paymentId=''){
+  if(!env?.PROVEDOR_DB||!invoiceId)return {skipped:true};
+  const state=await loadState(env),invoice=(Array.isArray(state?.invoices)?state.invoices:[]).find(row=>String(row?.id)===String(invoiceId));if(!invoice||normalize(invoice?.bank_provider)!=='mercadopago')return {skipped:true};
+  const client=(Array.isArray(state?.clients)?state.clients:[]).find(row=>Number(row?.id)===Number(invoice?.client_id));if(!client)return {skipped:true};
+  return notifyAdminPayment(env,{invoice,client,paymentId:text(paymentId||invoice?.bank_payment_id||invoice?.bank_charge_id)});
+}
+async function maybeNotifyMercadoPagoWebhook(request,response,env,ctx){
+  if(!response?.ok)return;
+  const url=new URL(request.url);if(url.pathname!==PORTAL_LOGIN_PATH||url.searchParams.get('mp_webhook')!=='1')return;
+  let body={};try{body=await response.clone().json()}catch{return}
+  const data=body?.data||{},status=normalize(data?.status);if(body?.ok!==true||data?.reconciled!==true||!['approved','paid','pago','baixado'].includes(status)||!data?.invoiceId)return;
+  const task=notifyConfirmedMercadoPagoPix(env,data.invoiceId).catch(error=>console.error('Provedor Plus: Pix Mercado Pago confirmado, mas o aviso administrativo não pôde ser enviado.',error));
+  if(typeof ctx?.waitUntil==='function')ctx.waitUntil(task);else await task;
+}
+
 async function reconcilePendingPayments(env){
   if(!env?.PROVEDOR_DB)return {checked:0,confirmed:0,failed:0};
   const state=await loadState(env),candidates=(Array.isArray(state?.invoices)?state.invoices:[]).filter(row=>{
@@ -424,7 +440,7 @@ async function reconcilePendingPayments(env){
     const provider=text(invoice?.bank_provider).toLowerCase(),clientId=Number(invoice?.client_id)||0,paymentId=provider==='efi'?text(invoice?.bank_charge_id):text(invoice?.bank_payment_id||invoice?.bank_charge_id);if(!clientId||!paymentId)continue;
     try{
       const session=await portalServiceSession(env,clientId),request=new Request('https://painel.fibramais.workers.dev/api/customer-portal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'payment-status',data:{session,invoiceId:invoice.id,paymentId}})}),response=await baseWorker.fetch(request,env,{});let body={};try{body=await response.json()}catch{}
-      checked++;if(!response.ok||!body?.ok){failed++;continue}const status=normalize(body?.data?.status),current=normalize(body?.data?.state);if(['approved','paid','pago','baixado'].includes(status)||paidStatus(current))confirmed++;
+      checked++;if(!response.ok||!body?.ok){failed++;continue}const status=normalize(body?.data?.status),current=normalize(body?.data?.state),isConfirmed=['approved','paid','pago','baixado'].includes(status)||paidStatus(current);if(isConfirmed){confirmed++;if(provider==='mercadopago')try{await notifyConfirmedMercadoPagoPix(env,invoice.id,paymentId)}catch(error){console.error(`Provedor Plus: pagamento Mercado Pago da fatura ${text(invoice?.id)} confirmado, mas o aviso administrativo falhou.`,error)}}
     }catch(error){failed++;console.error(`Provedor Plus: falha ao conciliar automaticamente a fatura ${text(invoice?.id)}.`,error)}
   }
   return {checked,confirmed,failed};
@@ -669,7 +685,7 @@ export default {
     try{portalLoginRate=await preparePortalLoginRate(request,env,path)}catch(error){if(Number(error?.statusCode)===429)return portalLoginRateResponse(request,error);console.error('Provedor Plus: proteção de tentativas do login não pôde ser preparada.',error)}
     try{
       const priorityAction=await paymentPriorityAction(request,path),readAction=await invoiceReadAction(request,path),mutation=await stateMutationRequest(request,path);if(priorityAction)priorityStop=await beginPaymentPriority(env);
-      const forward=async()=>{let response=await baseWorker.fetch(request,env,ctx);if(portalLoginRate)response=await finishPortalLoginRate(request,response,portalLoginRate,ctx);if(path==='/api/bank-settings')response=await sanitizeBankResponse(response);return overlayInvoicesFromD1(response,env,path,readAction)};
+      const forward=async()=>{let response=await baseWorker.fetch(request,env,ctx);await maybeNotifyMercadoPagoWebhook(request,response,env,ctx);if(portalLoginRate)response=await finishPortalLoginRate(request,response,portalLoginRate,ctx);if(path==='/api/bank-settings')response=await sanitizeBankResponse(response);return overlayInvoicesFromD1(response,env,path,readAction)};
       if(mutation){
         const response=await withStateWriteLock(env,forward,priorityAction?60000:20000);
         if(response?.ok&&env?.PROVEDOR_DB){

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Provedor Plus">
+  <defs>
+    <linearGradient id="bg" x1="72" y1="48" x2="448" y2="464" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7b28dc"/>
+      <stop offset="0.72" stop-color="#4b126f"/>
+      <stop offset="1" stop-color="#2b0e42"/>
+    </linearGradient>
+    <linearGradient id="plus" x1="300" y1="155" x2="420" y2="360" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffb276"/>
+      <stop offset="1" stop-color="#ff742b"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <path d="M84 350C139 207 239 126 395 103" fill="none" stroke="#ffffff" stroke-opacity=".16" stroke-width="16" stroke-linecap="round"/>
+  <path d="M92 385C177 251 288 195 430 187" fill="none" stroke="#ff7a2f" stroke-opacity=".42" stroke-width="12" stroke-linecap="round"/>
+  <text x="76" y="327" fill="#fff" font-family="Arial,Helvetica,sans-serif" font-size="226" font-weight="900" letter-spacing="-24">P</text>
+  <path d="M341 183v146M268 256h146" stroke="url(#plus)" stroke-width="42" stroke-linecap="round"/>
+</svg>

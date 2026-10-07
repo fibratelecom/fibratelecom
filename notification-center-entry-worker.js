@@ -71,6 +71,12 @@ async function readFinancialSnapshotFromD1(env,fallbackState={},minimumUpdatedAt
 async function saveFinancialSnapshotToD1(env,state,updatedAt=new Date().toISOString()){
   if(!env?.PROVEDOR_DB)return false;const snapshot=financialSnapshotFromState(state),raw=JSON.stringify(snapshot),at=text(updatedAt)||new Date().toISOString();await env.PROVEDOR_DB.prepare('INSERT INTO pp_settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').bind(FINANCIAL_D1_KEY,raw,at).run();return true;
 }
+async function loadRawState(env){
+  if(!env?.PROVEDOR_DB)throw Object.assign(new Error('Estado D1 do Provedor Plus não configurado.'),{statusCode:503});
+  const result=await env.PROVEDOR_DB.prepare('SELECT value FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY).all(),row=result?.results?.[0];
+  if(!row)throw Object.assign(new Error('Estado D1 do Provedor Plus não configurado.'),{statusCode:503});
+  return parseState(row.value);
+}
 async function loadState(env,sql=null){
   if(env?.PROVEDOR_DB)try{
     const result=await env.PROVEDOR_DB.prepare('SELECT value,updated_at FROM pp_settings WHERE key=? LIMIT 1').bind(STATE_KEY).all(),row=result?.results?.[0];
@@ -411,7 +417,7 @@ async function verifySession(token,env){
 }
 async function notifyConfirmedPayment(env,invoiceId,paymentId=''){
   if(!env?.PROVEDOR_DB||!invoiceId)return {skipped:true};
-  const state=await loadState(env),invoice=(Array.isArray(state?.invoices)?state.invoices:[]).find(row=>String(row?.id)===String(invoiceId));if(!invoice||!paidStatus(invoice?.status))return {skipped:true};
+  const state=await loadRawState(env),invoice=(Array.isArray(state?.invoices)?state.invoices:[]).find(row=>String(row?.id)===String(invoiceId));if(!invoice||!paidStatus(invoice?.status))return {skipped:true};
   const local=(Array.isArray(state?.clients)?state.clients:[]).find(row=>Number(row?.id)===Number(invoice?.client_id)),remote=await clientById(env.PROVEDOR_DB,invoice?.client_id),client=local&&remote?{...local,...remote}:remote||local;if(!client)return {skipped:true};
   return notifyAdminPayment(env,{invoice,client,paymentId:text(paymentId||invoice?.bank_payment_id||invoice?.bank_charge_id)});
 }
@@ -699,7 +705,12 @@ export default {
       const forward=async()=>{let response=await baseWorker.fetch(request,env,ctx);await maybeNotifyMercadoPagoWebhook(request,response,env,ctx);if(portalLoginRate)response=await finishPortalLoginRate(request,response,portalLoginRate,ctx);if(path==='/api/bank-settings')response=await sanitizeBankResponse(response);return overlayInvoicesFromD1(response,env,path,readAction)};
       if(mutation){
         let beforeState=null,afterState=null;
-        const response=await withStateWriteLock(env,async()=>{if(env?.PROVEDOR_DB)try{beforeState=await loadState(env)}catch{}const result=await forward();if(result?.ok&&env?.PROVEDOR_DB)try{afterState=await loadState(env)}catch{}return result},priorityAction?60000:20000);
+        const response=await withStateWriteLock(env,async()=>{
+          if(env?.PROVEDOR_DB)try{beforeState=await loadRawState(env)}catch{}
+          const result=await forward();
+          if(result?.ok&&env?.PROVEDOR_DB)try{afterState=await loadRawState(env)}catch{}
+          return result;
+        },priorityAction?60000:20000);
         if(response?.ok&&env?.PROVEDOR_DB){
           if(beforeState&&afterState){const task=notifyPaidTransitions(env,beforeState,afterState);if(typeof ctx?.waitUntil==='function')ctx.waitUntil(task);else await task}
           try{await mirrorInvoicesSnapshotToD1(env)}catch(error){console.error('Provedor Plus: falha ao confirmar alteração de faturas no D1; estado principal D1 preservado.',error)}

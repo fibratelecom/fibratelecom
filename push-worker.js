@@ -212,15 +212,26 @@ export async function notifyAdminPayment(env,{invoice,client,paymentId}={}){
   if(!env?.PROVEDOR_DB||!invoice||!client||!paidStatus(invoice?.status))return {sent:0,failed:0,total:0,skipped:true};
   const db=env.PROVEDOR_DB;await ensurePushTables(db);
   const invoiceId=text(invoice?.id),clientId=Number(client?.id)||Number(invoice?.client_id)||0;if(!invoiceId||!clientId)return {sent:0,failed:0,total:0,skipped:true};
-  const already=await d1Rows(db.prepare('SELECT id FROM pp_admin_payment_events WHERE invoice_id=? LIMIT 1').bind(invoiceId));
-  if(already.length)return {sent:0,failed:0,total:0,duplicate:true};
   const resolvedPaymentId=text(paymentId||invoice?.bank_payment_id||invoice?.bank_charge_id),receivedCents=adminReceivedCents(invoice),eventKey=`payment:${invoiceId}`,title=`Pagamento recebido — ${brl(receivedCents)}`,contract=text(invoice?.client_contract_number||invoice?.contract_number||client?.contract_number)||'não informado',due=brDate(invoice?.due_date||invoice?.dueDate),method=adminPaymentMethod(invoice),paidBy=text(invoice?.paid_by||invoice?.paid_by_name||invoice?.paidBy),paidAt=adminPaymentTime(invoice?.paid_at||invoice?.bank_last_sync_at||new Date().toISOString()),manual=normalizeStatus(invoice?.payment_origin)==='manual'||normalizeStatus(invoice?.payment_origin)==='bank_settle'||normalizeStatus(method).includes('baixa manual'),methodLabel=manual&&paidBy?`${method} por ${paidBy}`:method,body=`Cliente: ${text(client?.name)||'Cliente'} · Contrato: ${contract} · Vencimento: ${due||'não informado'} · Forma: ${methodLabel}${paidAt?` · Confirmado: ${paidAt}`:''}`,now=new Date().toISOString();
-  const inserted=await db.prepare('INSERT OR IGNORE INTO pp_admin_payment_events (event_key,payment_id,invoice_id,client_id,title,body,created_at) VALUES (?,?,?,?,?,?,?)').bind(eventKey,resolvedPaymentId||null,invoiceId,clientId,title,body,now).run();
-  if(!(Number(inserted?.meta?.changes)||0))return {sent:0,failed:0,total:0,duplicate:true};
-  const rows=await d1Rows(db.prepare('SELECT id,endpoint,p256dh,auth FROM pp_admin_push_subscriptions WHERE active=1 ORDER BY id ASC'));
-  if(!rows.length){await db.prepare('UPDATE pp_admin_payment_events SET completed=1,sent_at=? WHERE event_key=?').bind(now,eventKey).run();return {sent:0,failed:0,total:0,noDevices:true}}
-  const vapid=await vapidKeys(env),payload=adminNotificationPayload(title,body,'/mensalidades',`pp-payment-${invoiceId}`),result=await sendAdminRows(db,rows,vapid,payload);
-  await db.prepare('UPDATE pp_admin_payment_events SET sent_count=?,failed_count=?,completed=1,sent_at=? WHERE event_key=?').bind(result.sent,result.failed,new Date().toISOString(),eventKey).run();
+  const existing=(await d1Rows(db.prepare('SELECT id,event_key,sent_count,failed_count,completed FROM pp_admin_payment_events WHERE invoice_id=? ORDER BY id DESC LIMIT 1').bind(invoiceId)))?.[0]||null;
+  if(existing&&Number(existing.completed)===1&&Number(existing.sent_count)>0)return {sent:Number(existing.sent_count)||0,failed:Number(existing.failed_count)||0,total:Number(existing.sent_count)||0,duplicate:true};
+  if(!existing){
+    const inserted=await db.prepare('INSERT OR IGNORE INTO pp_admin_payment_events (event_key,payment_id,invoice_id,client_id,title,body,created_at) VALUES (?,?,?,?,?,?,?)').bind(eventKey,resolvedPaymentId||null,invoiceId,clientId,title,body,now).run();
+    if(!(Number(inserted?.meta?.changes)||0)){
+      const concurrent=(await d1Rows(db.prepare('SELECT id,event_key,sent_count,failed_count,completed FROM pp_admin_payment_events WHERE invoice_id=? ORDER BY id DESC LIMIT 1').bind(invoiceId)))?.[0]||null;
+      if(concurrent&&Number(concurrent.completed)===1&&Number(concurrent.sent_count)>0)return {sent:Number(concurrent.sent_count)||0,failed:Number(concurrent.failed_count)||0,total:Number(concurrent.sent_count)||0,duplicate:true};
+    }
+  }else{
+    await db.prepare('UPDATE pp_admin_payment_events SET payment_id=?,client_id=?,title=?,body=? WHERE id=?').bind(resolvedPaymentId||null,clientId,title,body,Number(existing.id)).run();
+  }
+  const current=(await d1Rows(db.prepare('SELECT id,event_key,sent_count,failed_count,completed FROM pp_admin_payment_events WHERE invoice_id=? ORDER BY id DESC LIMIT 1').bind(invoiceId)))?.[0]||null;
+  const activeEventKey=text(current?.event_key)||eventKey,rows=await d1Rows(db.prepare('SELECT id,endpoint,p256dh,auth FROM pp_admin_push_subscriptions WHERE active=1 ORDER BY id ASC'));
+  if(!rows.length){
+    if(current?.id)await db.prepare('UPDATE pp_admin_payment_events SET completed=0,sent_at=NULL WHERE id=?').bind(Number(current.id)).run();
+    return {sent:0,failed:0,total:0,noDevices:true};
+  }
+  const vapid=await vapidKeys(env),payload=adminNotificationPayload(title,body,'/mensalidades',`pp-payment-${invoiceId}`),result=await sendAdminRows(db,rows,vapid,payload),completed=result.sent>0?1:0,sentAt=result.sent>0?new Date().toISOString():null;
+  await db.prepare('UPDATE pp_admin_payment_events SET sent_count=?,failed_count=?,completed=?,sent_at=? WHERE event_key=?').bind(result.sent,result.failed,completed,sentAt,activeEventKey).run();
   return result;
 }
 

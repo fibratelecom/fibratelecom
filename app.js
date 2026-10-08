@@ -1,4 +1,4 @@
-const BUILD = '20261008-admin-pix1';
+const BUILD = '20261008-admin-pix2';
 const root = document.querySelector('#app');
 let lastValidationToastAt = 0;
 

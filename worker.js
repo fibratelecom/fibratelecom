@@ -604,11 +604,11 @@ async function portalLiveConnection(env,store,client){
     const downloadBps=Number.isFinite(liveDown)?Math.max(0,liveDown):(Number.isFinite(trafficDown)?Math.max(0,trafficDown):null),uploadBps=Number.isFinite(liveUp)?Math.max(0,liveUp):(Number.isFinite(trafficUp)?Math.max(0,trafficUp):null);
     const latency=live.qualityAvailable&&Number.isFinite(Number(live.latencyMs))?Math.max(0,Math.round(Number(live.latencyMs))):null,loss=live.packetLoss===null||live.packetLoss===undefined||!Number.isFinite(Number(live.packetLoss))?null:Math.max(0,Math.min(100,Math.round(Number(live.packetLoss))));
     const connection={
-      status:live.online?'Online':'Offline',pppoeStatus:live.online?'Conectado':'Desconectado',pppoeConnected:Boolean(live.online),online:Boolean(live.online),ip:text(live.ip)||storedIp||'Aguardando dados',uptime:text(live.uptime),
+      status:live.online?'Online':'Offline',pppoeStatus:live.online?'Conectado':'Desconectado',pppoeConnected:Boolean(live.online),online:Boolean(live.online),ip:text(live.ip)||text(live.remoteAddress)||'Aguardando dados',uptime:text(live.uptime),
       downloadBps,uploadBps,liveRatesAvailable:Boolean(live.liveRatesAvailable)||(Number(downloadBps)>0)||(Number(uploadBps)>0),latencyMs:latency,packetLoss:loss,availability30Days:null,
       quality:text(live.quality)||(live.online?'Boa':'Sem conexão'),qualityAvailable:Boolean(live.qualityAvailable),checkedAt,lastConnection:portalDateLabel(checkedAt),lastConnectionIso:checkedAt,lastConnectionLabel:portalDateLabel(checkedAt),diagnosticStatus:'complete',diagnosticMessage:'Diagnóstico concluído.',checking:false,isChecking:false,source:'mikrotik-live',connectionError:'',...portalTrafficFields(traffic)
     };
-    try{const db=d1Db(store);if(db)await db.prepare("UPDATE pp_clients SET ip=COALESCE(NULLIF(?,''),ip),mikrotik_status=?,mikrotik_last_sync=?,updated_at=? WHERE id=?").bind(text(live.ip),live.online?'Online':'Offline',checkedAt,checkedAt,Number(client.id)).run();}catch{}
+    try{const db=d1Db(store);if(db)await db.prepare("UPDATE pp_clients SET ip=NULLIF(?,''),mikrotik_status=?,mikrotik_last_sync=?,updated_at=? WHERE id=?").bind(text(live.remoteAddress),live.online?'Online':'Offline',checkedAt,checkedAt,Number(client.id)).run();}catch{}
     return connection;
   }catch(error){
     const checkedAt=new Date().toISOString(),message=error instanceof Error?error.message:String(error);

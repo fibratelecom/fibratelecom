@@ -222,7 +222,7 @@ async function loadClientMikrotikIpState(form,routerId){
       clientFormIpStatus(form,`O IP ${ip} não é um IPv4 de cliente válido.`);
       return;
     }
-    const remoteConflict=secrets.find((item)=>text(item?.remoteAddress)===ip&&(!originalUsername||text(item?.name)!==originalUsername)),localConflict=clientRows.find((client)=>text(client?.ip)===ip&&(!currentId||Number(client?.id)!==currentId));
+    const remoteConflict=secrets.find((item)=>text(item?.remoteAddress)===ip&&(!originalUsername||text(item?.name)!==originalUsername)),localConflict=clientRows.find((client)=>text(client?.ip)===ip&&(!currentId||Number(client?.id)!==currentId)&&secrets.some((secret)=>text(secret?.name)===text(client?.pppoe_username||client?.pppoe_user)&&text(secret?.remoteAddress)===ip));
     if(remoteConflict||localConflict){
       const owner=remoteConflict?`PPPoE ${text(remoteConflict?.name)||'existente'}`:`cliente ${text(localConflict?.name)||text(localConflict?.contract_number)||localConflict?.id}`;
       input.setCustomValidity(`IP ${ip} já está em uso no MikroTik por ${owner}. Escolha outro IP.`);

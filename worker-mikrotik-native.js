@@ -231,9 +231,11 @@ async function profiles(router){
   return {profiles:list.map(x=>({id:text(x['.id']),name:text(x.name),local_address:text(x['local-address']),remote_address:text(x['remote-address'])})).filter(x=>x.name)};
 }
 async function savePppoe(router,data){
-  const username=text(data?.pppoe_username),password=text(data?.pppoe_password),profile=text(data?.mikrotik_profile)||'default',remoteAddress=text(data?.ip);
+  const username=text(data?.pppoe_username),password=text(data?.pppoe_password),profile=text(data?.mikrotik_profile)||'default',requestedRemote=text(data?.ip);
   if(!username)throw Error('Informe o usuário PPPoE do cliente.');
   const found=await findSecret(router,username);if(!found&&!password)throw Error('Informe a senha PPPoE para criar o acesso.');
+  const foundRemoteRaw=text(found?.['remote-address']),foundRemote=foundRemoteRaw==='0.0.0.0'?'':foundRemoteRaw,explicitRemote=boolValue(data?.ip_fixed_explicit);
+  const remoteAddress=!requestedRemote?'':(explicitRemote||requestedRemote===foundRemote?requestedRemote:foundRemote);
   if(remoteAddress){const conflict=(await pppSecrets(router)).find((item)=>item.remoteAddress===remoteAddress&&item.name!==username);if(conflict)throw Error(`IP ${remoteAddress} já está em uso no MikroTik pelo PPPoE ${conflict.name}. Escolha outro IP.`);}
   const restricted=/bloqueado|suspenso|cancelado/.test(text(data?.status).toLowerCase());
   const payload={name:username,service:'pppoe',profile,disabled:restricted?'true':'false',comment:`Provedor Plus - ${text(data?.name)||username}`};
@@ -249,7 +251,7 @@ async function savePppoe(router,data){
   const savedRemoteRaw=text(saved['remote-address']),savedRemote=savedRemoteRaw==='0.0.0.0'?'':savedRemoteRaw;if(savedRemote!==remoteAddress)throw Error(remoteAddress?`O MikroTik não confirmou o remote-address ${remoteAddress} após salvar.`:'O MikroTik não confirmou a remoção do remote-address antigo.');
   const disabled=boolValue(saved.disabled);if(disabled!==restricted)throw Error(restricted?'O MikroTik não confirmou o bloqueio do PPPoE após salvar.':'O MikroTik não confirmou a liberação do PPPoE após salvar.');
   if(restricted&&(await activeSessions(router,username)).length)throw Error('O PPPoE foi desabilitado, mas a sessão continua ativa no MikroTik.');
-  return {action,secretId:text(saved['.id'])||secretId,username,verified:true,blocked:restricted};
+  return {action,secretId:text(saved['.id'])||secretId,username,remoteAddress:savedRemote,verified:true,blocked:restricted};
 }
 async function deletePppoe(router,data){
   const username=text(data?.pppoe_username);if(!username)throw Error('O cliente não possui usuário PPPoE.');
@@ -334,13 +336,14 @@ async function pppoeTopology(router,username,callerId=''){
 async function clientStatus(router,data){
   const username=text(data?.pppoe_username);if(!username)throw Error('Este cliente não possui usuário PPPoE.');
   const [active,secret]=await Promise.all([activeSessions(router,username),findSecret(router,username)]);
-  const s=active[0]||null,ip=text(s?.address||secret?.['remote-address']||data?.ip),callerId=text(s?.['caller-id']||secret?.['caller-id']||data?.mac_address);
+  const secretRemoteRaw=text(secret?.['remote-address']),remoteAddress=secretRemoteRaw==='0.0.0.0'?'':secretRemoteRaw;
+  const s=active[0]||null,ip=text(s?.address||remoteAddress),callerId=text(s?.['caller-id']||secret?.['caller-id']||data?.mac_address);
   const [quality,topology]=await Promise.all([s?pingQuality(router,ip):Promise.resolve({qualityAvailable:false,latencyMs:0,packetLoss:null,quality:'Sem conexão'}),s?pppoeTopology(router,username,callerId):Promise.resolve({pppoeInterfaceId:'',pppoeInterface:'',accessPort:'',accessInterface:'',serverInterface:'',vlan:null,vlanId:null,encoding:'',mtu:0,mru:0,serviceName:'',bridge:''})]);
   const iface=s?await readPppoeTraffic(router,{id:topology.pppoeInterfaceId,name:topology.pppoeInterface}):{available:false,rateAvailable:false,rxBytes:0,txBytes:0,rxBps:null,txBps:null};
   const sessionDownload=numberValue(s?.downloadBytes),sessionUpload=numberValue(s?.uploadBytes);
   const downloadBytes=Math.max(sessionDownload,iface.available?numberValue(iface.txBytes):0),uploadBytes=Math.max(sessionUpload,iface.available?numberValue(iface.rxBytes):0);
   const downloadBps=iface.rateAvailable?Math.max(0,Number(iface.txBps)||0):0,uploadBps=iface.rateAvailable?Math.max(0,Number(iface.rxBps)||0):0;
-  return {online:Boolean(s),checkedAt:new Date().toISOString(),username,sessionId:text(s?.['session-id']||s?.['.id']),ip,callerId,uptime:text(s?.uptime),encoding:text(topology.encoding||s?.encoding),downloadBytes,uploadBytes,downloadBps,uploadBps,liveRatesAvailable:Boolean(iface.rateAvailable),profile:text(secret?.profile||data?.mikrotik_profile),mtu:numberValue(topology.mtu)||0,mru:numberValue(topology.mru)||0,vlan:topology.vlan??null,vlanId:topology.vlanId??null,pppoeInterfaceId:text(topology.pppoeInterfaceId),pppoeInterface:text(topology.pppoeInterface),accessPort:text(topology.accessPort),accessInterface:text(topology.accessInterface),serverInterface:text(topology.serverInterface),serviceName:text(topology.serviceName),bridge:text(topology.bridge),webAccess:null,...quality};
+  return {online:Boolean(s),checkedAt:new Date().toISOString(),username,sessionId:text(s?.['session-id']||s?.['.id']),ip,remoteAddress,callerId,uptime:text(s?.uptime),encoding:text(topology.encoding||s?.encoding),downloadBytes,uploadBytes,downloadBps,uploadBps,liveRatesAvailable:Boolean(iface.rateAvailable),profile:text(secret?.profile||data?.mikrotik_profile),mtu:numberValue(topology.mtu)||0,mru:numberValue(topology.mru)||0,vlan:topology.vlan??null,vlanId:topology.vlanId??null,pppoeInterfaceId:text(topology.pppoeInterfaceId),pppoeInterface:text(topology.pppoeInterface),accessPort:text(topology.accessPort),accessInterface:text(topology.accessInterface),serverInterface:text(topology.serverInterface),serviceName:text(topology.serviceName),bridge:text(topology.bridge),webAccess:null,...quality};
 }
 function isDisabled(value){return boolValue(value)}
 async function verifyBlocked(router,username){const [secret,active]=await Promise.all([findSecret(router,username),activeSessions(router,username)]);if(!secret||!isDisabled(secret.disabled))throw Error('O MikroTik não confirmou o bloqueio do acesso PPPoE.');if(active.length)throw Error('O acesso foi marcado como bloqueado, mas a sessão PPPoE ainda está ativa.');return true}

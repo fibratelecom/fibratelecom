@@ -1,4 +1,4 @@
-const BUILD = '20261008-whatsapp-pix4';
+const BUILD = '20261008-whatsapp-pix5';
 const root = document.querySelector('#app');
 let lastValidationToastAt = 0;
 

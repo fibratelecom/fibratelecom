@@ -199,7 +199,13 @@ export function createPanel(root,api){
   return;
  }
  if(a==='copy-pix'){const x=invoice(id),code=text(x?.bank_pix_code||x?.pix_copy_paste);if(!code)return toast('PIX não disponível.','error');await navigator.clipboard.writeText(code);return toast('PIX copiado.')}
- if(a==='send-pix-whatsapp'){const x=invoice(id),c=invoiceClient(x),code=text(x?.bank_pix_code||x?.pix_copy_paste);if(!x||!code)return toast('PIX não disponível.','error');const digits=whatsappDigits(c?.phone||c?.whatsapp);if(!digits)return toast('Cliente sem número de WhatsApp válido cadastrado.','error');const reference=text(x.reference||x.id),contract=text(x.contract_number||c?.contract_number),due=dateOnly(x.due_date),message=`Olá${c?.name?` ${c.name}`:''}, segue o PIX Copia e Cola da sua fatura${reference?` ${reference}`:''}${contract?` · contrato ${contract}`:''}${due?` · vencimento ${due}`:''}.\n\nPIX Copia e Cola:\n${code}`;window.open(`https://wa.me/${digits}?text=${encodeURIComponent(message)}`,'_blank','noopener,noreferrer');return}
+ if(a==='send-pix-whatsapp'){
+  const x=invoice(id),c=invoiceClient(x),code=text(x?.bank_pix_code||x?.pix_copy_paste);if(!x||!code)return toast('PIX não disponível.','error');
+  const digits=whatsappDigits(c?.phone||c?.whatsapp);if(!digits)return toast('Cliente sem número de WhatsApp válido cadastrado.','error');
+  const reference=text(x.reference||x.id),contract=text(x.contract_number||c?.contract_number),dueKey=text(x.due_date).slice(0,10),due=/^\d{4}-\d{2}-\d{2}$/.test(dueKey)?dueKey.split('-').reverse().join('/'):'Não informado',late=invoiceLateBreakdown(x,state.settings||{},brazilDateKey()),amount=money(late.totalCents,true),message=`Olá${c?.name?` ${c.name}`:''}!\n\nSegue o PIX para pagamento da sua mensalidade da Fibra+.\n\nContrato: ${contract||'Não informado'}\nReferência: ${reference||'Não informada'}\nValor: ${amount}\nVencimento: ${due}\n\nPIX Copia e Cola:\n${code}\n\nPara pagar, copie o código acima e cole na opção PIX Copia e Cola do aplicativo do seu banco.\n\nApós a confirmação do pagamento, a baixa será realizada automaticamente no sistema.\n\nObrigado pela preferência!\nFibra+`,url=`https://wa.me/${digits}?text=${encodeURIComponent(message)}`,mobile=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  if(mobile){window.location.href=url;return}
+  const opened=window.open(url,'_blank','noopener,noreferrer');if(!opened)window.location.href=url;return;
+ }
  if(a==='open-invoice'){const x=invoice(id),url=text(x?.bank_ticket_url||x?.bank_pdf_url||x?.carnet_url);if(!url)return toast('Link não disponível.','error');window.open(url,'_blank','noopener');return}
  if(a==='cashback-rules')return modal('Regras de cashback',f.cashbackRulesForm());if(a==='cashback-adjust')return modal('Movimentar cashback',f.cashbackAdjustForm());
  if(a==='new-router'||a==='edit-router')return modal(id?'Editar MikroTik':'Novo MikroTik',f.routerForm(id?router(id):{}));

@@ -86,8 +86,16 @@ function syncPushButtons(message=''){
   syncNotificationGate(message);
 }
 
+function withTimeout(promise,ms,message){
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise).finally(()=>clearTimeout(timer)),
+    new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(message)),ms)})
+  ]);
+}
+
 async function api(action,data={}){
-  const response=await fetch(API,{method:'POST',cache:'no-store',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data})});
+  const response=await withTimeout(fetch(API,{method:'POST',cache:'no-store',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data})}),15000,'O Provedor Plus não conseguiu concluir a ativação das notificações. Tente novamente.');
   let body={};try{body=await response.json()}catch{}
   if(!response.ok||body?.ok!==true)throw new Error(body?.error||`Falha nas notificações (HTTP ${response.status}).`);
   return body.data||{};
@@ -132,9 +140,16 @@ async function installApp(){
   toast(installInstructions());
 }
 
+async function readyRegistration(){
+  if(registration?.active)return registration;
+  const reg=await withTimeout(navigator.serviceWorker.ready,15000,'O serviço de notificações não ficou pronto neste aparelho. Feche e abra o Provedor Plus e tente novamente.');
+  registration=reg;
+  return reg;
+}
+
 async function currentSubscription(){
-  const reg=registration||await navigator.serviceWorker.ready;
-  return reg.pushManager.getSubscription();
+  const reg=await readyRegistration();
+  return withTimeout(reg.pushManager.getSubscription(),10000,'Não foi possível verificar a assinatura de notificações deste aparelho.');
 }
 
 async function syncPushState(){
@@ -161,27 +176,37 @@ async function togglePush(){
   try{
     if(!pushSupported())throw new Error('Este navegador não oferece notificações push.');
     if(isIOS()&&!isStandalone())throw new Error('No iPhone, instale o Provedor Plus na Tela de Início antes de ativar os avisos.');
-    let sub=await currentSubscription();
-    if(sub&&Notification.permission==='granted'){
+
+    let permission=Notification.permission;
+    if(permission==='denied')throw new Error('As notificações estão bloqueadas neste aparelho. Libere as notificações do Provedor Plus nas configurações do Windows/navegador e clique em Ativar notificações novamente.');
+    if(permission!=='granted')permission=await withTimeout(Notification.requestPermission(),15000,'A janela de permissão não respondeu. Verifique as notificações do navegador e tente novamente.');
+    if(permission!=='granted')throw new Error('A permissão de notificações não foi concedida. Autorize as notificações para continuar.');
+
+    const reg=await readyRegistration();
+    let sub=await withTimeout(reg.pushManager.getSubscription(),10000,'Não foi possível verificar a assinatura de notificações deste aparelho.');
+    if(sub){
       const state=await api('status',{endpoint:sub.endpoint});
       if(state.active===true){
         pushActive=true;
-        toast('As notificações de pagamentos são obrigatórias e já estão ativas neste aparelho.');
+        toast('Notificações de pagamentos ativas neste aparelho.');
         return;
       }
     }
-    let permission=Notification.permission;
-    if(permission!=='granted')permission=await Notification.requestPermission();
-    if(permission!=='granted')throw new Error('A permissão de notificações não foi concedida.');
-    const config=await api('config'),reg=registration||await navigator.serviceWorker.ready;
-    sub=await reg.pushManager.getSubscription();
-    if(!sub)sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:toKey(config.publicKey)});
+
+    const config=await api('config');
+    if(!sub)sub=await withTimeout(reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:toKey(config.publicKey)}),15000,'O aparelho não conseguiu concluir a assinatura de notificações. Verifique as permissões e tente novamente.');
     await api('subscribe',{subscription:sub.toJSON(),userAgent:navigator.userAgent,platform:navigator.platform||''});
     pushActive=true;
     toast('Notificações de pagamentos ativadas. O Provedor Plus avisará quando uma mensalidade for confirmada como paga.');
+  }catch(error){
+    pushActive=false;
+    const message=error?.message||String(error);
+    syncPushButtons(message);
+    toast(message,'error');
+    throw error;
   }finally{
     pushBusy=false;
-    syncPushButtons();
+    syncPushButtons(pushActive?'Notificações de pagamentos ativas neste aparelho.':'');
   }
 }
 
@@ -189,7 +214,7 @@ document.addEventListener('click',event=>{
   const install=event.target.closest?.('[data-pwa-install]');
   if(install){event.preventDefault();void installApp().catch(error=>toast(error.message||String(error),'error'));return}
   const push=event.target.closest?.('[data-admin-push]');
-  if(push){event.preventDefault();void togglePush().catch(error=>toast(error.message||String(error),'error'))}
+  if(push){event.preventDefault();void togglePush().catch(()=>{})}
 });
 
 window.addEventListener('beforeinstallprompt',event=>{

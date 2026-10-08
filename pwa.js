@@ -172,6 +172,7 @@ async function syncPushState(){
 
 async function togglePush(){
   if(pushBusy)return;
+  let failureMessage='';
   pushBusy=true;syncPushButtons();
   try{
     if(!pushSupported())throw new Error('Este navegador não oferece notificações push.');
@@ -200,13 +201,13 @@ async function togglePush(){
     toast('Notificações de pagamentos ativadas. O Provedor Plus avisará quando uma mensalidade for confirmada como paga.');
   }catch(error){
     pushActive=false;
-    const message=error?.message||String(error);
-    syncPushButtons(message);
-    toast(message,'error');
+    failureMessage=error?.message||String(error);
+    syncPushButtons(failureMessage);
+    toast(failureMessage,'error');
     throw error;
   }finally{
     pushBusy=false;
-    syncPushButtons(pushActive?'Notificações de pagamentos ativas neste aparelho.':'');
+    syncPushButtons(pushActive?'Notificações de pagamentos ativas neste aparelho.':failureMessage);
   }
 }
 
